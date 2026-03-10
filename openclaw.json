@@ -2,7 +2,7 @@
   "gateway": {
     "auth": {
       "mode": "token",
-      "token": "${OPENCLAW_GATEWAY_TOKEN}"
+      "token": "sk-openclaw-de81bd6f17ef75debff9a3d07f05002a5d9a85c61d1e32b8853b2a79c22cfb27"
     },
     "controlUi": {
       "dangerouslyAllowHostHeaderOriginFallback": true
