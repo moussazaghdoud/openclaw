@@ -1,0 +1,12 @@
+{
+  "name": "openclaw-rainbow-bot",
+  "version": "1.0.0",
+  "description": "Rainbow bot connected to OpenClaw AI gateway",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "rainbow-node-sdk": "2.42.0-lts.1"
+  }
+}

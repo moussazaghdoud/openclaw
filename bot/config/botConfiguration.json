@@ -1,0 +1,10 @@
+{
+  "botConfiguration": {
+    "administrators": {
+      "rainbowAccounts": [],
+      "guestsAccepted": true
+    },
+    "instantMessageAutoAccept": true,
+    "bubbleInvitationAutoAccept": true
+  }
+}
