@@ -138,6 +138,12 @@ async function callOpenClaw(userId, userMessage) {
 
 const greeted = new Set();
 
+// ── Bubble caches ───────────────────────────────────────
+
+const bubbleList = new Map();    // bubbleId → bubble
+const bubbleByJid = new Map();   // bubbleJid → bubble
+const bubbleByMember = new Map(); // memberJid → [bubbles]
+
 // ── Stats ───────────────────────────────────────────────
 
 let stats = { received: 0, replied: 0, errors: 0, startedAt: Date.now() };
@@ -166,7 +172,11 @@ app.use((req, res, next) => {
 
 // Health check
 app.get("/", (req, res) => {
-  res.json({ status: "ok", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, lastMessages: debugMessages.slice(-5), lastCallbacks: debugCallbacks.slice(-5) });
+  const bubbles = [];
+  for (const [id, b] of bubbleList) {
+    bubbles.push({ id, name: b.name, jid: b.jid, members: (b.users || []).length });
+  }
+  res.json({ status: "ok", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, bubbles, lastMessages: debugMessages.slice(-5), lastCallbacks: debugCallbacks.slice(-5) });
 });
 
 // Start Express immediately so Railway sees the port is bound
@@ -325,16 +335,26 @@ async function start() {
       console.warn(`${LOG} Failed to join rooms via REST:`, err.message);
     }
 
-    // Also try joining bubbles via SDK
+    // Cache all bubbles and join them
     try {
       const bubbles = await sdk.bubbles.getAll();
       console.log(`${LOG} Found ${bubbles?.length || 0} bubbles`);
       for (const bubble of (bubbles || [])) {
+        bubbleList.set(bubble.id, bubble);
+        if (bubble.jid) bubbleByJid.set(bubble.jid, bubble);
+        // Index by member JIDs for reverse lookup
+        for (const member of (bubble.users || [])) {
+          const jid = member.jid_im || member.jid || "";
+          if (jid && jid !== sdk.connectedUser?.jid_im) {
+            if (!bubbleByMember.has(jid)) bubbleByMember.set(jid, []);
+            bubbleByMember.get(jid).push(bubble);
+          }
+        }
         try {
           await sdk.bubbles.setBubblePresence(bubble, true);
         } catch {}
       }
-      console.log(`${LOG} Joined all bubbles via SDK`);
+      console.log(`${LOG} Joined all bubbles via SDK, indexed ${bubbleByMember.size} members`);
     } catch (err) {
       console.warn(`${LOG} Failed to join bubbles via SDK:`, err.message);
     }
