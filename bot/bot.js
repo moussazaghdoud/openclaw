@@ -336,13 +336,18 @@ async function start() {
 
       stats.received++;
       console.log(`${LOG} [${stats.received}] ${isBubble ? "[BUBBLE]" : "[1:1]"} Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`);
+      const conv = message.conversation || {};
       const msgDebug = {
-        keys: Object.keys(message),
         fromBubbleJid: message.fromBubbleJid || null,
         fromBubbleId: message.fromBubbleId || null,
+        fromBubbleUserJid: message.fromBubbleUserJid || null,
         conversationId: conversationId || null,
         type: message.type || null,
-        conversationType: message.conversationType || null,
+        convType: conv.type || null,
+        convBubbleId: conv.bubble?.id || conv.bubbleId || null,
+        convBubbleJid: conv.bubble?.jid || conv.bubbleJid || null,
+        convId: conv.id || conv.dbId || null,
+        convKeys: Object.keys(conv),
         isBubble,
         fromName,
         content: content.substring(0, 50),
