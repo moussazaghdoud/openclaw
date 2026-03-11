@@ -902,9 +902,19 @@ async function start() {
         }
       }
 
+      // Typing indicator ON
+      try {
+        if (conversation) sdk.im.sendIsTypingStateInConversation(conversation, true);
+      } catch {}
+
       // Call OpenClaw
       const result = await callOpenClaw(fromJid, content);
       const responseText = result?.content || config.fallbackMsg;
+
+      // Typing indicator OFF
+      try {
+        if (conversation) sdk.im.sendIsTypingStateInConversation(conversation, false);
+      } catch {}
 
       // Send response back
       try {
