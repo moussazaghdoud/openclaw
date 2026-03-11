@@ -158,25 +158,7 @@ async function callOpenClaw(userId, userMessage) {
   }
 }
 
-// ── Dummy Express (SDK workaround) ──────────────────────
-
-function createNoopExpress() {
-  const noop = () => noop;
-  const app = function () {};
-  app.use = noop;
-  app.get = noop;
-  app.post = noop;
-  app.put = noop;
-  app.delete = noop;
-  app.all = noop;
-  app.listen = (port, cb) => {
-    if (cb) cb();
-    return { close: noop };
-  };
-  app.set = noop;
-  app.engine = noop;
-  return app;
-}
+// ── (NoopExpress removed — using XMPP mode) ────────────
 
 // ── First-contact tracking ──────────────────────────────
 
@@ -201,12 +183,7 @@ async function start() {
     require("rainbow-node-sdk").default || require("rainbow-node-sdk");
 
   const sdk = new RainbowSDK({
-    rainbow: { host: config.host, mode: "s2s" },
-    s2s: {
-      hostCallback: "http://localhost:19999", // not used, but required by SDK
-      locallistenningport: "0",
-      expressEngine: createNoopExpress(),
-    },
+    rainbow: { host: config.host, mode: "xmpp" },
     credentials: { login: config.login, password: config.password },
     application: { appID: config.appId, appSecret: config.appSecret },
     logs: {
