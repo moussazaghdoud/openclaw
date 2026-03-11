@@ -153,13 +153,13 @@ const debugMessages = [];
 // Store raw S2S callbacks for debug
 const debugCallbacks = [];
 
-// Log all incoming S2S callbacks
+// Log ALL incoming requests (before SDK handles them)
 app.use((req, res, next) => {
-  if (req.method === "POST" && req.path !== "/") {
-    const cb = { path: req.path, body: JSON.stringify(req.body || {}).substring(0, 500), time: new Date().toISOString() };
+  if (req.method === "POST") {
+    const cb = { path: req.path, method: req.method, body: JSON.stringify(req.body || {}).substring(0, 800), time: new Date().toISOString() };
     debugCallbacks.push(cb);
-    if (debugCallbacks.length > 10) debugCallbacks.shift();
-    console.log(`${LOG} S2S CALLBACK: ${req.method} ${req.path} body=${cb.body.substring(0, 200)}`);
+    if (debugCallbacks.length > 20) debugCallbacks.shift();
+    console.log(`${LOG} HTTP ${req.method} ${req.path} body=${cb.body.substring(0, 300)}`);
   }
   next();
 });
@@ -366,7 +366,11 @@ async function start() {
       if (!content || !content.trim()) return;
 
       // Detect if this is a bubble (group) message
-      const isBubble = !!(message.fromBubbleJid || message.fromBubbleId);
+      // S2S mode doesn't populate fromBubbleJid — check conversation object too
+      const conv = message.conversation || {};
+      const isBubble = !!(message.fromBubbleJid || message.fromBubbleId
+        || (conv.type === 1) || (conv.bubble && conv.bubble.id)
+        || (conv.id && conv.id.includes("room_")));
 
       // In bubbles, only respond when @mentioned by name
       if (isBubble) {
@@ -384,28 +388,33 @@ async function start() {
 
       stats.received++;
       console.log(`${LOG} [${stats.received}] ${isBubble ? "[BUBBLE]" : "[1:1]"} Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`);
-      const conv = message.conversation || {};
-      // Direct property reads (not optional chaining — the props exist but may be null)
+      // Direct property reads
       let convTypeVal = null, convBubbleVal = null, convDbId = null;
       try { convTypeVal = conv.type; } catch {}
       try { convBubbleVal = conv.bubble; } catch {}
       try { convDbId = conv.dbId; } catch {}
+
+      // Dump ALL non-null string/number values from conversation
+      let convDump = {};
+      try {
+        for (const k of Object.keys(conv)) {
+          const v = conv[k];
+          if (v !== null && v !== undefined && (typeof v === "string" || typeof v === "number" || typeof v === "boolean")) {
+            convDump[k] = v;
+          }
+        }
+      } catch {}
+
       const msgDebug = {
         fromJid: message.fromJid || null,
         toJid: message.toJid || null,
         fromBubbleJid: message.fromBubbleJid || null,
-        fromBubbleId: message.fromBubbleId || null,
-        fromBubbleUserJid: message.fromBubbleUserJid || null,
-        conversationId: conversationId || null,
-        msgType: message.type || null,
+        isBubble,
         convType: convTypeVal,
         convBubble: convBubbleVal ? { id: convBubbleVal.id, jid: convBubbleVal.jid, name: convBubbleVal.name } : null,
         convDbId: convDbId,
-        isBubble,
-        fromName,
+        convDump,
         content: content.substring(0, 50),
-        subject: message.subject || null,
-        resource: message.resource || null,
       };
       debugMessages.push(msgDebug);
       if (debugMessages.length > 10) debugMessages.shift();
