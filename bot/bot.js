@@ -200,46 +200,19 @@ async function sendMessageToBubble(bubble, text) {
   return false;
 }
 
-// ── Join all rooms via REST (called when s2sConnectionId is discovered) ──
+// ── Join all rooms (SDK only, no REST API) ──────────────
 
 async function joinAllRooms() {
-  if (!s2sConnectionId || !authToken) return;
-  const host = rainbowHost || "openrainbow.com";
-  const baseUrl = `https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}`;
-
-  // Method 1: Bulk join
-  try {
-    const resp = await fetch(`${baseUrl}/rooms/join`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-      body: "{}",
-    });
-    const respBody = await resp.text();
-    console.log(`${LOG} joinAllRooms bulk: status=${resp.status} body=${respBody.substring(0, 300)}`);
-  } catch (err) {
-    console.warn(`${LOG} joinAllRooms bulk error:`, err.message);
-  }
-
-  // Method 2: Join each bubble room individually
+  // SDK's setBubblePresence handles room joining internally
+  // REST API room join doesn't work with SDK-managed connections
+  let joined = 0;
   for (const [id, bubble] of bubbleList) {
-    const roomJid = bubble.jid || "";
-    if (!roomJid) continue;
     try {
-      const resp = await fetch(`${baseUrl}/rooms/${bubble.id}/join`, {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-        body: "{}",
-      });
-      if (!resp.ok) {
-        const errText = await resp.text();
-        console.warn(`${LOG} joinRoom "${bubble.name}" (${bubble.id}): ${resp.status} ${errText.substring(0, 100)}`);
-      } else {
-        console.log(`${LOG} joinRoom "${bubble.name}" OK`);
-      }
-    } catch (err) {
-      console.warn(`${LOG} joinRoom "${bubble.name}" error:`, err.message);
-    }
+      await sdk.bubbles.setBubblePresence(bubble, true);
+      joined++;
+    } catch {}
   }
+  console.log(`${LOG} Joined ${joined}/${bubbleList.size} rooms via SDK`);
 }
 
 // ── First-contact tracking ──────────────────────────────
@@ -456,58 +429,12 @@ async function extractSdkInfo() {
     rainbowHost = sdk._core?._rest?.host
       || sdk._core?.host
       || "openrainbow.com";
-    const host = rainbowHost || "openrainbow.com";
 
-    if (!authToken) {
-      console.error(`${LOG} No auth token found in SDK internals`);
-      return;
-    }
+    // Get SDK-managed connection ID (valid for callbacks, not REST API)
+    const cnxInfo = sdk._core?._rest?.connectionS2SInfo;
+    s2sConnectionId = cnxInfo?.id || cnxInfo?._id || null;
 
-    // Step 1: Query REST API for active connections
-    let connections = [];
-    try {
-      const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections`, {
-        headers: { "Authorization": `Bearer ${authToken}` },
-      });
-      const data = await resp.json();
-      connections = data?.data?.items || data?.data || data?.items || [];
-      if (!Array.isArray(connections)) connections = connections ? [connections] : [];
-      console.log(`${LOG} REST connections: status=${resp.status} count=${connections.length}`);
-    } catch (err) {
-      console.warn(`${LOG} REST connections query error:`, err.message);
-    }
-
-    // Step 2: If no connections exist, create one
-    if (connections.length === 0) {
-      console.log(`${LOG} No S2S connections found, creating one...`);
-      try {
-        const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections`, {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ connection: { resource: "s2s_openclaw", callback_url: config.hostCallback } }),
-        });
-        const data = await resp.json();
-        console.log(`${LOG} Create connection: status=${resp.status} data=${JSON.stringify(data).substring(0, 500)}`);
-        s2sConnectionId = data?.data?.id || data?.id || null;
-        if (s2sConnectionId) {
-          console.log(`${LOG} Created S2S connection: ${s2sConnectionId}`);
-        }
-      } catch (err) {
-        console.error(`${LOG} Failed to create S2S connection:`, err.message);
-      }
-    } else {
-      // Use existing connection matching our callback URL
-      for (const cnx of connections) {
-        if (cnx.callback_url === config.hostCallback || cnx.resource?.startsWith("s2s_")) {
-          s2sConnectionId = cnx.id || cnx._id;
-          break;
-        }
-      }
-      if (!s2sConnectionId) s2sConnectionId = connections[0].id || connections[0]._id;
-      console.log(`${LOG} Using existing S2S connection: ${s2sConnectionId}`);
-    }
-
-    console.log(`${LOG} S2S info: cnxId=${s2sConnectionId || "NOT FOUND"}, token=OK, host=${host}`);
+    console.log(`${LOG} S2S info: cnxId=${s2sConnectionId || "NOT FOUND"}, token=${authToken ? "OK" : "NOT FOUND"}, host=${rainbowHost}`);
   } catch (err) {
     console.warn(`${LOG} Could not extract SDK internals:`, err.message);
   }
