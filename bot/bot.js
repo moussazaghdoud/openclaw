@@ -333,7 +333,6 @@ async function start() {
       console.log(`${LOG} [${stats.received}] ${isBubble ? "[BUBBLE]" : "[1:1]"} Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`);
 
       // Get conversation object for reply
-      // In S2S mode, conversationId may be empty — look up by contact
       let conversation = null;
 
       // Try by conversationId first
@@ -343,15 +342,35 @@ async function start() {
         } catch {}
       }
 
-      // Fallback: find or open conversation by contact JID
-      if (!conversation && fromJid) {
-        try {
-          const contact = await sdk.contacts.getContactByJid(fromJid);
-          if (contact) {
-            conversation = await sdk.conversations.openConversationForContact(contact);
+      // Fallback depends on message type
+      if (!conversation) {
+        if (isBubble) {
+          // For bubble messages, find the bubble and open its conversation
+          const bubbleId = message.fromBubbleId || "";
+          const bubbleJid = message.fromBubbleJid || "";
+          try {
+            let bubble = null;
+            if (bubbleId) {
+              bubble = await sdk.bubbles.getBubbleById(bubbleId);
+            } else if (bubbleJid) {
+              bubble = await sdk.bubbles.getBubbleByJid(bubbleJid);
+            }
+            if (bubble) {
+              conversation = await sdk.conversations.openConversationForBubble(bubble);
+            }
+          } catch (err) {
+            console.warn(`${LOG} Bubble conversation lookup failed:`, err.message);
           }
-        } catch (err) {
-          console.warn(`${LOG} Fallback conversation lookup failed:`, err.message);
+        } else if (fromJid) {
+          // For 1:1 messages, find contact and open conversation
+          try {
+            const contact = await sdk.contacts.getContactByJid(fromJid);
+            if (contact) {
+              conversation = await sdk.conversations.openConversationForContact(contact);
+            }
+          } catch (err) {
+            console.warn(`${LOG} Contact conversation lookup failed:`, err.message);
+          }
         }
       }
 
