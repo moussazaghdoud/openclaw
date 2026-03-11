@@ -489,6 +489,96 @@ async function extractSdkInfo() {
   }
 }
 
+// ── Process bubble message from intercepted S2S callback ─────
+async function processBubbleCallback(body) {
+  try {
+    if (botPaused) return;
+
+    const msg = body.message || {};
+    const content = msg.body || msg.content || "";
+    if (!content || !content.trim()) return;
+
+    // Extract sender and room info
+    const fromJid = msg.fromJid || msg.from || body.fromJid || "";
+    const roomJid = msg.toJid || msg.to || body.roomJid || "";
+    const msgId = msg.id || msg.messageId || body.id || "";
+
+    console.log(`${LOG} processBubbleCallback: from=${fromJid}, room=${roomJid}, content=${content.substring(0, 80)}`);
+
+    // Skip bot's own messages
+    const botJid = sdk?.connectedUser?.jid_im || "";
+    if (botJid && fromJid === botJid) return;
+    if (fromJid && fromJid.includes(config.login.replace("@", "_"))) return;
+
+    // Deduplicate
+    if (msgId && processedMsgIds.has(msgId)) return;
+    if (msgId) {
+      processedMsgIds.add(msgId);
+      if (processedMsgIds.size > 200) {
+        const first = processedMsgIds.values().next().value;
+        processedMsgIds.delete(first);
+      }
+    }
+
+    // Check for bot trigger
+    const contentLower = content.toLowerCase();
+    const botName = (sdk?.connectedUser?.displayName || "").toLowerCase();
+    const botFirstName = (sdk?.connectedUser?.firstName || "").toLowerCase();
+    const hasBotTrigger = (botName && contentLower.includes(botName))
+      || (botFirstName && botFirstName.length > 2 && contentLower.includes(botFirstName))
+      || contentLower.includes("@bot")
+      || contentLower.includes("@ai")
+      || contentLower.startsWith("bot:")
+      || contentLower.startsWith("bot :");
+
+    if (!hasBotTrigger) {
+      console.log(`${LOG} Bubble message ignored (no bot trigger): ${content.substring(0, 50)}`);
+      return;
+    }
+
+    stats.received++;
+    console.log(`${LOG} [${stats.received}] [BUBBLE-INTERCEPT] Message from ${fromJid}: ${content.substring(0, 80)}`);
+
+    // Find the bubble by room JID
+    let bubble = roomJid ? bubbleByJid.get(roomJid) : null;
+    if (!bubble) {
+      // Try to find by partial match
+      for (const [jid, b] of bubbleByJid) {
+        if (roomJid && jid.includes(roomJid.split("@")[0])) {
+          bubble = b;
+          break;
+        }
+      }
+    }
+
+    // Call OpenClaw
+    const result = await callOpenClaw(fromJid, content);
+    const responseText = result?.content || config.fallbackMsg;
+
+    // Send reply to bubble
+    if (bubble) {
+      const sent = await sendMessageToBubble(bubble, responseText);
+      if (sent) {
+        stats.replied++;
+        console.log(`${LOG} [${stats.replied}] Replied in bubble "${bubble.name}" via intercept (${responseText.length} chars)`);
+      } else {
+        stats.errors++;
+        console.error(`${LOG} Failed to reply in bubble "${bubble.name}" via intercept`);
+      }
+    } else if (s2sConnectionId && authToken) {
+      // Fallback: send directly via REST using the room JID
+      console.warn(`${LOG} Bubble not found for ${roomJid}, trying direct REST send`);
+      stats.errors++;
+    } else {
+      stats.errors++;
+      console.error(`${LOG} No bubble found and no S2S connection for reply`);
+    }
+  } catch (err) {
+    stats.errors++;
+    console.error(`${LOG} processBubbleCallback error:`, err.message);
+  }
+}
+
 let restartCount = 0;
 const MAX_RESTARTS = 10;
 let restartTimer = null;
@@ -635,6 +725,37 @@ async function start() {
       console.log(`${LOG} Joined all bubbles via SDK, indexed ${bubbleByMember.size} members`);
     } catch (err) {
       console.warn(`${LOG} Failed to join bubbles via SDK:`, err.message);
+    }
+
+    // Monkeypatch: intercept S2S callbacks that the SDK rejects (empty userId)
+    // The SDK drops bubble message callbacks because userId doesn't match the bot.
+    // We wrap the SDK's S2S event handler to catch and process these ourselves.
+    try {
+      const s2sHandler = sdk._core?._s2s?.s2sEventHandler || sdk.s2s?.s2sEventHandler;
+      if (s2sHandler && typeof s2sHandler.handleS2SEvent === "function") {
+        const originalHandler = s2sHandler.handleS2SEvent.bind(s2sHandler);
+        s2sHandler.handleS2SEvent = function(req, res) {
+          const body = req?.body || {};
+          const callbackUserId = body.userId || "";
+          const myUserId = botUserId || sdk.connectedUser?.id || "";
+
+          // If userId doesn't match bot AND body has a message, process it as bubble message
+          if (callbackUserId !== myUserId && body.message && body.message.body) {
+            console.log(`${LOG} INTERCEPTED rejected S2S callback: ${JSON.stringify(body).substring(0, 1000)}`);
+            processBubbleCallback(body);
+            // Still respond 200 to Rainbow so it doesn't retry
+            if (res && !res.headersSent) res.status(200).json({ status: "ok" });
+            return;
+          }
+
+          return originalHandler(req, res);
+        };
+        console.log(`${LOG} Monkeypatched S2S event handler for bubble message support`);
+      } else {
+        console.warn(`${LOG} Could not find S2S event handler to monkeypatch`);
+      }
+    } catch (err) {
+      console.warn(`${LOG} Failed to monkeypatch S2S handler:`, err.message);
     }
   });
 
