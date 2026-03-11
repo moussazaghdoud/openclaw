@@ -236,6 +236,7 @@ const bubbleByMember = new Map(); // memberJid → [bubbles]
 // ── Stats ───────────────────────────────────────────────
 
 let stats = { received: 0, replied: 0, errors: 0, startedAt: Date.now() };
+const processedMsgIds = new Set();
 
 // ── Create Express app for S2S callbacks ────────────────
 
@@ -481,7 +482,7 @@ async function start() {
 
   sdk.events.on("rainbow_onmessagereceived", async (message) => {
     try {
-      // Ignore own messages
+      // Ignore own messages — multiple checks for S2S reliability
       if (message.side === "L") return;
 
       const fromJid = message.fromJid || message.from?.jid_im || "";
@@ -490,9 +491,26 @@ async function start() {
       const content = message.content || message.data || "";
       const conversationId = message.conversationId || "";
 
-      // Skip bot's own messages
+      // Skip bot's own messages (robust: check ID, JID, and login email)
       if (fromId && fromId === botUserId) return;
+      const botJid = sdk.connectedUser?.jid_im || "";
+      if (botJid && fromJid === botJid) return;
+      const botLogin = sdk.connectedUser?.loginEmail || config.login;
+      if (botLogin && fromJid.startsWith(botLogin.replace("@", "_").split("/")[0])) return;
+      if (fromId && sdk.connectedUser?.id && fromId === sdk.connectedUser.id) return;
       if (!content || !content.trim()) return;
+
+      // Deduplicate: skip if we already processed this message ID recently
+      const msgId = message.id || message.messageId || "";
+      if (msgId && processedMsgIds.has(msgId)) return;
+      if (msgId) {
+        processedMsgIds.add(msgId);
+        // Keep set bounded
+        if (processedMsgIds.size > 200) {
+          const first = processedMsgIds.values().next().value;
+          processedMsgIds.delete(first);
+        }
+      }
 
       // Detect if this is a bubble (group) message
       // S2S mode doesn't populate fromBubbleJid — check conversation object too
