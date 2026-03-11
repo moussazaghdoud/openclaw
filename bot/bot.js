@@ -472,6 +472,10 @@ async function start() {
             || (message.fromBubbleJid && await sdk.bubbles.getBubbleByJid(message.fromBubbleJid).catch(() => null));
           if (bubble) {
             try {
+              // Ensure bot is an occupant of the bubble
+              try {
+                await sdk.bubbles.setBubblePresence(bubble, true);
+              } catch {}
               conversation = await sdk.conversations.openConversationForBubble(bubble);
               console.log(`${LOG} Opened bubble conversation: ${bubble.name}, dbId=${conversation?.dbId}`);
             } catch (err) {
