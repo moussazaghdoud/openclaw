@@ -150,9 +150,23 @@ app.use(express.json());
 // Store last messages for debug
 const debugMessages = [];
 
+// Store raw S2S callbacks for debug
+const debugCallbacks = [];
+
+// Log all incoming S2S callbacks
+app.use((req, res, next) => {
+  if (req.method === "POST" && req.path !== "/") {
+    const cb = { path: req.path, body: JSON.stringify(req.body || {}).substring(0, 500), time: new Date().toISOString() };
+    debugCallbacks.push(cb);
+    if (debugCallbacks.length > 10) debugCallbacks.shift();
+    console.log(`${LOG} S2S CALLBACK: ${req.method} ${req.path} body=${cb.body.substring(0, 200)}`);
+  }
+  next();
+});
+
 // Health check
 app.get("/", (req, res) => {
-  res.json({ status: "ok", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, lastMessages: debugMessages.slice(-5) });
+  res.json({ status: "ok", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, lastMessages: debugMessages.slice(-5), lastCallbacks: debugCallbacks.slice(-5) });
 });
 
 // Start Express immediately so Railway sees the port is bound
