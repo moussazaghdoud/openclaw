@@ -200,19 +200,33 @@ async function sendMessageToBubble(bubble, text) {
   return false;
 }
 
-// ── Join all rooms (SDK only, no REST API) ──────────────
+// ── Join all rooms ──────────────────────────────────────
 
 async function joinAllRooms() {
-  // SDK's setBubblePresence handles room joining internally
-  // REST API room join doesn't work with SDK-managed connections
-  let joined = 0;
-  for (const [id, bubble] of bubbleList) {
-    try {
-      await sdk.bubbles.setBubblePresence(bubble, true);
-      joined++;
-    } catch {}
+  if (!s2sConnectionId || !authToken) {
+    console.warn(`${LOG} joinAllRooms: missing cnxId=${!!s2sConnectionId} token=${!!authToken}`);
+    return false;
   }
-  console.log(`${LOG} Joined ${joined}/${bubbleList.size} rooms via SDK`);
+  const host = rainbowHost || "openrainbow.com";
+
+  // Bulk join all rooms via S2S REST API
+  try {
+    const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/rooms/join`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const text = await resp.text();
+    console.log(`${LOG} joinAllRooms(${s2sConnectionId}): status=${resp.status} body=${text.substring(0, 200)}`);
+    if (resp.ok) {
+      console.log(`${LOG} Joined all rooms successfully`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.warn(`${LOG} joinAllRooms error:`, err.message);
+    return false;
+  }
 }
 
 // ── First-contact tracking ──────────────────────────────
@@ -257,23 +271,82 @@ app.use((req, res, next) => {
       if (interceptedMessages.length > 20) interceptedMessages.shift();
     }
 
-    // Extract s2sConnectionId from callback URL path
-    // Rainbow S2S callbacks arrive at: /api/rainbow/ucs/v1.0/connections/{connectionId}/incomings
-    const cnxMatch = fullUrl.match(/\/connections\/([a-f0-9-]+)\//i);
-    if (cnxMatch && !s2sConnectionId) {
-      s2sConnectionId = cnxMatch[1];
-      console.log(`${LOG} Extracted s2sConnectionId from callback URL: ${s2sConnectionId}`);
-      // Now join all rooms since we have the connection ID
-      joinAllRooms();
+    // Extract s2sConnectionId from callback
+    if (!s2sConnectionId) {
+      // Try body 'id' field
+      const bodyId = req.body?.id;
+      // Try resource field from presence callbacks
+      const resource = req.body?.presence?.resource;
+      // Try URL path
+      const cnxMatch = fullUrl.match(/\/connections\/([a-f0-9-]+)\//i);
+
+      if (bodyId) {
+        s2sConnectionId = bodyId;
+        console.log(`${LOG} Got s2sConnectionId from body.id: ${s2sConnectionId}`);
+      } else if (resource) {
+        s2sConnectionId = resource;
+        console.log(`${LOG} Got s2sConnectionId from resource: ${s2sConnectionId}`);
+      } else if (cnxMatch) {
+        s2sConnectionId = cnxMatch[1];
+        console.log(`${LOG} Got s2sConnectionId from URL: ${s2sConnectionId}`);
+      }
+
+      if (s2sConnectionId) {
+        // Try joining rooms with this ID, then try resource if it fails
+        joinAllRooms().then(ok => {
+          if (!ok && resource && s2sConnectionId !== resource) {
+            console.log(`${LOG} Retrying with resource ID: ${resource}`);
+            s2sConnectionId = resource;
+            joinAllRooms();
+          }
+        });
+      }
     }
   }
   next();
 });
 
 // ── Intercept S2S callbacks for bubble messages the SDK drops ────
-// The SDK rejects callbacks where userId doesn't match the bot.
-// We log ALL non-receipt/presence callbacks to understand the structure.
 const interceptedMessages = [];
+
+// Intercept ALL POST callbacks to find the real S2S connection ID
+// and handle bubble messages that the SDK drops
+app.post("*", (req, res, next) => {
+  const body = req.body || {};
+
+  // Extract connection ID from any callback that has it
+  if (body.id && !s2sConnectionId) {
+    // The 'id' field in S2S callbacks IS the connection ID
+    s2sConnectionId = body.id;
+    console.log(`${LOG} Got S2S connection ID from callback: ${s2sConnectionId}`);
+    // Join rooms now that we have a valid connection
+    joinAllRooms();
+  }
+
+  // Handle room messages that the SDK will reject
+  // Room messages arrive at /message with a conversation that is type "room"
+  if (body.message && body.message.body && body.message.body.trim()) {
+    const msg = body.message;
+    const convId = msg.conversation_id || body.conversation_id || "";
+    const fromUserId = msg.from || body.from || "";
+    const content = msg.body || "";
+
+    // Check if this is from someone else (not the bot)
+    if (fromUserId && fromUserId !== botUserId) {
+      console.log(`${LOG} RAW MESSAGE CALLBACK: from=${fromUserId} conv=${convId} content=${content.substring(0, 80)}`);
+
+      // If the SDK won't handle it (userId mismatch), we process it
+      if (body.userId !== botUserId && body.userId !== (sdk?.connectedUser?.id || "___")) {
+        console.log(`${LOG} Processing as bubble message (SDK would reject: userId=${body.userId})`);
+        processBubbleCallback(body);
+        if (!res.headersSent) res.status(200).json({ status: "ok" });
+        return; // Don't pass to SDK
+      }
+    }
+  }
+
+  next();
+});
 
 // ── Admin dashboard ─────────────────────────────────────
 
