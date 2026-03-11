@@ -357,8 +357,9 @@ async function start() {
         }
       }
 
-      // Typing indicator ON
+      // Send thinking message and typing indicator
       try {
+        await sdk.im.sendMessageToConversation(conversation, "Thinking...");
         sdk.im.sendIsTypingStateInConversation(conversation, true);
       } catch {}
 
