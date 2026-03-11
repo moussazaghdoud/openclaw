@@ -156,6 +156,28 @@ app.get("/", (req, res) => {
 
 let sdk = null;
 let botUserId = null;
+let s2sConnectionId = null;
+let authToken = null;
+let rainbowHost = null;
+
+function extractSdkInfo() {
+  try {
+    s2sConnectionId = sdk._core?._s2s?._connectionId
+      || sdk._core?.s2s?.connectionId
+      || sdk.s2s?._connectionId
+      || sdk.s2s?.connectionId
+      || null;
+    authToken = sdk._core?._rest?.token
+      || sdk._core?.token
+      || null;
+    rainbowHost = sdk._core?._rest?.host
+      || sdk._core?.host
+      || "openrainbow.com";
+    console.log(`${LOG} S2S info: cnxId=${s2sConnectionId || "NOT FOUND"}, token=${authToken ? "OK" : "NOT FOUND"}, host=${rainbowHost}`);
+  } catch (err) {
+    console.warn(`${LOG} Could not extract SDK internals:`, err.message);
+  }
+}
 
 async function start() {
   console.log(`${LOG} ================================================`);
@@ -223,14 +245,38 @@ async function start() {
       console.log(`${LOG}   JID   : ${user.jid_im}`);
     }
 
-    // Set presence to online
+    // Extract S2S connection ID and auth token
+    extractSdkInfo();
+
+    // Set presence to ONLINE via REST API (critical for S2S mode)
     try {
       if (sdk.presence && typeof sdk.presence.setPresenceTo === "function") {
         await sdk.presence.setPresenceTo("online");
-        console.log(`${LOG} Presence set to ONLINE`);
+        console.log(`${LOG} Presence set to ONLINE via SDK`);
+      } else if (s2sConnectionId && authToken) {
+        await fetch(`https://${rainbowHost}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/presences`, {
+          method: "PUT",
+          headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ presence: { show: "online", status: "Bot ready" } }),
+        });
+        console.log(`${LOG} Presence set to ONLINE via REST`);
       }
     } catch (err) {
       console.warn(`${LOG} Failed to set presence:`, err.message);
+    }
+
+    // Join all rooms (critical for S2S)
+    try {
+      if (s2sConnectionId && authToken) {
+        await fetch(`https://${rainbowHost}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/rooms/join`, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+          body: "{}",
+        });
+        console.log(`${LOG} Joined all rooms via REST`);
+      }
+    } catch (err) {
+      console.warn(`${LOG} Failed to join rooms:`, err.message);
     }
   });
 
