@@ -256,7 +256,14 @@ app.use((req, res, next) => {
     const cb = { path: fullUrl, method: req.method, body: JSON.stringify(req.body || {}).substring(0, 800), time: new Date().toISOString() };
     debugCallbacks.push(cb);
     if (debugCallbacks.length > 20) debugCallbacks.shift();
-    console.log(`${LOG} HTTP ${req.method} ${fullUrl} body=${cb.body.substring(0, 300)}`);
+    console.log(`${LOG} HTTP ${req.method} ${fullUrl} body=${cb.body.substring(0, 500)}`);
+
+    // Log full body for non-receipt/non-presence callbacks (to debug bubble messages)
+    if (!fullUrl.includes("/receipt") && !fullUrl.includes("/presence")) {
+      console.log(`${LOG} FULL CALLBACK: ${JSON.stringify(req.body || {}).substring(0, 2000)}`);
+      interceptedMessages.push({ url: fullUrl, body: req.body, time: new Date().toISOString() });
+      if (interceptedMessages.length > 20) interceptedMessages.shift();
+    }
 
     // Extract s2sConnectionId from callback URL path
     // Rainbow S2S callbacks arrive at: /api/rainbow/ucs/v1.0/connections/{connectionId}/incomings
@@ -270,6 +277,11 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// ── Intercept S2S callbacks for bubble messages the SDK drops ────
+// The SDK rejects callbacks where userId doesn't match the bot.
+// We log ALL non-receipt/presence callbacks to understand the structure.
+const interceptedMessages = [];
 
 // ── Admin dashboard ─────────────────────────────────────
 
@@ -383,6 +395,11 @@ app.post("/admin/restart", async (req, res) => {
     }
   } catch {}
   start();
+});
+
+// Debug endpoint: show intercepted non-receipt callbacks
+app.get("/api/intercepted", (req, res) => {
+  res.json(interceptedMessages);
 });
 
 // JSON API (for programmatic access)
