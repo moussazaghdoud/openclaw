@@ -271,13 +271,121 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check
+// ── Admin dashboard ─────────────────────────────────────
+
+let botPaused = false;
+
 app.get("/", (req, res) => {
   const bubbles = [];
   for (const [id, b] of bubbleList) {
     bubbles.push({ id, name: b.name, jid: b.jid, members: (b.users || []).length });
   }
-  res.json({ status: "ok", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || "NOT FOUND", bubbles, lastMessages: debugMessages.slice(-5), lastCallbacks: debugCallbacks.slice(-5) });
+  const uptime = Math.floor((Date.now() - stats.startedAt) / 1000);
+  const uptimeStr = `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${uptime % 60}s`;
+  const sdkState = sdk ? (botPaused ? "PAUSED" : "RUNNING") : "NOT STARTED";
+
+  res.send(`<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenClaw Bot</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #0d1117; color: #c9d1d9; }
+  h1 { color: #58a6ff; }
+  .status { display: inline-block; padding: 4px 12px; border-radius: 12px; font-weight: bold; }
+  .running { background: #238636; color: #fff; }
+  .paused { background: #d29922; color: #000; }
+  .stopped { background: #da3633; color: #fff; }
+  .btn { padding: 10px 24px; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; margin: 5px; }
+  .btn-stop { background: #da3633; color: #fff; }
+  .btn-start { background: #238636; color: #fff; }
+  .btn-restart { background: #1f6feb; color: #fff; }
+  .btn:hover { opacity: 0.85; }
+  .section { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px; margin: 16px 0; }
+  .stat { display: inline-block; margin: 0 20px 10px 0; }
+  .stat-value { font-size: 24px; font-weight: bold; color: #58a6ff; }
+  .stat-label { font-size: 12px; color: #8b949e; }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { padding: 6px 10px; text-align: left; border-bottom: 1px solid #30363d; font-size: 13px; }
+  th { color: #8b949e; }
+  .mono { font-family: monospace; font-size: 12px; color: #8b949e; }
+</style>
+</head><body>
+<h1>OpenClaw Bot</h1>
+<div class="section">
+  <span class="status ${sdkState === "RUNNING" ? "running" : sdkState === "PAUSED" ? "paused" : "stopped"}">${sdkState}</span>
+  <span style="margin-left:20px;color:#8b949e">Uptime: ${uptimeStr}</span>
+  <div style="margin-top:16px">
+    <form method="POST" action="/admin/pause" style="display:inline">
+      <button class="btn btn-stop" ${botPaused ? "disabled" : ""}>Pause Bot</button>
+    </form>
+    <form method="POST" action="/admin/resume" style="display:inline">
+      <button class="btn btn-start" ${!botPaused ? "disabled" : ""}>Resume Bot</button>
+    </form>
+    <form method="POST" action="/admin/restart" style="display:inline">
+      <button class="btn btn-restart">Restart SDK</button>
+    </form>
+  </div>
+</div>
+<div class="section">
+  <div class="stat"><div class="stat-value">${stats.received}</div><div class="stat-label">Received</div></div>
+  <div class="stat"><div class="stat-value">${stats.replied}</div><div class="stat-label">Replied</div></div>
+  <div class="stat"><div class="stat-value">${stats.errors}</div><div class="stat-label">Errors</div></div>
+  <div class="stat"><div class="stat-value">${bubbles.length}</div><div class="stat-label">Bubbles</div></div>
+</div>
+<div class="section">
+  <h3 style="margin-top:0;color:#8b949e">Connection</h3>
+  <table>
+    <tr><td>S2S Connection</td><td class="mono">${s2sConnectionId || "NOT FOUND"}</td></tr>
+    <tr><td>Bot User ID</td><td class="mono">${botUserId || "N/A"}</td></tr>
+    <tr><td>Bot JID</td><td class="mono">${sdk?.connectedUser?.jid_im || "N/A"}</td></tr>
+  </table>
+</div>
+${bubbles.length ? `<div class="section">
+  <h3 style="margin-top:0;color:#8b949e">Bubbles</h3>
+  <table><tr><th>Name</th><th>Members</th><th>ID</th></tr>
+  ${bubbles.map(b => `<tr><td>${b.name}</td><td>${b.members}</td><td class="mono">${b.id}</td></tr>`).join("")}
+  </table>
+</div>` : ""}
+<div class="section">
+  <h3 style="margin-top:0;color:#8b949e">Recent Messages</h3>
+  <table><tr><th>From</th><th>Content</th><th>Type</th></tr>
+  ${debugMessages.slice(-5).reverse().map(m => `<tr><td class="mono">${m.fromJid || "?"}</td><td>${m.content || ""}</td><td>${m.isBubble ? "bubble" : "1:1"}</td></tr>`).join("") || "<tr><td colspan=3>No messages yet</td></tr>"}
+  </table>
+</div>
+<div style="margin-top:20px;color:#484f58;font-size:12px">OpenClaw Bot &middot; Refreshed ${new Date().toISOString()}</div>
+</body></html>`);
+});
+
+// Admin actions
+app.post("/admin/pause", (req, res) => {
+  botPaused = true;
+  console.log(`${LOG} Bot PAUSED via admin dashboard`);
+  res.redirect("/");
+});
+
+app.post("/admin/resume", (req, res) => {
+  botPaused = false;
+  console.log(`${LOG} Bot RESUMED via admin dashboard`);
+  res.redirect("/");
+});
+
+app.post("/admin/restart", async (req, res) => {
+  console.log(`${LOG} Bot RESTART requested via admin dashboard`);
+  botPaused = false;
+  try {
+    if (sdk) await sdk.stop();
+  } catch {}
+  res.redirect("/");
+  // SDK stop event will trigger restart automatically
+});
+
+// JSON API (for programmatic access)
+app.get("/api/status", (req, res) => {
+  const bubbles = [];
+  for (const [id, b] of bubbleList) {
+    bubbles.push({ id, name: b.name, jid: b.jid, members: (b.users || []).length });
+  }
+  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, bubbles, lastMessages: debugMessages.slice(-5) });
 });
 
 // Start Express immediately so Railway sees the port is bound
@@ -482,6 +590,8 @@ async function start() {
 
   sdk.events.on("rainbow_onmessagereceived", async (message) => {
     try {
+      // Ignore messages when bot is paused
+      if (botPaused) return;
       // Ignore own messages — multiple checks for S2S reliability
       if (message.side === "L") return;
 
