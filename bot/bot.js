@@ -134,6 +134,72 @@ async function callOpenClaw(userId, userMessage) {
   }
 }
 
+// ── Send message to bubble via REST API ─────────────────
+
+async function sendMessageToBubble(bubble, text) {
+  // Method 1: SDK s2s.sendMessageInConversation with conversation dbId
+  try {
+    let conversation = await sdk.conversations.openConversationForBubble(bubble);
+    // Poll for dbId (can take a few seconds in S2S mode)
+    for (let i = 0; i < 10 && !conversation?.dbId; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      conversation = await sdk.conversations.openConversationForBubble(bubble);
+    }
+    if (conversation?.dbId) {
+      if (sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
+        await sdk.s2s.sendMessageInConversation(conversation.dbId, {
+          message: { body: text, lang: "en" },
+        });
+        console.log(`${LOG} Sent to bubble "${bubble.name}" via s2s.sendMessageInConversation dbId=${conversation.dbId}`);
+        return true;
+      }
+      // Fallback: im.sendMessageToConversation
+      await sdk.im.sendMessageToConversation(conversation, text);
+      console.log(`${LOG} Sent to bubble "${bubble.name}" via im.sendMessageToConversation`);
+      return true;
+    }
+  } catch (err) {
+    console.warn(`${LOG} SDK bubble send failed:`, err.message);
+  }
+
+  // Method 2: Direct S2S REST API (create conversation + send)
+  if (s2sConnectionId && authToken) {
+    try {
+      const host = rainbowHost || "openrainbow.com";
+      // Create S2S conversation for this bubble
+      const convUrl = `https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations`;
+      const convResp = await fetch(convUrl, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ conversation: { peerId: bubble.id } }),
+      });
+      const convData = await convResp.json();
+      const convId = convData?.data?.id || convData?.id;
+      console.log(`${LOG} S2S conversation created: ${convId} (status ${convResp.status})`);
+
+      if (convId) {
+        const msgUrl = `https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`;
+        const msgResp = await fetch(msgUrl, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ message: { body: text, lang: "en" } }),
+        });
+        if (msgResp.ok) {
+          console.log(`${LOG} Sent to bubble "${bubble.name}" via S2S REST convId=${convId}`);
+          return true;
+        }
+        const msgErr = await msgResp.text();
+        console.warn(`${LOG} S2S REST send failed (${msgResp.status}): ${msgErr.substring(0, 300)}`);
+      }
+    } catch (err) {
+      console.warn(`${LOG} S2S REST bubble send error:`, err.message);
+    }
+  }
+
+  console.error(`${LOG} All bubble send methods failed for "${bubble.name}"`);
+  return false;
+}
+
 // ── First-contact tracking ──────────────────────────────
 
 const greeted = new Set();
@@ -196,7 +262,7 @@ let s2sConnectionId = null;
 let authToken = null;
 let rainbowHost = null;
 
-function extractSdkInfo() {
+async function extractSdkInfo() {
   try {
     // Try many paths to find connectionId
     s2sConnectionId = sdk._core?._s2s?._connectionId
@@ -206,29 +272,38 @@ function extractSdkInfo() {
       || sdk._core?._s2s?.connectionInfo?.id
       || null;
 
-    // Deep search for connectionId if not found
-    if (!s2sConnectionId) {
-      try {
-        const s2sService = sdk._core?._s2s || sdk.s2s;
-        if (s2sService) {
-          const keys = Object.keys(s2sService).filter(k => !k.startsWith("_event"));
-          console.log(`${LOG} S2S service keys: ${keys.join(", ")}`);
-          for (const k of keys) {
-            const v = s2sService[k];
-            if (typeof v === "string" && v.length > 10 && v.length < 100) {
-              console.log(`${LOG}   s2s.${k} = ${v}`);
-            }
-          }
-        }
-      } catch {}
-    }
-
     authToken = sdk._core?._rest?.token
       || sdk._core?.token
       || null;
     rainbowHost = sdk._core?._rest?.host
       || sdk._core?.host
       || "openrainbow.com";
+
+    // If connectionId not found in SDK internals, query REST API
+    if (!s2sConnectionId && authToken) {
+      try {
+        const host = rainbowHost || "openrainbow.com";
+        const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections`, {
+          headers: { "Authorization": `Bearer ${authToken}` },
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const connections = data?.data || data || [];
+          console.log(`${LOG} REST connections response: ${JSON.stringify(connections).substring(0, 500)}`);
+          // Find our S2S connection
+          if (Array.isArray(connections) && connections.length > 0) {
+            s2sConnectionId = connections[0].id || connections[0]._id;
+          } else if (connections.id) {
+            s2sConnectionId = connections.id;
+          }
+        } else {
+          console.warn(`${LOG} REST connections query failed: ${resp.status}`);
+        }
+      } catch (err) {
+        console.warn(`${LOG} REST connections query error:`, err.message);
+      }
+    }
+
     console.log(`${LOG} S2S info: cnxId=${s2sConnectionId || "NOT FOUND"}, token=${authToken ? "OK" : "NOT FOUND"}, host=${rainbowHost}`);
   } catch (err) {
     console.warn(`${LOG} Could not extract SDK internals:`, err.message);
@@ -302,7 +377,7 @@ async function start() {
     }
 
     // Extract S2S connection ID and auth token
-    extractSdkInfo();
+    await extractSdkInfo();
 
     // Set presence to ONLINE via REST API (critical for S2S mode)
     try {
@@ -512,9 +587,18 @@ async function start() {
         }
       }
 
+      // Resolve the bubble object for bubble messages
+      const replyBubble = targetBubble
+        || (message.fromBubbleId && bubbleList.get(message.fromBubbleId))
+        || null;
+
       // Send thinking message and typing indicator
       try {
-        await sdk.im.sendMessageToConversation(conversation, "Thinking...");
+        if (isBubble && replyBubble) {
+          await sendMessageToBubble(replyBubble, "Thinking...");
+        } else {
+          await sdk.im.sendMessageToConversation(conversation, "Thinking...");
+        }
         sdk.im.sendIsTypingStateInConversation(conversation, true);
       } catch {}
 
@@ -529,16 +613,28 @@ async function start() {
 
       // Send response back
       try {
-        // Try S2S method first, fallback to im method
-        if (conversation.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
-          await sdk.s2s.sendMessageInConversation(conversation.dbId, {
-            message: { body: responseText, lang: "en" },
-          });
+        if (isBubble && replyBubble) {
+          // Reply to bubble via dedicated bubble send method
+          const sent = await sendMessageToBubble(replyBubble, responseText);
+          if (sent) {
+            stats.replied++;
+            console.log(`${LOG} [${stats.replied}] Replied in bubble "${replyBubble.name}" (${responseText.length} chars)`);
+          } else {
+            stats.errors++;
+            console.error(`${LOG} All bubble reply methods failed for "${replyBubble.name}"`);
+          }
         } else {
-          await sdk.im.sendMessageToConversation(conversation, responseText);
+          // 1:1 reply via S2S or IM
+          if (conversation.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
+            await sdk.s2s.sendMessageInConversation(conversation.dbId, {
+              message: { body: responseText, lang: "en" },
+            });
+          } else {
+            await sdk.im.sendMessageToConversation(conversation, responseText);
+          }
+          stats.replied++;
+          console.log(`${LOG} [${stats.replied}] Replied to ${fromName} (${responseText.length} chars)`);
         }
-        stats.replied++;
-        console.log(`${LOG} [${stats.replied}] Replied to ${fromName} (${responseText.length} chars)`);
       } catch (err) {
         stats.errors++;
         console.error(`${LOG} Failed to send reply:`, err.message);
