@@ -7,6 +7,8 @@
     "start": "node bot.js"
   },
   "dependencies": {
-    "rainbow-node-sdk": "2.42.0-lts.1"
+    "dotenv": "^16.4.0",
+    "rainbow-node-sdk": "2.42.0-lts.1",
+    "rxjs": "^6.6.7"
   }
 }

@@ -1,10 +1,14 @@
 {
   "botConfiguration": {
     "administrators": {
-      "rainbowAccounts": [],
+      "rainbowAccounts": [
+        {
+          "login": "moussa.zaghdoud+alice@al-enterprise.com"
+        }
+      ],
       "guestsAccepted": true
     },
-    "instantMessageAutoAccept": true,
-    "bubbleInvitationAutoAccept": true
+    "bubbleInvitationAutoAccept": true,
+    "userInvitationAutoAccept": true
   }
 }
