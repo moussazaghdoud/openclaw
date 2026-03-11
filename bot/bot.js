@@ -333,6 +333,7 @@ async function start() {
 
       stats.received++;
       console.log(`${LOG} [${stats.received}] ${isBubble ? "[BUBBLE]" : "[1:1]"} Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`);
+      console.log(`${LOG}   bubbleJid=${message.fromBubbleJid || "none"}, bubbleId=${message.fromBubbleId || "none"}, convId=${conversationId || "none"}`);
 
       // Get conversation object for reply
       let conversation = null;
