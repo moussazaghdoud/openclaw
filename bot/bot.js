@@ -188,11 +188,31 @@ let rainbowHost = null;
 
 function extractSdkInfo() {
   try {
+    // Try many paths to find connectionId
     s2sConnectionId = sdk._core?._s2s?._connectionId
       || sdk._core?.s2s?.connectionId
       || sdk.s2s?._connectionId
       || sdk.s2s?.connectionId
+      || sdk._core?._s2s?.connectionInfo?.id
       || null;
+
+    // Deep search for connectionId if not found
+    if (!s2sConnectionId) {
+      try {
+        const s2sService = sdk._core?._s2s || sdk.s2s;
+        if (s2sService) {
+          const keys = Object.keys(s2sService).filter(k => !k.startsWith("_event"));
+          console.log(`${LOG} S2S service keys: ${keys.join(", ")}`);
+          for (const k of keys) {
+            const v = s2sService[k];
+            if (typeof v === "string" && v.length > 10 && v.length < 100) {
+              console.log(`${LOG}   s2s.${k} = ${v}`);
+            }
+          }
+        }
+      } catch {}
+    }
+
     authToken = sdk._core?._rest?.token
       || sdk._core?.token
       || null;
@@ -291,7 +311,7 @@ async function start() {
       console.warn(`${LOG} Failed to set presence:`, err.message);
     }
 
-    // Join all rooms (critical for S2S)
+    // Join all rooms (critical for S2S to receive bubble messages)
     try {
       if (s2sConnectionId && authToken) {
         await fetch(`https://${rainbowHost}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/rooms/join`, {
@@ -302,7 +322,21 @@ async function start() {
         console.log(`${LOG} Joined all rooms via REST`);
       }
     } catch (err) {
-      console.warn(`${LOG} Failed to join rooms:`, err.message);
+      console.warn(`${LOG} Failed to join rooms via REST:`, err.message);
+    }
+
+    // Also try joining bubbles via SDK
+    try {
+      const bubbles = await sdk.bubbles.getAll();
+      console.log(`${LOG} Found ${bubbles?.length || 0} bubbles`);
+      for (const bubble of (bubbles || [])) {
+        try {
+          await sdk.bubbles.setBubblePresence(bubble, true);
+        } catch {}
+      }
+      console.log(`${LOG} Joined all bubbles via SDK`);
+    } catch (err) {
+      console.warn(`${LOG} Failed to join bubbles via SDK:`, err.message);
     }
   });
 
