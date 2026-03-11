@@ -453,9 +453,31 @@ async function extractSdkInfo() {
   }
 }
 
+let restartCount = 0;
+const MAX_RESTARTS = 10;
+let restartTimer = null;
+
 async function start() {
+  // Prevent overlapping restarts
+  if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+
+  // Stop previous SDK instance cleanly before creating a new one
+  if (sdk) {
+    try {
+      sdk.events.removeAllListeners();
+      await sdk.stop().catch(() => {});
+    } catch {}
+    sdk = null;
+  }
+
+  restartCount++;
+  if (restartCount > MAX_RESTARTS) {
+    console.error(`${LOG} Too many restart attempts (${MAX_RESTARTS}). Giving up. Check credentials and redeploy.`);
+    return;
+  }
+
   console.log(`${LOG} ================================================`);
-  console.log(`${LOG} OpenClaw Rainbow Bot starting (S2S mode)...`);
+  console.log(`${LOG} OpenClaw Rainbow Bot starting (S2S mode) [attempt ${restartCount}]...`);
   console.log(`${LOG} Rainbow host    : ${config.host}`);
   console.log(`${LOG} Bot account     : ${config.login}`);
   console.log(`${LOG} Host callback   : ${config.hostCallback}`);
@@ -510,6 +532,7 @@ async function start() {
   // ── Bot Ready ──────────────────────────────────────
 
   sdk.events.on("rainbow_onready", async () => {
+    restartCount = 0; // Reset on successful connection
     console.log(`${LOG} Bot ready -- listening for messages`);
     const user = sdk.connectedUser;
     if (user) {
@@ -835,12 +858,12 @@ async function start() {
 
   sdk.events.on("rainbow_onstopped", () => {
     console.warn(`${LOG} SDK stopped -- restarting in 30s`);
-    setTimeout(() => start(), 30000);
+    restartTimer = setTimeout(() => start(), 30000);
   });
 
   sdk.events.on("rainbow_onfailed", () => {
-    console.error(`${LOG} Login failed -- check credentials. Retrying in 30s`);
-    setTimeout(() => start(), 30000);
+    console.error(`${LOG} Login failed -- check credentials. Retrying in 60s`);
+    restartTimer = setTimeout(() => start(), 60000);
   });
 
   sdk.events.on("rainbow_onconnectionerror", (err) => {
@@ -858,8 +881,8 @@ async function start() {
     console.log(`${LOG} SDK started`);
   } catch (err) {
     console.error(`${LOG} Failed to start:`, err.message);
-    console.log(`${LOG} Retrying in 30s...`);
-    setTimeout(() => start(), 30000);
+    console.log(`${LOG} Retrying in 60s...`);
+    restartTimer = setTimeout(() => start(), 60000);
   }
 }
 
