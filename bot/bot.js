@@ -306,47 +306,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── Intercept S2S callbacks for bubble messages the SDK drops ────
+// ── Intercepted messages log ────
 const interceptedMessages = [];
-
-// Intercept ALL POST callbacks to find the real S2S connection ID
-// and handle bubble messages that the SDK drops
-app.post("*", (req, res, next) => {
-  const body = req.body || {};
-
-  // Extract connection ID from any callback that has it
-  if (body.id && !s2sConnectionId) {
-    // The 'id' field in S2S callbacks IS the connection ID
-    s2sConnectionId = body.id;
-    console.log(`${LOG} Got S2S connection ID from callback: ${s2sConnectionId}`);
-    // Join rooms now that we have a valid connection
-    joinAllRooms();
-  }
-
-  // Handle room messages that the SDK will reject
-  // Room messages arrive at /message with a conversation that is type "room"
-  if (body.message && body.message.body && body.message.body.trim()) {
-    const msg = body.message;
-    const convId = msg.conversation_id || body.conversation_id || "";
-    const fromUserId = msg.from || body.from || "";
-    const content = msg.body || "";
-
-    // Check if this is from someone else (not the bot)
-    if (fromUserId && fromUserId !== botUserId) {
-      console.log(`${LOG} RAW MESSAGE CALLBACK: from=${fromUserId} conv=${convId} content=${content.substring(0, 80)}`);
-
-      // If the SDK won't handle it (userId mismatch), we process it
-      if (body.userId !== botUserId && body.userId !== (sdk?.connectedUser?.id || "___")) {
-        console.log(`${LOG} Processing as bubble message (SDK would reject: userId=${body.userId})`);
-        processBubbleCallback(body);
-        if (!res.headersSent) res.status(200).json({ status: "ok" });
-        return; // Don't pass to SDK
-      }
-    }
-  }
-
-  next();
-});
 
 // ── Admin dashboard ─────────────────────────────────────
 
@@ -739,36 +700,7 @@ async function start() {
     // Join all rooms via REST (AFTER bubbles are cached so individual join works)
     await joinAllRooms();
 
-    // Monkeypatch: intercept S2S callbacks that the SDK rejects (empty userId)
-    // The SDK drops bubble message callbacks because userId doesn't match the bot.
-    // We wrap the SDK's S2S event handler to catch and process these ourselves.
-    try {
-      const s2sHandler = sdk._core?._s2s?.s2sEventHandler || sdk.s2s?.s2sEventHandler;
-      if (s2sHandler && typeof s2sHandler.handleS2SEvent === "function") {
-        const originalHandler = s2sHandler.handleS2SEvent.bind(s2sHandler);
-        s2sHandler.handleS2SEvent = function(req, res) {
-          const body = req?.body || {};
-          const callbackUserId = body.userId || "";
-          const myUserId = botUserId || sdk.connectedUser?.id || "";
-
-          // If userId doesn't match bot AND body has a message, process it as bubble message
-          if (callbackUserId !== myUserId && body.message && body.message.body) {
-            console.log(`${LOG} INTERCEPTED rejected S2S callback: ${JSON.stringify(body).substring(0, 1000)}`);
-            processBubbleCallback(body);
-            // Still respond 200 to Rainbow so it doesn't retry
-            if (res && !res.headersSent) res.status(200).json({ status: "ok" });
-            return;
-          }
-
-          return originalHandler(req, res);
-        };
-        console.log(`${LOG} Monkeypatched S2S event handler for bubble message support`);
-      } else {
-        console.warn(`${LOG} Could not find S2S event handler to monkeypatch`);
-      }
-    } catch (err) {
-      console.warn(`${LOG} Failed to monkeypatch S2S handler:`, err.message);
-    }
+    console.log(`${LOG} Ready — bubble messages handled via SDK onmessagereceived + S2S workaround`);
   });
 
   sdk.events.on("rainbow_onconnected", () => {
@@ -947,13 +879,8 @@ async function start() {
         || (message.fromBubbleId && bubbleList.get(message.fromBubbleId))
         || null;
 
-      // Send thinking message and typing indicator
+      // Typing indicator
       try {
-        if (isBubble && replyBubble) {
-          await sendMessageToBubble(replyBubble, "Thinking...");
-        } else {
-          await sdk.im.sendMessageToConversation(conversation, "Thinking...");
-        }
         sdk.im.sendIsTypingStateInConversation(conversation, true);
       } catch {}
 
