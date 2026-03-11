@@ -255,6 +255,10 @@ async function start() {
     console.log(`${LOG} ✓ Connected to Rainbow`);
   });
 
+  sdk.events.on("rainbow_onstarted", () => {
+    console.log(`${LOG} ✓ SDK started event fired`);
+  });
+
   // ── Instant Message Received ───────────────────────
   // This is the equivalent of BotBasicMessages.InstantMessageReceivedAsync()
 
@@ -373,8 +377,8 @@ async function start() {
     setTimeout(() => start(), 30000);
   });
 
-  sdk.events.on("rainbow_onconnectionerror", () => {
-    console.error(`${LOG} Connection error`);
+  sdk.events.on("rainbow_onconnectionerror", (err) => {
+    console.error(`${LOG} Connection error:`, JSON.stringify(err?.error || err?.msg || err, null, 2));
   });
 
   sdk.events.on("rainbow_onreconnecting", () => {
