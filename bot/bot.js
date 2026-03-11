@@ -388,23 +388,36 @@ async function start() {
       // Detect if this is a bubble (group) message
       // S2S mode doesn't populate fromBubbleJid — check conversation object too
       const conv = message.conversation || {};
-      const isBubble = !!(message.fromBubbleJid || message.fromBubbleId
+      let isBubble = !!(message.fromBubbleJid || message.fromBubbleId
         || (conv.type === 1) || (conv.bubble && conv.bubble.id)
         || (conv.id && conv.id.includes("room_")));
 
-      // In bubbles, only respond when @mentioned by name
-      if (isBubble) {
-        const botName = (sdk.connectedUser?.displayName || "").toLowerCase();
-        const botFirstName = (sdk.connectedUser?.firstName || "").toLowerCase();
-        const contentLower = content.toLowerCase();
-        const mentioned = (botName && contentLower.includes(botName))
-          || (botFirstName && contentLower.includes(botFirstName))
-          || contentLower.includes("@bot")
-          || contentLower.includes("@ai")
-          || contentLower.startsWith("bot:")
-          || contentLower.startsWith("bot :");
-        if (!mentioned) return; // Not addressed to the bot — ignore
+      // Check if message contains bot trigger keywords
+      const contentLower = content.toLowerCase();
+      const botName = (sdk.connectedUser?.displayName || "").toLowerCase();
+      const botFirstName = (sdk.connectedUser?.firstName || "").toLowerCase();
+      const hasBotTrigger = (botName && contentLower.includes(botName))
+        || (botFirstName && botFirstName.length > 2 && contentLower.includes(botFirstName))
+        || contentLower.includes("@bot")
+        || contentLower.includes("@ai")
+        || contentLower.startsWith("bot:")
+        || contentLower.startsWith("bot :");
+
+      // S2S workaround: if sender is in a bubble AND message has bot trigger,
+      // treat it as a bubble message (SDK doesn't set fromBubbleJid in S2S mode)
+      let targetBubble = null;
+      if (!isBubble && hasBotTrigger && fromJid && bubbleByMember.has(fromJid)) {
+        const memberBubbles = bubbleByMember.get(fromJid);
+        if (memberBubbles.length > 0) {
+          // Use the most recently active bubble this user is in
+          targetBubble = memberBubbles[memberBubbles.length - 1];
+          isBubble = true;
+          console.log(`${LOG} S2S workaround: treating as bubble message for "${targetBubble.name}"`);
+        }
       }
+
+      // In bubbles, only respond when @mentioned
+      if (isBubble && !hasBotTrigger) return;
 
       stats.received++;
       console.log(`${LOG} [${stats.received}] ${isBubble ? "[BUBBLE]" : "[1:1]"} Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`);
@@ -454,20 +467,16 @@ async function start() {
       if (!conversation) {
         if (isBubble) {
           // For bubble messages, find the bubble and open its conversation
-          const bubbleId = message.fromBubbleId || "";
-          const bubbleJid = message.fromBubbleJid || "";
-          try {
-            let bubble = null;
-            if (bubbleId) {
-              bubble = await sdk.bubbles.getBubbleById(bubbleId);
-            } else if (bubbleJid) {
-              bubble = await sdk.bubbles.getBubbleByJid(bubbleJid);
-            }
-            if (bubble) {
+          const bubble = targetBubble
+            || (message.fromBubbleId && await sdk.bubbles.getBubbleById(message.fromBubbleId).catch(() => null))
+            || (message.fromBubbleJid && await sdk.bubbles.getBubbleByJid(message.fromBubbleJid).catch(() => null));
+          if (bubble) {
+            try {
               conversation = await sdk.conversations.openConversationForBubble(bubble);
+              console.log(`${LOG} Opened bubble conversation: ${bubble.name}, dbId=${conversation?.dbId}`);
+            } catch (err) {
+              console.warn(`${LOG} Bubble conversation lookup failed:`, err.message);
             }
-          } catch (err) {
-            console.warn(`${LOG} Bubble conversation lookup failed:`, err.message);
           }
         } else if (fromJid) {
           // For 1:1 messages, find contact and open conversation
