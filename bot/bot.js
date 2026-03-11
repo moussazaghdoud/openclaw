@@ -463,46 +463,23 @@ async function extractSdkInfo() {
       return;
     }
 
-    // Always query the REST API for the ACTUAL active S2S connection
+    // Step 1: Query REST API for active connections
+    let connections = [];
     try {
       const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections`, {
         headers: { "Authorization": `Bearer ${authToken}` },
       });
       const data = await resp.json();
-      const connections = data?.data?.items || data?.data || data?.items || data || [];
-      console.log(`${LOG} REST connections: status=${resp.status} data=${JSON.stringify(data).substring(0, 500)}`);
-
-      if (Array.isArray(connections) && connections.length > 0) {
-        // Use the most recent connection with our callback URL
-        for (const cnx of connections) {
-          if (cnx.callback_url === config.hostCallback || cnx.resource?.startsWith("s2s_")) {
-            s2sConnectionId = cnx.id || cnx._id;
-            console.log(`${LOG} Found matching S2S connection: ${s2sConnectionId}`);
-            break;
-          }
-        }
-        if (!s2sConnectionId) {
-          s2sConnectionId = connections[0].id || connections[0]._id;
-          console.log(`${LOG} Using first S2S connection: ${s2sConnectionId}`);
-        }
-      }
+      connections = data?.data?.items || data?.data || data?.items || [];
+      if (!Array.isArray(connections)) connections = connections ? [connections] : [];
+      console.log(`${LOG} REST connections: status=${resp.status} count=${connections.length}`);
     } catch (err) {
       console.warn(`${LOG} REST connections query error:`, err.message);
     }
 
-    // Fallback: try SDK internals
-    if (!s2sConnectionId) {
-      const cnxInfo = sdk._core?._rest?.connectionS2SInfo;
-      if (cnxInfo) console.log(`${LOG} connectionS2SInfo fallback: ${JSON.stringify(cnxInfo).substring(0, 300)}`);
-      s2sConnectionId = cnxInfo?.id || cnxInfo?._id
-        || sdk._core?._s2s?._connectionId
-        || sdk.s2s?._connectionId
-        || null;
-    }
-
-    // Last resort: create a NEW S2S connection
-    if (!s2sConnectionId) {
-      console.log(`${LOG} No S2S connection found, creating one...`);
+    // Step 2: If no connections exist, create one
+    if (connections.length === 0) {
+      console.log(`${LOG} No S2S connections found, creating one...`);
       try {
         const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections`, {
           method: "POST",
@@ -510,26 +487,24 @@ async function extractSdkInfo() {
           body: JSON.stringify({ connection: { resource: "s2s_openclaw", callback_url: config.hostCallback } }),
         });
         const data = await resp.json();
-        console.log(`${LOG} Create connection: status=${resp.status} data=${JSON.stringify(data).substring(0, 300)}`);
+        console.log(`${LOG} Create connection: status=${resp.status} data=${JSON.stringify(data).substring(0, 500)}`);
         s2sConnectionId = data?.data?.id || data?.id || null;
+        if (s2sConnectionId) {
+          console.log(`${LOG} Created S2S connection: ${s2sConnectionId}`);
+        }
       } catch (err) {
         console.error(`${LOG} Failed to create S2S connection:`, err.message);
       }
-    }
-
-    // Validate the connection ID by testing it
-    if (s2sConnectionId) {
-      try {
-        const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}`, {
-          headers: { "Authorization": `Bearer ${authToken}` },
-        });
-        if (resp.ok) {
-          console.log(`${LOG} S2S connection ${s2sConnectionId} is VALID`);
-        } else {
-          console.warn(`${LOG} S2S connection ${s2sConnectionId} is INVALID (${resp.status}), clearing`);
-          s2sConnectionId = null;
+    } else {
+      // Use existing connection matching our callback URL
+      for (const cnx of connections) {
+        if (cnx.callback_url === config.hostCallback || cnx.resource?.startsWith("s2s_")) {
+          s2sConnectionId = cnx.id || cnx._id;
+          break;
         }
-      } catch {}
+      }
+      if (!s2sConnectionId) s2sConnectionId = connections[0].id || connections[0]._id;
+      console.log(`${LOG} Using existing S2S connection: ${s2sConnectionId}`);
     }
 
     console.log(`${LOG} S2S info: cnxId=${s2sConnectionId || "NOT FOUND"}, token=OK, host=${host}`);
