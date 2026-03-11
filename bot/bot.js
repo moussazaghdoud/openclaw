@@ -421,12 +421,16 @@ async function extractSdkInfo() {
     console.log(`${LOG} sdk._core?._rest keys: ${sdk._core?._rest ? Object.keys(sdk._core._rest).join(", ") : "N/A"}`);
 
     // Try many paths to find connectionId
-    s2sConnectionId = sdk._core?._s2s?._connectionId
+    const cnxInfo = sdk._core?._rest?.connectionS2SInfo;
+    if (cnxInfo) {
+      console.log(`${LOG} connectionS2SInfo: ${JSON.stringify(cnxInfo).substring(0, 500)}`);
+    }
+    s2sConnectionId = cnxInfo?.id || cnxInfo?._id || cnxInfo?.resource
+      || sdk._core?._s2s?._connectionId
       || sdk._core?.s2s?.connectionId
       || sdk.s2s?._connectionId
       || sdk.s2s?.connectionId
       || sdk._core?._s2s?.connectionInfo?.id
-      || sdk._core?._s2s?.connectionS2SInfo?.id
       || null;
 
     authToken = sdk._core?._rest?.token
