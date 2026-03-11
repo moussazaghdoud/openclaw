@@ -152,6 +152,15 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats });
 });
 
+// Start Express immediately so Railway sees the port is bound
+const server = app.listen(PORT, () => {
+  console.log(`${LOG} Express listening on port ${PORT}`);
+});
+
+// Wrap app so SDK doesn't call listen() again
+const appForSdk = Object.create(app);
+appForSdk.listen = (port, cb) => { if (cb) cb(); return server; };
+
 // ── Start Bot ───────────────────────────────────────────
 
 let sdk = null;
@@ -198,7 +207,7 @@ async function start() {
     s2s: {
       hostCallback: config.hostCallback,
       locallistenningport: String(PORT),
-      expressEngine: app,
+      expressEngine: appForSdk,
     },
     credentials: { login: config.login, password: config.password },
     application: { appID: config.appId, appSecret: config.appSecret },
