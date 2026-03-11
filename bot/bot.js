@@ -314,8 +314,23 @@ async function start() {
       if (fromId && fromId === botUserId) return;
       if (!content || !content.trim()) return;
 
+      // Detect if this is a bubble (group) message
+      const isBubble = !!(message.fromBubbleJid || message.fromBubbleId);
+
+      // In bubbles, only respond when @mentioned by name
+      if (isBubble) {
+        const botName = (sdk.connectedUser?.displayName || "").toLowerCase();
+        const botFirstName = (sdk.connectedUser?.firstName || "").toLowerCase();
+        const contentLower = content.toLowerCase();
+        const mentioned = (botName && contentLower.includes(botName))
+          || (botFirstName && contentLower.includes(botFirstName))
+          || contentLower.includes("@bot")
+          || contentLower.includes("@ai");
+        if (!mentioned) return; // Not addressed to the bot — ignore
+      }
+
       stats.received++;
-      console.log(`${LOG} [${stats.received}] Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`);
+      console.log(`${LOG} [${stats.received}] ${isBubble ? "[BUBBLE]" : "[1:1]"} Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`);
 
       // Get conversation object for reply
       // In S2S mode, conversationId may be empty — look up by contact
