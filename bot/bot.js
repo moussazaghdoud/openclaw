@@ -318,16 +318,30 @@ async function start() {
       console.log(`${LOG} [${stats.received}] Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`);
 
       // Get conversation object for reply
-      let conversation;
-      try {
-        conversation = sdk.conversations.getConversationById(conversationId);
-      } catch {
-        console.error(`${LOG} Cannot find conversation ${conversationId}`);
-        return;
+      // In S2S mode, conversationId may be empty — look up by contact
+      let conversation = null;
+
+      // Try by conversationId first
+      if (conversationId) {
+        try {
+          conversation = sdk.conversations.getConversationById(conversationId);
+        } catch {}
+      }
+
+      // Fallback: find or open conversation by contact JID
+      if (!conversation && fromJid) {
+        try {
+          const contact = await sdk.contacts.getContactByJid(fromJid);
+          if (contact) {
+            conversation = await sdk.conversations.openConversationForContact(contact);
+          }
+        } catch (err) {
+          console.warn(`${LOG} Fallback conversation lookup failed:`, err.message);
+        }
       }
 
       if (!conversation) {
-        console.error(`${LOG} No conversation for ${conversationId}`);
+        console.error(`${LOG} No conversation found for ${fromName} (${fromJid})`);
         return;
       }
 
