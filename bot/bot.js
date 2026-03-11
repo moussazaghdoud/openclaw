@@ -325,7 +325,9 @@ async function start() {
         const mentioned = (botName && contentLower.includes(botName))
           || (botFirstName && contentLower.includes(botFirstName))
           || contentLower.includes("@bot")
-          || contentLower.includes("@ai");
+          || contentLower.includes("@ai")
+          || contentLower.startsWith("bot:")
+          || contentLower.startsWith("bot :");
         if (!mentioned) return; // Not addressed to the bot — ignore
       }
 
