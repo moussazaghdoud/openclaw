@@ -147,9 +147,12 @@ let stats = { received: 0, replied: 0, errors: 0, startedAt: Date.now() };
 const app = express();
 app.use(express.json());
 
+// Store last messages for debug
+const debugMessages = [];
+
 // Health check
 app.get("/", (req, res) => {
-  res.json({ status: "ok", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats });
+  res.json({ status: "ok", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, lastMessages: debugMessages.slice(-5) });
 });
 
 // Start Express immediately so Railway sees the port is bound
@@ -333,7 +336,20 @@ async function start() {
 
       stats.received++;
       console.log(`${LOG} [${stats.received}] ${isBubble ? "[BUBBLE]" : "[1:1]"} Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`);
-      console.log(`${LOG}   bubbleJid=${message.fromBubbleJid || "none"}, bubbleId=${message.fromBubbleId || "none"}, convId=${conversationId || "none"}`);
+      const msgDebug = {
+        keys: Object.keys(message),
+        fromBubbleJid: message.fromBubbleJid || null,
+        fromBubbleId: message.fromBubbleId || null,
+        conversationId: conversationId || null,
+        type: message.type || null,
+        conversationType: message.conversationType || null,
+        isBubble,
+        fromName,
+        content: content.substring(0, 50),
+      };
+      debugMessages.push(msgDebug);
+      if (debugMessages.length > 10) debugMessages.shift();
+      console.log(`${LOG}   DEBUG: ${JSON.stringify(msgDebug)}`);
 
       // Get conversation object for reply
       let conversation = null;
