@@ -357,6 +357,8 @@ async function start() {
       try { convBubbleVal = conv.bubble; } catch {}
       try { convDbId = conv.dbId; } catch {}
       const msgDebug = {
+        fromJid: message.fromJid || null,
+        toJid: message.toJid || null,
         fromBubbleJid: message.fromBubbleJid || null,
         fromBubbleId: message.fromBubbleId || null,
         fromBubbleUserJid: message.fromBubbleUserJid || null,
@@ -368,6 +370,8 @@ async function start() {
         isBubble,
         fromName,
         content: content.substring(0, 50),
+        subject: message.subject || null,
+        resource: message.resource || null,
       };
       debugMessages.push(msgDebug);
       if (debugMessages.length > 10) debugMessages.shift();
