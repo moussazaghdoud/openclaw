@@ -1,36 +1,18 @@
 #!/usr/bin/env node
 require("dotenv").config();
 /**
- * OpenClaw Rainbow Bot
+ * OpenClaw Rainbow Bot — S2S mode with real Express server
  *
- * A Rainbow bot that receives instant messages from users and responds
- * using the OpenClaw AI gateway (OpenAI-compatible chat completions API).
- *
- * Based on the Rainbow C# SDK BotBasicMessages pattern:
- *   - Connect to Rainbow as a bot account
- *   - Listen for instant messages (1:1 and bubble/group)
- *   - Forward messages to OpenClaw for AI processing
- *   - Send AI responses back to the Rainbow user
- *   - Auto-accept contact and bubble invitations
- *
- * Configuration via environment variables:
- *   RAINBOW_BOT_LOGIN      - Bot Rainbow account email
- *   RAINBOW_BOT_PASSWORD   - Bot Rainbow account password
- *   RAINBOW_APP_ID         - Rainbow application ID
- *   RAINBOW_APP_SECRET     - Rainbow application secret
- *   RAINBOW_HOST           - "official" or "sandbox" (default: official)
- *   OPENCLAW_ENDPOINT      - OpenClaw gateway URL (e.g. https://openclaw-xxx.up.railway.app)
- *   OPENCLAW_API_KEY       - OpenClaw gateway auth token
- *   OPENCLAW_AGENT_ID      - OpenClaw agent ID (default: main)
- *   OPENCLAW_SYSTEM_PROMPT - System prompt for AI (optional)
- *   OPENCLAW_MAX_TOKENS    - Max response tokens (default: 4096)
- *   OPENCLAW_WELCOME_MSG   - Welcome message for new users (optional)
- *   OPENCLAW_FALLBACK_MSG  - Fallback when OpenClaw is unreachable
+ * Rainbow sends webhook callbacks to our Express server.
+ * We forward user messages to OpenClaw AI and reply via S2S REST API.
  */
 
+const express = require("express");
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
+
+const PORT = process.env.PORT || 3000;
 
 const config = {
   // Rainbow
@@ -39,6 +21,7 @@ const config = {
   appId: process.env.RAINBOW_APP_ID || "",
   appSecret: process.env.RAINBOW_APP_SECRET || "",
   host: process.env.RAINBOW_HOST || "official",
+  hostCallback: process.env.RAINBOW_HOST_CALLBACK || "",
 
   // OpenClaw
   endpoint: process.env.OPENCLAW_ENDPOINT || "",
@@ -59,6 +42,7 @@ function validateConfig() {
   if (!config.password) missing.push("RAINBOW_BOT_PASSWORD");
   if (!config.appId) missing.push("RAINBOW_APP_ID");
   if (!config.appSecret) missing.push("RAINBOW_APP_SECRET");
+  if (!config.hostCallback) missing.push("RAINBOW_HOST_CALLBACK");
   if (!config.endpoint) missing.push("OPENCLAW_ENDPOINT");
   if (!config.apiKey) missing.push("OPENCLAW_API_KEY");
 
@@ -73,14 +57,14 @@ validateConfig();
 
 // ── Conversation History (per user, in-memory) ──────────
 
-const conversations = new Map();
+const conversationHistories = new Map();
 const MAX_HISTORY = 20;
 
 function getHistory(userId) {
-  if (!conversations.has(userId)) {
-    conversations.set(userId, []);
+  if (!conversationHistories.has(userId)) {
+    conversationHistories.set(userId, []);
   }
-  return conversations.get(userId);
+  return conversationHistories.get(userId);
 }
 
 function addMessage(userId, role, content) {
@@ -96,7 +80,6 @@ function addMessage(userId, role, content) {
 async function callOpenClaw(userId, userMessage) {
   const history = getHistory(userId);
 
-  // Build messages array
   const messages = [];
   if (config.systemPrompt) {
     messages.push({ role: "system", content: config.systemPrompt });
@@ -117,7 +100,7 @@ async function callOpenClaw(userId, userMessage) {
 
   try {
     const url = `${config.endpoint}/v1/chat/completions`;
-    console.log(`${LOG} → OpenClaw request for ${userId}`);
+    console.log(`${LOG} -> OpenClaw request for ${userId}`);
 
     const response = await fetch(url, {
       method: "POST",
@@ -137,20 +120,13 @@ async function callOpenClaw(userId, userMessage) {
     }
 
     const data = await response.json();
-    const choice = data.choices?.[0];
-    const assistantMessage = choice?.message?.content || "";
+    const assistantMessage = data.choices?.[0]?.message?.content || "";
 
-    // Update conversation history
     addMessage(userId, "user", userMessage);
     addMessage(userId, "assistant", assistantMessage);
 
-    console.log(`${LOG} ← OpenClaw response (${assistantMessage.length} chars, model: ${data.model || "?"})`);
-
-    return {
-      content: assistantMessage,
-      model: data.model,
-      usage: data.usage,
-    };
+    console.log(`${LOG} <- OpenClaw response (${assistantMessage.length} chars)`);
+    return { content: assistantMessage, model: data.model, usage: data.usage };
   } catch (err) {
     clearTimeout(timeout);
     console.error(`${LOG} OpenClaw error:`, err.message);
@@ -158,32 +134,50 @@ async function callOpenClaw(userId, userMessage) {
   }
 }
 
-// ── (NoopExpress removed — using XMPP mode) ────────────
-
 // ── First-contact tracking ──────────────────────────────
 
 const greeted = new Set();
 
-// ── Message stats ───────────────────────────────────────
+// ── Stats ───────────────────────────────────────────────
 
 let stats = { received: 0, replied: 0, errors: 0, startedAt: Date.now() };
 
+// ── Create Express app for S2S callbacks ────────────────
+
+const app = express();
+app.use(express.json());
+
+// Health check
+app.get("/", (req, res) => {
+  res.json({ status: "ok", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats });
+});
+
 // ── Start Bot ───────────────────────────────────────────
 
+let sdk = null;
+let botUserId = null;
+
 async function start() {
-  console.log(`${LOG} ═══════════════════════════════════════════`);
-  console.log(`${LOG} OpenClaw Rainbow Bot starting...`);
-  console.log(`${LOG} Rainbow host : ${config.host}`);
-  console.log(`${LOG} Bot account  : ${config.login}`);
-  console.log(`${LOG} OpenClaw     : ${config.endpoint}`);
-  console.log(`${LOG} Agent        : ${config.agentId}`);
-  console.log(`${LOG} ═══════════════════════════════════════════`);
+  console.log(`${LOG} ================================================`);
+  console.log(`${LOG} OpenClaw Rainbow Bot starting (S2S mode)...`);
+  console.log(`${LOG} Rainbow host    : ${config.host}`);
+  console.log(`${LOG} Bot account     : ${config.login}`);
+  console.log(`${LOG} Host callback   : ${config.hostCallback}`);
+  console.log(`${LOG} Express port    : ${PORT}`);
+  console.log(`${LOG} OpenClaw        : ${config.endpoint}`);
+  console.log(`${LOG} Agent           : ${config.agentId}`);
+  console.log(`${LOG} ================================================`);
 
   const RainbowSDK =
     require("rainbow-node-sdk").default || require("rainbow-node-sdk");
 
-  const sdk = new RainbowSDK({
-    rainbow: { host: config.host, mode: "xmpp" },
+  sdk = new RainbowSDK({
+    rainbow: { host: config.host, mode: "s2s" },
+    s2s: {
+      hostCallback: config.hostCallback,
+      locallistenningport: String(PORT),
+      expressEngine: app,
+    },
     credentials: { login: config.login, password: config.password },
     application: { appID: config.appId, appSecret: config.appSecret },
     logs: {
@@ -203,6 +197,7 @@ async function start() {
     servicesToStart: {
       telephony: { start_up: false },
       bubbles: { start_up: true },
+      s2s: { start_up: true },
       channels: { start_up: false },
       admin: { start_up: false },
       fileServer: { start_up: false },
@@ -218,26 +213,36 @@ async function start() {
 
   // ── Bot Ready ──────────────────────────────────────
 
-  sdk.events.on("rainbow_onready", () => {
-    console.log(`${LOG} ✓ Bot ready — listening for messages`);
+  sdk.events.on("rainbow_onready", async () => {
+    console.log(`${LOG} Bot ready -- listening for messages`);
     const user = sdk.connectedUser;
     if (user) {
+      botUserId = user.id;
       console.log(`${LOG}   Name  : ${user.displayName || user.loginEmail}`);
       console.log(`${LOG}   ID    : ${user.id}`);
       console.log(`${LOG}   JID   : ${user.jid_im}`);
     }
+
+    // Set presence to online
+    try {
+      if (sdk.presence && typeof sdk.presence.setPresenceTo === "function") {
+        await sdk.presence.setPresenceTo("online");
+        console.log(`${LOG} Presence set to ONLINE`);
+      }
+    } catch (err) {
+      console.warn(`${LOG} Failed to set presence:`, err.message);
+    }
   });
 
   sdk.events.on("rainbow_onconnected", () => {
-    console.log(`${LOG} ✓ Connected to Rainbow`);
+    console.log(`${LOG} Connected to Rainbow`);
   });
 
   sdk.events.on("rainbow_onstarted", () => {
-    console.log(`${LOG} ✓ SDK started event fired`);
+    console.log(`${LOG} SDK started event fired`);
   });
 
   // ── Instant Message Received ───────────────────────
-  // This is the equivalent of BotBasicMessages.InstantMessageReceivedAsync()
 
   sdk.events.on("rainbow_onmessagereceived", async (message) => {
     try {
@@ -245,19 +250,19 @@ async function start() {
       if (message.side === "L") return;
 
       const fromJid = message.fromJid || message.from?.jid_im || "";
-      const fromName =
-        message.from?.displayName || message.from?.loginEmail || fromJid;
+      const fromId = message.fromUserId || message.from?.id || "";
+      const fromName = message.from?.displayName || message.from?.loginEmail || fromJid;
       const content = message.content || message.data || "";
       const conversationId = message.conversationId || "";
 
+      // Skip bot's own messages
+      if (fromId && fromId === botUserId) return;
       if (!content || !content.trim()) return;
 
       stats.received++;
-      console.log(
-        `${LOG} [${stats.received}] Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`
-      );
+      console.log(`${LOG} [${stats.received}] Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`);
 
-      // Get conversation object
+      // Get conversation object for reply
       let conversation;
       try {
         conversation = sdk.conversations.getConversationById(conversationId);
@@ -274,39 +279,31 @@ async function start() {
       // Welcome message on first contact
       if (config.welcomeMsg && !greeted.has(fromJid)) {
         greeted.add(fromJid);
-        if (!conversations.has(fromJid)) {
+        if (!conversationHistories.has(fromJid)) {
           try {
-            await sdk.im.sendMessageToConversation(
-              conversation,
-              config.welcomeMsg
-            );
+            await sdk.im.sendMessageToConversation(conversation, config.welcomeMsg);
           } catch (err) {
             console.error(`${LOG} Failed to send welcome:`, err.message);
           }
         }
       }
 
-      // Typing indicator ON
-      try {
-        sdk.im.sendIsTypingStateInConversation(conversation, true);
-      } catch {}
-
       // Call OpenClaw
       const result = await callOpenClaw(fromJid, content);
       const responseText = result?.content || config.fallbackMsg;
 
-      // Typing indicator OFF
+      // Send response back
       try {
-        sdk.im.sendIsTypingStateInConversation(conversation, false);
-      } catch {}
-
-      // Send response back to Rainbow user
-      try {
-        await sdk.im.sendMessageToConversation(conversation, responseText);
+        // Try S2S method first, fallback to im method
+        if (conversation.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
+          await sdk.s2s.sendMessageInConversation(conversation.dbId, {
+            message: { body: responseText, lang: "en" },
+          });
+        } else {
+          await sdk.im.sendMessageToConversation(conversation, responseText);
+        }
         stats.replied++;
-        console.log(
-          `${LOG} [${stats.replied}] Replied to ${fromName} (${responseText.length} chars)`
-        );
+        console.log(`${LOG} [${stats.replied}] Replied to ${fromName} (${responseText.length} chars)`);
       } catch (err) {
         stats.errors++;
         console.error(`${LOG} Failed to send reply:`, err.message);
@@ -317,14 +314,13 @@ async function start() {
     }
   });
 
-  // ── Bubble (group) invitation — auto-accept ────────
-  // Equivalent of BotBasicMessages.BubbleInvitationReceivedAsync()
+  // ── Bubble invitation — auto-accept ────────────────
 
   sdk.events.on("rainbow_onbubbleinvitationreceived", async (bubble) => {
     try {
       console.log(`${LOG} Bubble invitation: ${bubble.name}`);
       await sdk.bubbles.acceptInvitationToJoinBubble(bubble);
-      console.log(`${LOG} ✓ Joined bubble: ${bubble.name}`);
+      console.log(`${LOG} Joined bubble: ${bubble.name}`);
     } catch (err) {
       console.error(`${LOG} Failed to join bubble:`, err.message);
     }
@@ -336,7 +332,7 @@ async function start() {
     try {
       console.log(`${LOG} Contact invitation from: ${invitation.contactId}`);
       await sdk.contacts.acceptInvitation(invitation);
-      console.log(`${LOG} ✓ Contact accepted`);
+      console.log(`${LOG} Contact accepted`);
     } catch (err) {
       console.error(`${LOG} Failed to accept invitation:`, err.message);
     }
@@ -345,12 +341,12 @@ async function start() {
   // ── Error handling & reconnection ─────────────────
 
   sdk.events.on("rainbow_onstopped", () => {
-    console.warn(`${LOG} SDK stopped — restarting in 30s`);
+    console.warn(`${LOG} SDK stopped -- restarting in 30s`);
     setTimeout(() => start(), 30000);
   });
 
   sdk.events.on("rainbow_onfailed", () => {
-    console.error(`${LOG} Login failed — check credentials. Retrying in 30s`);
+    console.error(`${LOG} Login failed -- check credentials. Retrying in 30s`);
     setTimeout(() => start(), 30000);
   });
 
@@ -366,7 +362,7 @@ async function start() {
 
   try {
     await sdk.start();
-    console.log(`${LOG} ✓ SDK started`);
+    console.log(`${LOG} SDK started`);
   } catch (err) {
     console.error(`${LOG} Failed to start:`, err.message);
     console.log(`${LOG} Retrying in 30s...`);
@@ -383,9 +379,7 @@ setTimeout(() => start(), 3000);
 
 process.on("SIGTERM", () => {
   console.log(`${LOG} Shutting down...`);
-  console.log(
-    `${LOG} Stats: ${stats.received} received, ${stats.replied} replied, ${stats.errors} errors`
-  );
+  console.log(`${LOG} Stats: ${stats.received} received, ${stats.replied} replied, ${stats.errors} errors`);
   process.exit(0);
 });
 

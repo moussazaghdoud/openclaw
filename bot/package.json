@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "dotenv": "^16.4.0",
+    "express": "^4.21.0",
     "rainbow-node-sdk": "2.42.0-lts.1",
     "rxjs": "^6.6.7"
   }
