@@ -204,22 +204,41 @@ async function sendMessageToBubble(bubble, text) {
 
 async function joinAllRooms() {
   if (!s2sConnectionId || !authToken) return;
+  const host = rainbowHost || "openrainbow.com";
+  const baseUrl = `https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}`;
+
+  // Method 1: Bulk join
   try {
-    const host = rainbowHost || "openrainbow.com";
-    const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/rooms/join`, {
+    const resp = await fetch(`${baseUrl}/rooms/join`, {
       method: "POST",
       headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
       body: "{}",
     });
-    console.log(`${LOG} joinAllRooms: status=${resp.status}`);
-    if (resp.ok) {
-      console.log(`${LOG} Successfully joined all rooms via REST`);
-    } else {
-      const errText = await resp.text();
-      console.warn(`${LOG} joinAllRooms failed: ${errText.substring(0, 200)}`);
-    }
+    const respBody = await resp.text();
+    console.log(`${LOG} joinAllRooms bulk: status=${resp.status} body=${respBody.substring(0, 300)}`);
   } catch (err) {
-    console.warn(`${LOG} joinAllRooms error:`, err.message);
+    console.warn(`${LOG} joinAllRooms bulk error:`, err.message);
+  }
+
+  // Method 2: Join each bubble room individually
+  for (const [id, bubble] of bubbleList) {
+    const roomJid = bubble.jid || "";
+    if (!roomJid) continue;
+    try {
+      const resp = await fetch(`${baseUrl}/rooms/${bubble.id}/join`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (!resp.ok) {
+        const errText = await resp.text();
+        console.warn(`${LOG} joinRoom "${bubble.name}" (${bubble.id}): ${resp.status} ${errText.substring(0, 100)}`);
+      } else {
+        console.log(`${LOG} joinRoom "${bubble.name}" OK`);
+      }
+    } catch (err) {
+      console.warn(`${LOG} joinRoom "${bubble.name}" error:`, err.message);
+    }
   }
 }
 
@@ -626,10 +645,10 @@ async function start() {
     credentials: { login: config.login, password: config.password },
     application: { appID: config.appId, appSecret: config.appSecret },
     logs: {
-      enableConsoleLogs: true,
+      enableConsoleLogs: false,
       enableFileLogs: false,
       color: false,
-      level: "info",
+      level: "warn",
     },
     im: {
       sendReadReceipt: true,
@@ -689,28 +708,13 @@ async function start() {
       console.warn(`${LOG} Failed to set presence:`, err.message);
     }
 
-    // Join all rooms (critical for S2S to receive bubble messages)
-    try {
-      if (s2sConnectionId && authToken) {
-        await fetch(`https://${rainbowHost}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/rooms/join`, {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-          body: "{}",
-        });
-        console.log(`${LOG} Joined all rooms via REST`);
-      }
-    } catch (err) {
-      console.warn(`${LOG} Failed to join rooms via REST:`, err.message);
-    }
-
-    // Cache all bubbles and join them
+    // Cache all bubbles first
     try {
       const bubbles = await sdk.bubbles.getAll();
       console.log(`${LOG} Found ${bubbles?.length || 0} bubbles`);
       for (const bubble of (bubbles || [])) {
         bubbleList.set(bubble.id, bubble);
         if (bubble.jid) bubbleByJid.set(bubble.jid, bubble);
-        // Index by member JIDs for reverse lookup
         for (const member of (bubble.users || [])) {
           const jid = member.jid_im || member.jid || "";
           if (jid && jid !== sdk.connectedUser?.jid_im) {
@@ -722,10 +726,13 @@ async function start() {
           await sdk.bubbles.setBubblePresence(bubble, true);
         } catch {}
       }
-      console.log(`${LOG} Joined all bubbles via SDK, indexed ${bubbleByMember.size} members`);
+      console.log(`${LOG} Cached ${bubbleList.size} bubbles, indexed ${bubbleByMember.size} members`);
     } catch (err) {
-      console.warn(`${LOG} Failed to join bubbles via SDK:`, err.message);
+      console.warn(`${LOG} Failed to cache bubbles:`, err.message);
     }
+
+    // Join all rooms via REST (AFTER bubbles are cached so individual join works)
+    await joinAllRooms();
 
     // Monkeypatch: intercept S2S callbacks that the SDK rejects (empty userId)
     // The SDK drops bubble message callbacks because userId doesn't match the bot.
