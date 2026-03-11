@@ -255,6 +255,11 @@ const debugMessages = [];
 // Store raw S2S callbacks for debug
 const debugCallbacks = [];
 
+// Map message IDs to raw callback data (so onmessagereceived can detect is_group)
+const rawCallbackMap = new Map();
+// Map conversation_id to bubble JID (built from callbacks)
+const convIdToBubbleJid = new Map();
+
 // Log ALL incoming requests (before SDK handles them)
 app.use((req, res, next) => {
   if (req.method === "POST") {
@@ -264,42 +269,28 @@ app.use((req, res, next) => {
     if (debugCallbacks.length > 20) debugCallbacks.shift();
     console.log(`${LOG} HTTP ${req.method} ${fullUrl} body=${cb.body.substring(0, 500)}`);
 
-    // Log full body for non-receipt/non-presence callbacks (to debug bubble messages)
-    if (!fullUrl.includes("/receipt") && !fullUrl.includes("/presence")) {
+    // Log full body for message callbacks (to debug bubble messages)
+    if (fullUrl.includes("/message")) {
       console.log(`${LOG} FULL CALLBACK: ${JSON.stringify(req.body || {}).substring(0, 2000)}`);
       interceptedMessages.push({ url: fullUrl, body: req.body, time: new Date().toISOString() });
       if (interceptedMessages.length > 20) interceptedMessages.shift();
     }
 
-    // Extract s2sConnectionId from callback
-    if (!s2sConnectionId) {
-      // Try body 'id' field
-      const bodyId = req.body?.id;
-      // Try resource field from presence callbacks
-      const resource = req.body?.presence?.resource;
-      // Try URL path
-      const cnxMatch = fullUrl.match(/\/connections\/([a-f0-9-]+)\//i);
-
-      if (bodyId) {
-        s2sConnectionId = bodyId;
-        console.log(`${LOG} Got s2sConnectionId from body.id: ${s2sConnectionId}`);
-      } else if (resource) {
-        s2sConnectionId = resource;
-        console.log(`${LOG} Got s2sConnectionId from resource: ${s2sConnectionId}`);
-      } else if (cnxMatch) {
-        s2sConnectionId = cnxMatch[1];
-        console.log(`${LOG} Got s2sConnectionId from URL: ${s2sConnectionId}`);
-      }
-
-      if (s2sConnectionId) {
-        // Try joining rooms with this ID, then try resource if it fails
-        joinAllRooms().then(ok => {
-          if (!ok && resource && s2sConnectionId !== resource) {
-            console.log(`${LOG} Retrying with resource ID: ${resource}`);
-            s2sConnectionId = resource;
-            joinAllRooms();
-          }
+    // Store raw callback data for bubble detection
+    const msg = req.body?.message;
+    if (msg) {
+      const msgId = msg.id || "";
+      if (msgId) {
+        rawCallbackMap.set(msgId, {
+          is_group: !!msg.is_group,
+          conversation_id: msg.conversation_id || req.body?.conversation_id || "",
+          from_userId: msg.from || req.body?.from || "",
         });
+        // Bound the map
+        if (rawCallbackMap.size > 100) {
+          const first = rawCallbackMap.keys().next().value;
+          rawCallbackMap.delete(first);
+        }
       }
     }
   }
@@ -464,11 +455,31 @@ async function extractSdkInfo() {
       || sdk._core?.host
       || "openrainbow.com";
 
-    // Get SDK-managed connection ID (valid for callbacks, not REST API)
-    const cnxInfo = sdk._core?._rest?.connectionS2SInfo;
-    s2sConnectionId = cnxInfo?.id || cnxInfo?._id || null;
+    // Try multiple paths for S2S connection ID
+    // Path 1: SDK S2S service (used by aleweb reference)
+    s2sConnectionId = sdk._core?._s2s?._connectionId
+      || sdk._core?.s2s?.connectionId
+      || sdk.s2s?._connectionId
+      || sdk.s2s?.connectionId
+      || null;
+
+    // Path 2: REST connectionS2SInfo (fallback)
+    if (!s2sConnectionId) {
+      const cnxInfo = sdk._core?._rest?.connectionS2SInfo;
+      s2sConnectionId = cnxInfo?.id || cnxInfo?._id || null;
+    }
 
     console.log(`${LOG} S2S info: cnxId=${s2sConnectionId || "NOT FOUND"}, token=${authToken ? "OK" : "NOT FOUND"}, host=${rainbowHost}`);
+
+    // Log all possible paths for debugging
+    const paths = {
+      "_core._s2s._connectionId": sdk._core?._s2s?._connectionId,
+      "_core.s2s.connectionId": sdk._core?.s2s?.connectionId,
+      "s2s._connectionId": sdk.s2s?._connectionId,
+      "s2s.connectionId": sdk.s2s?.connectionId,
+      "connectionS2SInfo.id": sdk._core?._rest?.connectionS2SInfo?.id,
+    };
+    console.log(`${LOG} S2S ID paths: ${JSON.stringify(paths)}`);
   } catch (err) {
     console.warn(`${LOG} Could not extract SDK internals:`, err.message);
   }
@@ -674,7 +685,7 @@ async function start() {
       console.warn(`${LOG} Failed to set presence:`, err.message);
     }
 
-    // Cache all bubbles first
+    // Cache all bubbles and join them
     try {
       const bubbles = await sdk.bubbles.getAll();
       console.log(`${LOG} Found ${bubbles?.length || 0} bubbles`);
@@ -688,19 +699,30 @@ async function start() {
             bubbleByMember.get(jid).push(bubble);
           }
         }
+        // Join bubble as occupant (critical for receiving and sending room messages)
         try {
           await sdk.bubbles.setBubblePresence(bubble, true);
+        } catch (e) {
+          console.warn(`${LOG} setBubblePresence failed for "${bubble.name}":`, e.message);
+        }
+        // Open conversation to pre-populate convId → bubble mapping
+        try {
+          const conv = await sdk.conversations.openConversationForBubble(bubble);
+          if (conv?.dbId && bubble.jid) {
+            convIdToBubbleJid.set(conv.dbId, bubble.jid);
+            console.log(`${LOG} Mapped convId ${conv.dbId} → ${bubble.name}`);
+          }
         } catch {}
       }
-      console.log(`${LOG} Cached ${bubbleList.size} bubbles, indexed ${bubbleByMember.size} members`);
+      console.log(`${LOG} Cached ${bubbleList.size} bubbles, indexed ${bubbleByMember.size} members, mapped ${convIdToBubbleJid.size} conversations`);
     } catch (err) {
       console.warn(`${LOG} Failed to cache bubbles:`, err.message);
     }
 
-    // Join all rooms via REST (AFTER bubbles are cached so individual join works)
-    await joinAllRooms();
-
-    console.log(`${LOG} Ready — bubble messages handled via SDK onmessagereceived + S2S workaround`);
+    // Join all rooms via S2S REST API
+    const joinOk = await joinAllRooms();
+    console.log(`${LOG} joinAllRooms result: ${joinOk ? "OK" : "FAILED"}`);
+    console.log(`${LOG} Ready — listening for bubble + 1:1 messages`);
   });
 
   sdk.events.on("rainbow_onconnected", () => {
@@ -748,11 +770,16 @@ async function start() {
       }
 
       // Detect if this is a bubble (group) message
-      // S2S mode doesn't populate fromBubbleJid — check conversation object too
       const conv = message.conversation || {};
-      let isBubble = !!(message.fromBubbleJid || message.fromBubbleId
-        || (conv.type === 1) || (conv.bubble && conv.bubble.id)
-        || (conv.id && conv.id.includes("room_")));
+      const msgId = message.id || message.messageId || "";
+
+      // Primary: check raw callback is_group flag (most reliable in S2S mode)
+      const rawCb = msgId ? rawCallbackMap.get(msgId) : null;
+      let isBubble = !!(rawCb?.is_group)
+        || !!(message.fromBubbleJid || message.fromBubbleId)
+        || (conv.type === 1) || !!(conv.bubble && conv.bubble.id)
+        || !!(conv.id && String(conv.id).includes("room_"));
+      let rawConversationId = rawCb?.conversation_id || "";
 
       // Check if message contains bot trigger keywords
       const contentLower = content.toLowerCase();
@@ -765,17 +792,19 @@ async function start() {
         || contentLower.startsWith("bot:")
         || contentLower.startsWith("bot :");
 
-      // S2S workaround: if sender is in a bubble AND message has bot trigger,
-      // treat it as a bubble message (SDK doesn't set fromBubbleJid in S2S mode)
+      // Find the actual bubble for this message
       let targetBubble = null;
-      if (!isBubble && hasBotTrigger && fromJid && bubbleByMember.has(fromJid)) {
-        const memberBubbles = bubbleByMember.get(fromJid);
-        if (memberBubbles.length > 0) {
-          // Use the most recently active bubble this user is in
-          targetBubble = memberBubbles[memberBubbles.length - 1];
-          isBubble = true;
-          console.log(`${LOG} S2S workaround: treating as bubble message for "${targetBubble.name}"`);
+      if (isBubble) {
+        // Try SDK fields first
+        targetBubble = (message.fromBubbleId && bubbleList.get(message.fromBubbleId))
+          || (message.fromBubbleJid && bubbleByJid.get(message.fromBubbleJid))
+          || null;
+        // If not found, try to find by conversation_id → bubble mapping
+        if (!targetBubble && rawConversationId) {
+          const bubbleJid = convIdToBubbleJid.get(rawConversationId);
+          if (bubbleJid) targetBubble = bubbleByJid.get(bubbleJid);
         }
+        console.log(`${LOG} Bubble detected: is_group=${rawCb?.is_group}, rawConvId=${rawConversationId}, targetBubble=${targetBubble?.name || "NOT FOUND"}`);
       }
 
       // In bubbles, only respond when @mentioned
@@ -874,36 +903,65 @@ async function start() {
         }
       }
 
-      // Resolve the bubble object for bubble messages
-      const replyBubble = targetBubble
-        || (message.fromBubbleId && bubbleList.get(message.fromBubbleId))
-        || null;
-
-      // Typing indicator
-      try {
-        sdk.im.sendIsTypingStateInConversation(conversation, true);
-      } catch {}
-
       // Call OpenClaw
       const result = await callOpenClaw(fromJid, content);
       const responseText = result?.content || config.fallbackMsg;
 
-      // Typing indicator OFF
-      try {
-        sdk.im.sendIsTypingStateInConversation(conversation, false);
-      } catch {}
-
       // Send response back
       try {
-        if (isBubble && replyBubble) {
-          // Reply to bubble via dedicated bubble send method
-          const sent = await sendMessageToBubble(replyBubble, responseText);
+        let sent = false;
+
+        if (isBubble) {
+          // For bubble messages, try multiple send methods in order of reliability
+          console.log(`${LOG} Sending bubble reply: targetBubble=${targetBubble?.name || "none"}, rawConvId=${rawConversationId}, convDbId=${conversation?.dbId}`);
+
+          // Method 1: Use raw conversation_id from callback via S2S REST
+          if (!sent && rawConversationId && s2sConnectionId && authToken) {
+            try {
+              const host = rainbowHost || "openrainbow.com";
+              const msgUrl = `https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${rawConversationId}/messages`;
+              const resp = await fetch(msgUrl, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ message: { body: responseText, lang: "en" } }),
+              });
+              if (resp.ok) {
+                sent = true;
+                console.log(`${LOG} Sent via S2S REST rawConvId=${rawConversationId}`);
+              } else {
+                const errText = await resp.text();
+                console.warn(`${LOG} S2S REST rawConvId failed (${resp.status}): ${errText.substring(0, 200)}`);
+              }
+            } catch (err) {
+              console.warn(`${LOG} S2S REST rawConvId error:`, err.message);
+            }
+          }
+
+          // Method 2: Use conversation.dbId via sdk.s2s.sendMessageInConversation
+          if (!sent && conversation?.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
+            try {
+              await sdk.s2s.sendMessageInConversation(conversation.dbId, {
+                message: { body: responseText, lang: "en" },
+              });
+              sent = true;
+              console.log(`${LOG} Sent via sdk.s2s.sendMessageInConversation dbId=${conversation.dbId}`);
+            } catch (err) {
+              console.warn(`${LOG} sdk.s2s.sendMessageInConversation failed:`, err.message);
+            }
+          }
+
+          // Method 3: Use sendMessageToBubble (opens new conversation)
+          if (!sent && targetBubble) {
+            sent = await sendMessageToBubble(targetBubble, responseText);
+            if (sent) console.log(`${LOG} Sent via sendMessageToBubble "${targetBubble.name}"`);
+          }
+
           if (sent) {
             stats.replied++;
-            console.log(`${LOG} [${stats.replied}] Replied in bubble "${replyBubble.name}" (${responseText.length} chars)`);
+            console.log(`${LOG} [${stats.replied}] Replied in bubble (${responseText.length} chars)`);
           } else {
             stats.errors++;
-            console.error(`${LOG} All bubble reply methods failed for "${replyBubble.name}"`);
+            console.error(`${LOG} All bubble reply methods failed`);
           }
         } else {
           // 1:1 reply via S2S or IM
