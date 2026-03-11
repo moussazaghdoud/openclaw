@@ -200,6 +200,29 @@ async function sendMessageToBubble(bubble, text) {
   return false;
 }
 
+// ── Join all rooms via REST (called when s2sConnectionId is discovered) ──
+
+async function joinAllRooms() {
+  if (!s2sConnectionId || !authToken) return;
+  try {
+    const host = rainbowHost || "openrainbow.com";
+    const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/rooms/join`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    console.log(`${LOG} joinAllRooms: status=${resp.status}`);
+    if (resp.ok) {
+      console.log(`${LOG} Successfully joined all rooms via REST`);
+    } else {
+      const errText = await resp.text();
+      console.warn(`${LOG} joinAllRooms failed: ${errText.substring(0, 200)}`);
+    }
+  } catch (err) {
+    console.warn(`${LOG} joinAllRooms error:`, err.message);
+  }
+}
+
 // ── First-contact tracking ──────────────────────────────
 
 const greeted = new Set();
@@ -228,10 +251,21 @@ const debugCallbacks = [];
 // Log ALL incoming requests (before SDK handles them)
 app.use((req, res, next) => {
   if (req.method === "POST") {
-    const cb = { path: req.path, method: req.method, body: JSON.stringify(req.body || {}).substring(0, 800), time: new Date().toISOString() };
+    const fullUrl = req.originalUrl || req.url || req.path;
+    const cb = { path: fullUrl, method: req.method, body: JSON.stringify(req.body || {}).substring(0, 800), time: new Date().toISOString() };
     debugCallbacks.push(cb);
     if (debugCallbacks.length > 20) debugCallbacks.shift();
-    console.log(`${LOG} HTTP ${req.method} ${req.path} body=${cb.body.substring(0, 300)}`);
+    console.log(`${LOG} HTTP ${req.method} ${fullUrl} body=${cb.body.substring(0, 300)}`);
+
+    // Extract s2sConnectionId from callback URL path
+    // Rainbow S2S callbacks arrive at: /api/rainbow/ucs/v1.0/connections/{connectionId}/incomings
+    const cnxMatch = fullUrl.match(/\/connections\/([a-f0-9-]+)\//i);
+    if (cnxMatch && !s2sConnectionId) {
+      s2sConnectionId = cnxMatch[1];
+      console.log(`${LOG} Extracted s2sConnectionId from callback URL: ${s2sConnectionId}`);
+      // Now join all rooms since we have the connection ID
+      joinAllRooms();
+    }
   }
   next();
 });
@@ -242,7 +276,7 @@ app.get("/", (req, res) => {
   for (const [id, b] of bubbleList) {
     bubbles.push({ id, name: b.name, jid: b.jid, members: (b.users || []).length });
   }
-  res.json({ status: "ok", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, bubbles, lastMessages: debugMessages.slice(-5), lastCallbacks: debugCallbacks.slice(-5) });
+  res.json({ status: "ok", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || "NOT FOUND", bubbles, lastMessages: debugMessages.slice(-5), lastCallbacks: debugCallbacks.slice(-5) });
 });
 
 // Start Express immediately so Railway sees the port is bound
