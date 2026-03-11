@@ -449,60 +449,90 @@ let rainbowHost = null;
 
 async function extractSdkInfo() {
   try {
-    // Debug: dump available SDK paths
-    console.log(`${LOG} SDK keys: ${Object.keys(sdk).join(", ")}`);
-    console.log(`${LOG} sdk.s2s keys: ${sdk.s2s ? Object.keys(sdk.s2s).join(", ") : "N/A"}`);
-    console.log(`${LOG} sdk._core keys: ${sdk._core ? Object.keys(sdk._core).join(", ") : "N/A"}`);
-    console.log(`${LOG} sdk._core?._s2s keys: ${sdk._core?._s2s ? Object.keys(sdk._core._s2s).join(", ") : "N/A"}`);
-    console.log(`${LOG} sdk._core?._rest keys: ${sdk._core?._rest ? Object.keys(sdk._core._rest).join(", ") : "N/A"}`);
-
-    // Try many paths to find connectionId
-    const cnxInfo = sdk._core?._rest?.connectionS2SInfo;
-    if (cnxInfo) {
-      console.log(`${LOG} connectionS2SInfo: ${JSON.stringify(cnxInfo).substring(0, 500)}`);
-    }
-    s2sConnectionId = cnxInfo?.id || cnxInfo?._id || cnxInfo?.resource
-      || sdk._core?._s2s?._connectionId
-      || sdk._core?.s2s?.connectionId
-      || sdk.s2s?._connectionId
-      || sdk.s2s?.connectionId
-      || sdk._core?._s2s?.connectionInfo?.id
-      || null;
-
     authToken = sdk._core?._rest?.token
-      || sdk._core?._rest?.tokenRest
+      || sdk._core?._rest?._token
       || sdk._core?.token
       || null;
     rainbowHost = sdk._core?._rest?.host
       || sdk._core?.host
       || "openrainbow.com";
+    const host = rainbowHost || "openrainbow.com";
 
-    // If connectionId not found in SDK internals, query REST API
-    if (!s2sConnectionId && authToken) {
-      try {
-        const host = rainbowHost || "openrainbow.com";
-        const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections`, {
-          headers: { "Authorization": `Bearer ${authToken}` },
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          const connections = data?.data || data || [];
-          console.log(`${LOG} REST connections response: ${JSON.stringify(connections).substring(0, 500)}`);
-          // Find our S2S connection
-          if (Array.isArray(connections) && connections.length > 0) {
-            s2sConnectionId = connections[0].id || connections[0]._id;
-          } else if (connections.id) {
-            s2sConnectionId = connections.id;
+    if (!authToken) {
+      console.error(`${LOG} No auth token found in SDK internals`);
+      return;
+    }
+
+    // Always query the REST API for the ACTUAL active S2S connection
+    try {
+      const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections`, {
+        headers: { "Authorization": `Bearer ${authToken}` },
+      });
+      const data = await resp.json();
+      const connections = data?.data?.items || data?.data || data?.items || data || [];
+      console.log(`${LOG} REST connections: status=${resp.status} data=${JSON.stringify(data).substring(0, 500)}`);
+
+      if (Array.isArray(connections) && connections.length > 0) {
+        // Use the most recent connection with our callback URL
+        for (const cnx of connections) {
+          if (cnx.callback_url === config.hostCallback || cnx.resource?.startsWith("s2s_")) {
+            s2sConnectionId = cnx.id || cnx._id;
+            console.log(`${LOG} Found matching S2S connection: ${s2sConnectionId}`);
+            break;
           }
-        } else {
-          console.warn(`${LOG} REST connections query failed: ${resp.status}`);
         }
+        if (!s2sConnectionId) {
+          s2sConnectionId = connections[0].id || connections[0]._id;
+          console.log(`${LOG} Using first S2S connection: ${s2sConnectionId}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`${LOG} REST connections query error:`, err.message);
+    }
+
+    // Fallback: try SDK internals
+    if (!s2sConnectionId) {
+      const cnxInfo = sdk._core?._rest?.connectionS2SInfo;
+      if (cnxInfo) console.log(`${LOG} connectionS2SInfo fallback: ${JSON.stringify(cnxInfo).substring(0, 300)}`);
+      s2sConnectionId = cnxInfo?.id || cnxInfo?._id
+        || sdk._core?._s2s?._connectionId
+        || sdk.s2s?._connectionId
+        || null;
+    }
+
+    // Last resort: create a NEW S2S connection
+    if (!s2sConnectionId) {
+      console.log(`${LOG} No S2S connection found, creating one...`);
+      try {
+        const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections`, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ connection: { resource: "s2s_openclaw", callback_url: config.hostCallback } }),
+        });
+        const data = await resp.json();
+        console.log(`${LOG} Create connection: status=${resp.status} data=${JSON.stringify(data).substring(0, 300)}`);
+        s2sConnectionId = data?.data?.id || data?.id || null;
       } catch (err) {
-        console.warn(`${LOG} REST connections query error:`, err.message);
+        console.error(`${LOG} Failed to create S2S connection:`, err.message);
       }
     }
 
-    console.log(`${LOG} S2S info: cnxId=${s2sConnectionId || "NOT FOUND"}, token=${authToken ? "OK" : "NOT FOUND"}, host=${rainbowHost}`);
+    // Validate the connection ID by testing it
+    if (s2sConnectionId) {
+      try {
+        const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}`, {
+          headers: { "Authorization": `Bearer ${authToken}` },
+        });
+        if (resp.ok) {
+          console.log(`${LOG} S2S connection ${s2sConnectionId} is VALID`);
+        } else {
+          console.warn(`${LOG} S2S connection ${s2sConnectionId} is INVALID (${resp.status}), clearing`);
+          s2sConnectionId = null;
+        }
+      } catch {}
+    }
+
+    console.log(`${LOG} S2S info: cnxId=${s2sConnectionId || "NOT FOUND"}, token=OK, host=${host}`);
   } catch (err) {
     console.warn(`${LOG} Could not extract SDK internals:`, err.message);
   }
