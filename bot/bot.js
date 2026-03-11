@@ -806,8 +806,15 @@ async function start() {
         console.log(`${LOG} Bubble detected: is_group=${rawCb?.is_group}, rawConvId=${rawConversationId}, targetBubble=${targetBubble?.name || "NOT FOUND"}`);
       }
 
-      // In bubbles, only respond when @mentioned
-      if (isBubble && !hasBotTrigger) return;
+      // For bubble messages: always store in history, but only reply when triggered
+      // Use rawConversationId as history key so all participants share context
+      const historyKey = (isBubble && rawConversationId) ? `bubble:${rawConversationId}` : fromJid;
+
+      if (isBubble && !hasBotTrigger) {
+        // Silent listen: store message in history for context, but don't reply
+        addMessage(historyKey, "user", `[${fromName}]: ${content}`);
+        return;
+      }
 
       stats.received++;
       console.log(`${LOG} [${stats.received}] ${isBubble ? "[BUBBLE]" : "[1:1]"} Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`);
@@ -907,8 +914,8 @@ async function start() {
         if (conversation) sdk.im.sendIsTypingStateInConversation(conversation, true);
       } catch {}
 
-      // Call OpenClaw
-      const result = await callOpenClaw(fromJid, content);
+      // Call OpenClaw (use historyKey so bubble messages share conversation context)
+      const result = await callOpenClaw(historyKey, content);
       const responseText = result?.content || config.fallbackMsg;
 
       // Typing indicator OFF
