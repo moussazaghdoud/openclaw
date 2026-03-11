@@ -771,7 +771,6 @@ async function start() {
 
       // Detect if this is a bubble (group) message
       const conv = message.conversation || {};
-      const msgId = message.id || message.messageId || "";
 
       // Primary: check raw callback is_group flag (most reliable in S2S mode)
       const rawCb = msgId ? rawCallbackMap.get(msgId) : null;
