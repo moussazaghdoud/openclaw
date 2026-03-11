@@ -372,11 +372,17 @@ app.post("/admin/resume", (req, res) => {
 app.post("/admin/restart", async (req, res) => {
   console.log(`${LOG} Bot RESTART requested via admin dashboard`);
   botPaused = false;
-  try {
-    if (sdk) await sdk.stop();
-  } catch {}
+  restartCount = 0; // Reset counter so start() works
   res.redirect("/");
-  // SDK stop event will trigger restart automatically
+  // Start fresh
+  try {
+    if (sdk) {
+      sdk.events.removeAllListeners();
+      await sdk.stop().catch(() => {});
+      sdk = null;
+    }
+  } catch {}
+  start();
 });
 
 // JSON API (for programmatic access)
@@ -472,7 +478,8 @@ async function start() {
 
   restartCount++;
   if (restartCount > MAX_RESTARTS) {
-    console.error(`${LOG} Too many restart attempts (${MAX_RESTARTS}). Giving up. Check credentials and redeploy.`);
+    console.error(`${LOG} Too many restart attempts (${MAX_RESTARTS}). Waiting 5 minutes before next try...`);
+    restartTimer = setTimeout(() => { restartCount = 0; start(); }, 5 * 60 * 1000);
     return;
   }
 
