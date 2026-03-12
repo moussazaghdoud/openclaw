@@ -202,21 +202,22 @@ function extractFileInfo(message, rawCb, convId) {
   const oob = message.oob || message.attachment || {};
   // 2. Raw callback attachment (fallback if SDK didn't parse)
   const rawAttach = rawCb?.attachment || {};
-  // 3. Recent file in this conversation (fallback for separate file+text messages)
-  const recentFile = convId ? recentFilesByConv.get(convId) : null;
-  const convAttach = (recentFile && (Date.now() - recentFile.time) < 5 * 60 * 1000) ? recentFile.attachment : {};
 
-  const url = oob.url || rawAttach.url || convAttach.url || "";
-  const fileId = oob.fileId || rawAttach.fileId || convAttach.fileId || url.split("/").pop() || "";
+  // Only check if the current message actually has a file attachment
+  const hasDirectAttachment = !!(oob.url || oob.fileId || rawAttach.url || rawAttach.fileId);
+  if (!hasDirectAttachment) return null;
+
+  const url = oob.url || rawAttach.url || "";
+  const fileId = oob.fileId || rawAttach.fileId || url.split("/").pop() || "";
 
   if (!fileId || !url) return null;
 
   return {
     fileId,
     url,
-    mime: oob.mime || rawAttach.mime || convAttach.mime || "application/octet-stream",
-    filename: oob.filename || rawAttach.filename || convAttach.filename || `file_${fileId}`,
-    filesize: parseInt(oob.filesize || oob.size || rawAttach.filesize || rawAttach.size || convAttach.filesize || convAttach.size || "0", 10),
+    mime: oob.mime || rawAttach.mime || "application/octet-stream",
+    filename: oob.filename || rawAttach.filename || `file_${fileId}`,
+    filesize: parseInt(oob.filesize || oob.size || rawAttach.filesize || rawAttach.size || "0", 10),
   };
 }
 
