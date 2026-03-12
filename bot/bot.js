@@ -267,12 +267,35 @@ async function downloadFile(fileInfo) {
     console.warn(`${LOG} Temp URL download failed:`, err.message);
   }
 
-  // Strategy 3: Direct REST API call with auth token (no /download suffix)
+  // Strategy 3: Use SDK's internal REST helper (handles auth properly)
+  try {
+    const restService = sdk._core?._rest;
+    if (restService && typeof restService.get === "function") {
+      const filePath = `/api/rainbow/fileserver/v1.0/files/${fileId}`;
+      console.log(`${LOG} Trying SDK REST helper: ${filePath}`);
+      const result = await new Promise((resolve, reject) => {
+        restService.get(filePath, null, (err, response, body) => {
+          if (err) return reject(err);
+          resolve({ response, body });
+        });
+      });
+      if (result.body && result.body.length > 10) {
+        const buf = Buffer.isBuffer(result.body) ? result.body : Buffer.from(result.body);
+        console.log(`${LOG} Downloaded via SDK REST helper: ${filename} (${buf.length} bytes)`);
+        return { buffer: buf, mime, filename, filesize: buf.length };
+      }
+    }
+  } catch (err) {
+    console.warn(`${LOG} SDK REST helper failed:`, err.message);
+  }
+
+  // Strategy 4: Direct REST API call with auth token
   if (authToken) {
     try {
       const host = rainbowHost || "openrainbow.com";
       const fileUrl = url.startsWith("http") ? url : `https://${host}${url}`;
       console.log(`${LOG} REST download URL: ${fileUrl}`);
+      console.log(`${LOG} Auth token prefix: ${authToken.substring(0, 20)}...`);
       const resp = await fetch(fileUrl, {
         headers: { "Authorization": `Bearer ${authToken}`, "Accept": "*/*" },
         redirect: "follow",
@@ -703,6 +726,28 @@ app.post("/admin/restart", async (req, res) => {
 // Debug endpoint: show intercepted non-receipt callbacks
 app.get("/api/intercepted", (req, res) => {
   res.json(interceptedMessages);
+});
+
+// Debug endpoint: test file download with a given fileId
+app.get("/api/file-test/:fileId", async (req, res) => {
+  const fileId = req.params.fileId;
+  const fileInfo = {
+    fileId,
+    url: `https://openrainbow.com/api/rainbow/fileserver/v1.0/files/${fileId}`,
+    mime: "text/plain",
+    filename: "test",
+    filesize: 0,
+  };
+  try {
+    const result = await downloadFile(fileInfo);
+    if (result) {
+      res.json({ ok: true, bytes: result.buffer.length, preview: result.buffer.toString("utf-8").substring(0, 500) });
+    } else {
+      res.json({ ok: false, error: "all strategies failed" });
+    }
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
 });
 
 // JSON API (for programmatic access)
