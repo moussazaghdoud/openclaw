@@ -138,7 +138,17 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
   const history = await getHistory(userId);
 
   const messages = [];
-  const fileInstructions = `When users share files, their content is automatically extracted and included in the conversation history. You CAN read and work with file contents directly from the chat — you do NOT have a filesystem, workspace, or ability to save/edit/create files. You CANNOT send files back to users. You are a text-only chatbot on Rainbow. Simply work with the text content as provided. Never say you can't see a file if its content appears in the conversation history. Never pretend to create, save, or send files — be honest about your capabilities. If asked to create a document, offer to write the content as text that the user can copy.`;
+  const fileInstructions = `When users share files, their content is automatically extracted and included in the conversation history. You CAN read and work with file contents directly from the chat. Never say you can't see a file if its content appears in the conversation history.
+
+To CREATE and SEND a file back to the user, wrap the file content in this exact format:
+[FILE:filename.ext]
+file content here
+[/FILE]
+
+For example, to send a CSV: [FILE:data.csv]name,age\\nAlice,30\\nBob,25[/FILE]
+For a text file: [FILE:notes.txt]These are my notes...[/FILE]
+
+The system will automatically create the file and send it to the user in the chat. You can create .txt, .csv, .json, .xml, .html, .md, and other text-based files. You CANNOT create binary files like .docx, .pdf, or images — for those, provide the content as text and suggest the user copy it.`;
   const sysPrompt = config.systemPrompt
     ? `${config.systemPrompt}\n\n${fileInstructions}`
     : fileInstructions;
@@ -197,6 +207,122 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
     }
     return null;
   }
+}
+
+// ── File Creation & Upload ───────────────────────────────
+
+/**
+ * Parse AI response for [FILE:name]content[/FILE] markers.
+ * Returns { text: cleanedResponse, files: [{ filename, content }] }
+ */
+function parseFileMarkers(response) {
+  const files = [];
+  const regex = /\[FILE:([^\]]+)\]\n?([\s\S]*?)\[\/FILE\]/g;
+  let match;
+  let text = response;
+
+  while ((match = regex.exec(response)) !== null) {
+    files.push({ filename: match[1].trim(), content: match[2] });
+    text = text.replace(match[0], `📎 File sent: **${match[1].trim()}**`);
+  }
+
+  return { text: text.trim(), files };
+}
+
+/**
+ * Upload a file to Rainbow fileserver and send it in a conversation.
+ */
+async function uploadAndSendFile(filename, content, convId) {
+  if (!authToken || !s2sConnectionId) {
+    console.warn(`${LOG} Cannot upload file: no auth/connection`);
+    return false;
+  }
+
+  const host = rainbowHost || "openrainbow.com";
+  const buf = Buffer.from(content, "utf-8");
+  const mime = guessMime(filename);
+
+  try {
+    // Step 1: Create file entry on Rainbow fileserver
+    const createResp = await fetch(`https://${host}/api/rainbow/fileserver/v1.0/files`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ fileName: filename, extension: filename.split(".").pop(), typeMIME: mime, size: buf.length }),
+    });
+
+    if (!createResp.ok) {
+      console.warn(`${LOG} File create failed (${createResp.status}): ${await createResp.text().catch(() => "")}`);
+      return false;
+    }
+
+    const fileMeta = await createResp.json();
+    const fileId = fileMeta.data?.id || fileMeta.id;
+    console.log(`${LOG} File entry created: ${fileId}`);
+
+    // Step 2: Upload file content
+    const uploadResp = await fetch(`https://${host}/api/rainbow/fileserver/v1.0/files/${fileId}`, {
+      method: "PUT",
+      headers: {
+        "Authorization": `Bearer ${authToken}`,
+        "Content-Type": mime,
+        "Content-Length": String(buf.length),
+      },
+      body: buf,
+    });
+
+    if (!uploadResp.ok) {
+      console.warn(`${LOG} File upload failed (${uploadResp.status}): ${await uploadResp.text().catch(() => "")}`);
+      return false;
+    }
+
+    console.log(`${LOG} File uploaded: ${filename} (${buf.length} bytes)`);
+
+    // Step 3: Send message with file attachment in conversation
+    const msgBody = {
+      message: {
+        body: `📎 ${filename}`,
+        lang: "en",
+        attachment: {
+          url: `https://${host}/api/rainbow/fileserver/v1.0/files/${fileId}`,
+          mime,
+          filename,
+          size: buf.length,
+        },
+      },
+    };
+
+    const sendResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(msgBody),
+    });
+
+    if (!sendResp.ok) {
+      console.warn(`${LOG} File send failed (${sendResp.status}): ${await sendResp.text().catch(() => "")}`);
+      return false;
+    }
+
+    console.log(`${LOG} File sent to conversation: ${filename}`);
+    return true;
+  } catch (err) {
+    console.error(`${LOG} uploadAndSendFile error:`, err.message);
+    return false;
+  }
+}
+
+function guessMime(filename) {
+  const ext = (filename.split(".").pop() || "").toLowerCase();
+  const mimes = {
+    txt: "text/plain", csv: "text/csv", json: "application/json",
+    xml: "application/xml", html: "text/html", htm: "text/html",
+    md: "text/markdown", js: "application/javascript", py: "text/x-python",
+    css: "text/css", sql: "text/x-sql", yaml: "application/x-yaml",
+    yml: "application/x-yaml", sh: "text/x-shellscript",
+  };
+  return mimes[ext] || "text/plain";
 }
 
 // ── File Download ────────────────────────────────────────
@@ -987,7 +1113,37 @@ async function processBubbleCallback(body) {
 
     // Call OpenClaw
     const result = await callOpenClaw(fromJid, content);
-    const responseText = result?.content || config.fallbackMsg;
+    let responseText = result?.content || config.fallbackMsg;
+
+    // Handle file creation markers in AI response
+    const { text: cleanedText, files } = parseFileMarkers(responseText);
+    if (files.length > 0) {
+      // Get a conversation ID for file uploads
+      let fileConvId = null;
+      if (bubble && s2sConnectionId && authToken) {
+        try {
+          const host = rainbowHost || "openrainbow.com";
+          const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ conversation: { peerId: bubble.id } }),
+          });
+          const convData = await convResp.json();
+          fileConvId = convData?.data?.id || convData?.id;
+        } catch (err) {
+          console.warn(`${LOG} Failed to get convId for file upload:`, err.message);
+        }
+      }
+      if (fileConvId) {
+        for (const f of files) {
+          const ok = await uploadAndSendFile(f.filename, f.content, fileConvId);
+          console.log(`${LOG} File creation ${f.filename}: ${ok ? "SUCCESS" : "FAILED"}`);
+        }
+      } else {
+        console.warn(`${LOG} Cannot upload files: no conversation ID available`);
+      }
+      responseText = cleanedText;
+    }
 
     // Send reply to bubble
     if (bubble) {
@@ -1423,7 +1579,23 @@ async function start() {
       // Append file context to the user message if a file was shared
       const userMessage = fileContext ? `${content}\n\n${fileContext}` : content;
       const result = await callOpenClaw(historyKey, userMessage);
-      const responseText = result?.content || config.fallbackMsg;
+      let responseText = result?.content || config.fallbackMsg;
+
+      // Handle file creation markers in AI response
+      const { text: cleanedText, files: filesToSend } = parseFileMarkers(responseText);
+      if (filesToSend.length > 0) {
+        // Determine conversation ID for file upload
+        const fileUploadConvId = rawConversationId || conversation?.dbId || "";
+        if (fileUploadConvId && s2sConnectionId && authToken) {
+          for (const f of filesToSend) {
+            const ok = await uploadAndSendFile(f.filename, f.content, fileUploadConvId);
+            console.log(`${LOG} File creation ${f.filename}: ${ok ? "SUCCESS" : "FAILED"}`);
+          }
+        } else {
+          console.warn(`${LOG} Cannot upload files: no conversation ID or auth`);
+        }
+        responseText = cleanedText;
+      }
 
       // Typing indicator OFF
       try {
