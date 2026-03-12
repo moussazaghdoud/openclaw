@@ -8,6 +8,7 @@ require("dotenv").config();
  */
 
 const express = require("express");
+const { createClient } = require("redis");
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -55,30 +56,84 @@ function validateConfig() {
 
 validateConfig();
 
-// ── Conversation History (per user, in-memory) ──────────
+// ── Redis (persistent storage) ───────────────────────────
 
-const conversationHistories = new Map();
+let redis = null;
+const REDIS_URL = process.env.REDIS_URL || "";
+
+async function initRedis() {
+  if (!REDIS_URL) {
+    console.log(`${LOG} No REDIS_URL — using in-memory storage (data lost on redeploy)`);
+    return;
+  }
+  try {
+    redis = createClient({ url: REDIS_URL });
+    redis.on("error", (err) => console.warn(`${LOG} Redis error:`, err.message));
+    await redis.connect();
+    console.log(`${LOG} Connected to Redis — conversation history will persist`);
+    // Load greeted set from Redis
+    const greetedArr = await redis.sMembers("greeted");
+    greetedArr.forEach((jid) => greeted.add(jid));
+    console.log(`${LOG} Loaded ${greeted.size} greeted users from Redis`);
+  } catch (err) {
+    console.warn(`${LOG} Redis connection failed, falling back to in-memory:`, err.message);
+    redis = null;
+  }
+}
+
+// ── Conversation History (Redis-backed with in-memory cache) ──
+
+const conversationHistories = new Map(); // in-memory cache
 const MAX_HISTORY = 20;
 
-function getHistory(userId) {
-  if (!conversationHistories.has(userId)) {
-    conversationHistories.set(userId, []);
+async function getHistory(userId) {
+  if (conversationHistories.has(userId)) {
+    return conversationHistories.get(userId);
   }
+  // Try loading from Redis
+  if (redis) {
+    try {
+      const data = await redis.get(`history:${userId}`);
+      if (data) {
+        const history = JSON.parse(data);
+        conversationHistories.set(userId, history);
+        return history;
+      }
+    } catch (err) {
+      console.warn(`${LOG} Redis getHistory error:`, err.message);
+    }
+  }
+  conversationHistories.set(userId, []);
   return conversationHistories.get(userId);
 }
 
-function addMessage(userId, role, content) {
-  const history = getHistory(userId);
+async function addMessage(userId, role, content) {
+  const history = await getHistory(userId);
   history.push({ role, content });
   if (history.length > MAX_HISTORY) {
     history.splice(0, history.length - MAX_HISTORY);
+  }
+  // Persist to Redis
+  if (redis) {
+    try {
+      await redis.set(`history:${userId}`, JSON.stringify(history), { EX: 7 * 24 * 3600 }); // expire after 7 days
+    } catch (err) {
+      console.warn(`${LOG} Redis addMessage error:`, err.message);
+    }
+  }
+}
+
+async function saveGreeted(jid) {
+  greeted.add(jid);
+  if (redis) {
+    try { await redis.sAdd("greeted", jid); } catch {}
   }
 }
 
 // ── OpenClaw API ─────────────────────────────────────────
 
 async function callOpenClaw(userId, userMessage) {
-  const history = getHistory(userId);
+  const history = await getHistory(userId);
 
   const messages = [];
   if (config.systemPrompt) {
@@ -122,8 +177,8 @@ async function callOpenClaw(userId, userMessage) {
     const data = await response.json();
     const assistantMessage = data.choices?.[0]?.message?.content || "";
 
-    addMessage(userId, "user", userMessage);
-    addMessage(userId, "assistant", assistantMessage);
+    await addMessage(userId, "user", userMessage);
+    await addMessage(userId, "assistant", assistantMessage);
 
     console.log(`${LOG} <- OpenClaw response (${assistantMessage.length} chars)`);
     return { content: assistantMessage, model: data.model, usage: data.usage };
@@ -813,7 +868,7 @@ async function start() {
 
       // In bubbles, only respond when explicitly triggered — otherwise silently store for context
       if (isBubble && !hasBotTrigger) {
-        addMessage(historyKey, "user", `[${fromName}]: ${content}`);
+        await addMessage(historyKey, "user", `[${fromName}]: ${content}`);
         return;
       }
 
@@ -900,7 +955,7 @@ async function start() {
 
       // Welcome message on first contact
       if (config.welcomeMsg && !greeted.has(fromJid)) {
-        greeted.add(fromJid);
+        await saveGreeted(fromJid);
         if (!conversationHistories.has(fromJid)) {
           try {
             await sdk.im.sendMessageToConversation(conversation, config.welcomeMsg);
@@ -1061,7 +1116,10 @@ async function start() {
 // ── Launch ───────────────────────────────────────────────
 
 console.log(`${LOG} Starting in 3s...`);
-setTimeout(() => start(), 3000);
+setTimeout(async () => {
+  await initRedis();
+  start();
+}, 3000);
 
 // ── Graceful shutdown ────────────────────────────────────
 
