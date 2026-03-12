@@ -249,6 +249,7 @@ function parseFileMarkers(response) {
  * Upload a file to Rainbow fileserver and send it in a conversation.
  */
 async function uploadAndSendFile(filename, content, convId) {
+  console.log(`${LOG} uploadAndSendFile: filename=${filename}, contentLen=${content.length}, convId=${convId}, auth=${authToken ? "OK" : "MISSING"}, cnxId=${s2sConnectionId || "MISSING"}`);
   if (!authToken || !s2sConnectionId) {
     console.warn(`${LOG} Cannot upload file: no auth/connection`);
     return { ok: false, url: null };
@@ -260,21 +261,24 @@ async function uploadAndSendFile(filename, content, convId) {
 
   try {
     // Step 1: Create file entry on Rainbow fileserver
+    const createBody = { fileName: filename, extension: filename.split(".").pop(), typeMIME: mime, size: buf.length };
+    console.log(`${LOG} File create request: ${JSON.stringify(createBody)}`);
     const createResp = await fetch(`https://${host}/api/rainbow/fileserver/v1.0/files`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${authToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ fileName: filename, extension: filename.split(".").pop(), typeMIME: mime, size: buf.length }),
+      body: JSON.stringify(createBody),
     });
 
+    const createText = await createResp.text();
+    console.log(`${LOG} File create response (${createResp.status}): ${createText.substring(0, 500)}`);
     if (!createResp.ok) {
-      console.warn(`${LOG} File create failed (${createResp.status}): ${await createResp.text().catch(() => "")}`);
       return { ok: false, url: null };
     }
 
-    const fileMeta = await createResp.json();
+    const fileMeta = JSON.parse(createText);
     const fileId = fileMeta.data?.id || fileMeta.id;
     console.log(`${LOG} File entry created: ${fileId}`);
 
@@ -1125,25 +1129,37 @@ async function processBubbleCallback(body) {
     // Handle file creation markers in AI response
     const { text: cleanedText, files } = parseFileMarkers(responseText);
     if (files.length > 0) {
+      console.log(`${LOG} Found ${files.length} file marker(s) in AI response`);
       // Get a conversation ID for file uploads
       let fileConvId = null;
-      if (bubble && s2sConnectionId && authToken) {
-        try {
-          const host = rainbowHost || "openrainbow.com";
-          const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations`, {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ conversation: { peerId: bubble.id } }),
-          });
-          const convData = await convResp.json();
-          fileConvId = convData?.data?.id || convData?.id;
-        } catch (err) {
-          console.warn(`${LOG} Failed to get convId for file upload:`, err.message);
+      if (s2sConnectionId && authToken) {
+        // Try creating an S2S conversation for this bubble
+        if (bubble) {
+          try {
+            const host = rainbowHost || "openrainbow.com";
+            const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations`, {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ conversation: { peerId: bubble.id } }),
+            });
+            const convText = await convResp.text();
+            console.log(`${LOG} File conv creation response (${convResp.status}): ${convText.substring(0, 300)}`);
+            try {
+              const convData = JSON.parse(convText);
+              fileConvId = convData?.data?.id || convData?.id;
+            } catch {}
+          } catch (err) {
+            console.warn(`${LOG} Failed to create conv for file upload:`, err.message);
+          }
         }
+      } else {
+        console.warn(`${LOG} Cannot upload files: s2sConnectionId=${s2sConnectionId}, authToken=${authToken ? "OK" : "MISSING"}`);
       }
+
       let fileText = cleanedText;
       if (fileConvId) {
         for (const f of files) {
+          console.log(`${LOG} Uploading file ${f.filename} to convId=${fileConvId}...`);
           const result2 = await uploadAndSendFile(f.filename, f.content, fileConvId);
           console.log(`${LOG} File creation ${f.filename}: ${result2.ok ? "SUCCESS" : "FAILED"}${result2.url ? " url=" + result2.url : ""}`);
           if (result2.ok && result2.url) {
@@ -1153,7 +1169,7 @@ async function processBubbleCallback(body) {
           }
         }
       } else {
-        console.warn(`${LOG} Cannot upload files: no conversation ID available`);
+        console.warn(`${LOG} Cannot upload files: no conversation ID (bubble=${bubble?.name || "none"})`);
         for (const f of files) {
           fileText = fileText.replace(f.placeholder, `(could not upload ${f.filename})`);
         }
