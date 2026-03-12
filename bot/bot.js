@@ -288,6 +288,60 @@ async function joinAllRooms() {
 
 const greeted = new Set();
 
+// ── Active bubble conversations ─────────────────────────
+// Tracks bubbles where the bot recently spoke, so it can evaluate follow-ups
+const activeConversations = new Map(); // historyKey → { lastActivity: timestamp }
+const CONVO_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Ask the AI whether a message in a bubble is directed at the bot.
+ * Uses a fast, cheap evaluation prompt. Returns true/false.
+ */
+async function isMessageForBot(historyKey, fromName, content) {
+  const history = await getHistory(historyKey);
+  // Build recent context (last 6 messages max for speed)
+  const recentHistory = history.slice(-6);
+
+  const evalMessages = [
+    {
+      role: "system",
+      content: `You are evaluating whether a message in a group chat is directed at the AI bot (you) or is just a conversation between humans.
+
+The bot was recently active in this conversation. Consider:
+- Is the user replying to something the bot said?
+- Is the user asking a question the bot could answer?
+- Is the user giving feedback on the bot's previous response (thanks, ok, yes, no, etc.)?
+- Or is this clearly a message between humans that doesn't involve the bot?
+
+Respond with ONLY "YES" or "NO". Nothing else.`
+    },
+    ...recentHistory,
+    { role: "user", content: `[${fromName}]: ${content}` },
+    { role: "user", content: "Is the above message directed at the bot? Reply YES or NO only." }
+  ];
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const url = `${config.endpoint}/v1/chat/completions`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: `openclaw:${config.agentId}`, messages: evalMessages, max_tokens: 5, stream: false }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) return false;
+    const data = await resp.json();
+    const answer = (data.choices?.[0]?.message?.content || "").trim().toUpperCase();
+    console.log(`${LOG} Intent check for "${content.substring(0, 50)}": ${answer}`);
+    return answer.startsWith("YES");
+  } catch (err) {
+    console.warn(`${LOG} Intent check failed:`, err.message);
+    return false;
+  }
+}
+
 // ── Bubble caches ───────────────────────────────────────
 
 const bubbleList = new Map();    // bubbleId → bubble
@@ -866,10 +920,24 @@ async function start() {
       // Use rawConversationId as history key so all participants share context
       const historyKey = (isBubble && rawConversationId) ? `bubble:${rawConversationId}` : fromJid;
 
-      // In bubbles, only respond when explicitly triggered — otherwise silently store for context
+      // In bubbles: respond on explicit trigger, or evaluate intent if conversation is active
       if (isBubble && !hasBotTrigger) {
-        await addMessage(historyKey, "user", `[${fromName}]: ${content}`);
-        return;
+        const active = activeConversations.get(historyKey);
+        const isActive = active && (Date.now() - active.lastActivity) < CONVO_TIMEOUT_MS;
+
+        if (isActive) {
+          // Bot recently spoke in this bubble — ask AI if this message is for the bot
+          const forBot = await isMessageForBot(historyKey, fromName, content);
+          if (!forBot) {
+            await addMessage(historyKey, "user", `[${fromName}]: ${content}`);
+            return;
+          }
+          console.log(`${LOG} AI intent: message IS for bot, responding`);
+        } else {
+          // No active conversation — silently store for context
+          await addMessage(historyKey, "user", `[${fromName}]: ${content}`);
+          return;
+        }
       }
 
       stats.received++;
@@ -1047,6 +1115,10 @@ async function start() {
           stats.replied++;
           console.log(`${LOG} [${stats.replied}] Replied to ${fromName} (${responseText.length} chars)`);
         }
+      // Mark bubble conversation as active so follow-ups get intent evaluation
+      if (isBubble) {
+        activeConversations.set(historyKey, { lastActivity: Date.now() });
+      }
       } catch (err) {
         stats.errors++;
         console.error(`${LOG} Failed to send reply:`, err.message);
