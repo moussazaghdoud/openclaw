@@ -1017,11 +1017,22 @@ async function start() {
         console.log(`${LOG} File detected: ${fileInfo.filename} (${fileInfo.mime})`);
         const downloaded = await downloadFile(fileInfo);
         fileContext = await describeFileForAI(fileInfo, downloaded);
-        console.log(`${LOG} File context: ${fileContext.substring(0, 100)}`);
+        console.log(`${LOG} File context: ${fileContext.substring(0, 200)}`);
+
+        // Store file context in conversation history so follow-up messages can reference it
+        const fHistoryKey = (rawCb?.is_group && (rawCb?.conversation_id || ""))
+          ? `bubble:${rawCb.conversation_id}` : fromJid;
+        await addMessage(fHistoryKey, "user", `[${fromName} shared a file]\n${fileContext}`);
+
+        // If no text body, we've stored the file in history — done (bot will use it when asked)
+        if (!content || !content.trim()) {
+          console.log(`${LOG} File-only message stored in history for ${fHistoryKey}`);
+          return;
+        }
       }
 
-      // Skip messages with no content AND no file
-      if ((!content || !content.trim()) && !fileContext) return;
+      // Skip messages with no content
+      if (!content || !content.trim()) return;
       let isBubble = !!(rawCb?.is_group)
         || !!(message.fromBubbleJid || message.fromBubbleId)
         || (conv.type === 1) || !!(conv.bubble && conv.bubble.id)
