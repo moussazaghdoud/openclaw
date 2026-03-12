@@ -668,8 +668,13 @@ app.use((req, res, next) => {
         // Process file directly from callback (SDK doesn't fire rainbow_onmessagereceived for file messages in S2S)
         const fromUserId = msg.from || req.body?.from || "";
         // Skip bot's own messages
+        console.log(`${LOG} File callback trigger: from=${fromUserId}, botUserId=${botUserId}, skip=${fromUserId === botUserId}`);
         if (fromUserId !== botUserId) {
-          setTimeout(() => processFileFromCallback(msg, convId, fromUserId, !!msg.is_group), 2000);
+          const msgCopy = JSON.parse(JSON.stringify(msg)); // deep copy before Express recycles req
+          setTimeout(() => {
+            processFileFromCallback(msgCopy, convId, fromUserId, !!msgCopy.is_group)
+              .catch(err => console.error(`${LOG} processFileFromCallback ERROR:`, err));
+          }, 2000);
         }
       }
     }
