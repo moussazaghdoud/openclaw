@@ -235,7 +235,7 @@ function parseFileMarkers(response) {
 async function uploadAndSendFile(filename, content, convId) {
   if (!authToken || !s2sConnectionId) {
     console.warn(`${LOG} Cannot upload file: no auth/connection`);
-    return false;
+    return { ok: false, url: null };
   }
 
   const host = rainbowHost || "openrainbow.com";
@@ -255,7 +255,7 @@ async function uploadAndSendFile(filename, content, convId) {
 
     if (!createResp.ok) {
       console.warn(`${LOG} File create failed (${createResp.status}): ${await createResp.text().catch(() => "")}`);
-      return false;
+      return { ok: false, url: null };
     }
 
     const fileMeta = await createResp.json();
@@ -275,21 +275,36 @@ async function uploadAndSendFile(filename, content, convId) {
 
     if (!uploadResp.ok) {
       console.warn(`${LOG} File upload failed (${uploadResp.status}): ${await uploadResp.text().catch(() => "")}`);
-      return false;
+      return { ok: false, url: null };
     }
 
     console.log(`${LOG} File uploaded: ${filename} (${buf.length} bytes)`);
 
-    // Step 3: Send message with file attachment in conversation
+    const fileUrl = `https://${host}/api/rainbow/fileserver/v1.0/files/${fileId}`;
+
+    // Step 3: Try to share the file (add viewers) so recipients can download
+    try {
+      await fetch(`https://${host}/api/rainbow/fileserver/v1.0/files/${fileId}/viewers`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ viewerId: convId, type: "conversation" }),
+      });
+      console.log(`${LOG} File shared with conversation ${convId}`);
+    } catch (shareErr) {
+      console.warn(`${LOG} File share (viewers) failed:`, shareErr.message);
+    }
+
+    // Step 4: Send message with file attachment using OOB format (Rainbow-compatible)
     const msgBody = {
       message: {
         body: `📎 ${filename}`,
         lang: "en",
-        attachment: {
-          url: `https://${host}/api/rainbow/fileserver/v1.0/files/${fileId}`,
+        oob: {
+          url: fileUrl,
           mime,
           filename,
           size: buf.length,
+          fileId,
         },
       },
     };
@@ -301,15 +316,24 @@ async function uploadAndSendFile(filename, content, convId) {
     });
 
     if (!sendResp.ok) {
-      console.warn(`${LOG} File send failed (${sendResp.status}): ${await sendResp.text().catch(() => "")}`);
-      return false;
+      const errText = await sendResp.text().catch(() => "");
+      console.warn(`${LOG} File send via OOB failed (${sendResp.status}): ${errText}`);
+      // Fallback: send as plain text with download link
+      const fallbackBody = {
+        message: { body: `📎 **${filename}** — Download: ${fileUrl}`, lang: "en" },
+      };
+      await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(fallbackBody),
+      });
     }
 
-    console.log(`${LOG} File sent to conversation: ${filename}`);
-    return true;
+    console.log(`${LOG} File sent to conversation: ${filename} (url=${fileUrl})`);
+    return { ok: true, url: fileUrl, fileId };
   } catch (err) {
     console.error(`${LOG} uploadAndSendFile error:`, err.message);
-    return false;
+    return { ok: false, url: null };
   }
 }
 
@@ -1136,8 +1160,8 @@ async function processBubbleCallback(body) {
       }
       if (fileConvId) {
         for (const f of files) {
-          const ok = await uploadAndSendFile(f.filename, f.content, fileConvId);
-          console.log(`${LOG} File creation ${f.filename}: ${ok ? "SUCCESS" : "FAILED"}`);
+          const result2 = await uploadAndSendFile(f.filename, f.content, fileConvId);
+          console.log(`${LOG} File creation ${f.filename}: ${result2.ok ? "SUCCESS" : "FAILED"}${result2.url ? " url=" + result2.url : ""}`);
         }
       } else {
         console.warn(`${LOG} Cannot upload files: no conversation ID available`);
@@ -1588,8 +1612,8 @@ async function start() {
         const fileUploadConvId = rawConversationId || conversation?.dbId || "";
         if (fileUploadConvId && s2sConnectionId && authToken) {
           for (const f of filesToSend) {
-            const ok = await uploadAndSendFile(f.filename, f.content, fileUploadConvId);
-            console.log(`${LOG} File creation ${f.filename}: ${ok ? "SUCCESS" : "FAILED"}`);
+            const result2 = await uploadAndSendFile(f.filename, f.content, fileUploadConvId);
+            console.log(`${LOG} File creation ${f.filename}: ${result2.ok ? "SUCCESS" : "FAILED"}${result2.url ? " url=" + result2.url : ""}`);
           }
         } else {
           console.warn(`${LOG} Cannot upload files: no conversation ID or auth`);
