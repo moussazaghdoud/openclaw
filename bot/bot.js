@@ -1287,10 +1287,30 @@ async function start() {
       // Use rawConversationId as history key so all participants share context
       const historyKey = (isBubble && rawConversationId) ? `bubble:${rawConversationId}` : fromJid;
 
-      // In bubbles: ONLY respond on explicit trigger ("jojo"), silently store everything else
-      if (isBubble && !hasBotTrigger) {
-        await addMessage(historyKey, "user", `[${fromName}]: ${content}`);
+      // "sleep" command: force bot back to sleep (clear active conversation)
+      if (isBubble && contentLower.trim() === "sleep") {
+        activeConversations.delete(historyKey);
+        console.log(`${LOG} Sleep command: bot going to sleep in ${historyKey}`);
+        await addMessage(historyKey, "user", `[${fromName}]: sleep`);
         return;
+      }
+
+      // In bubbles: respond on explicit trigger, or evaluate intent if conversation is active (5min window)
+      if (isBubble && !hasBotTrigger) {
+        const active = activeConversations.get(historyKey);
+        const isActive = active && (Date.now() - active.lastActivity) < CONVO_TIMEOUT_MS;
+
+        if (isActive) {
+          const forBot = await isMessageForBot(historyKey, fromName, content);
+          if (!forBot) {
+            await addMessage(historyKey, "user", `[${fromName}]: ${content}`);
+            return;
+          }
+          console.log(`${LOG} AI intent: message IS for bot, responding`);
+        } else {
+          await addMessage(historyKey, "user", `[${fromName}]: ${content}`);
+          return;
+        }
       }
 
       stats.received++;
