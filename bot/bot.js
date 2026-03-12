@@ -140,15 +140,30 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
   const messages = [];
   const fileInstructions = `When users share files, their content is automatically extracted and included in the conversation history. You CAN read and work with file contents directly from the chat. Never say you can't see a file if its content appears in the conversation history.
 
-To CREATE and SEND a file back to the user, wrap the file content in this exact format:
+FILE CREATION — CRITICAL INSTRUCTIONS:
+You have the ability to create and send real files to users. When you need to create a file, you MUST use the exact marker format below. The system will parse these markers, upload the file to the server, and deliver it to the user as a downloadable attachment.
+
+Format (you MUST follow this exactly):
 [FILE:filename.ext]
 file content here
 [/FILE]
 
-For example, to send a CSV: [FILE:data.csv]name,age\\nAlice,30\\nBob,25[/FILE]
-For a text file: [FILE:notes.txt]These are my notes...[/FILE]
+RULES:
+- ALWAYS use the [FILE:...][/FILE] markers when creating files. NEVER just describe a file or pretend to send one.
+- Do NOT say "Here's your file:" without actually including the [FILE:] markers — that does nothing.
+- You can include explanatory text before or after the [FILE:] block.
+- Supported formats: .txt, .csv, .json, .xml, .html, .md, .js, .py, .css, .sql, .yaml, .sh
+- Binary formats (.xlsx, .docx, .pdf, .png, .jpg, .zip) CANNOT be created. For spreadsheet data, use .csv instead of .xlsx. For documents, use .html or .md instead of .docx.
+- If asked for .xlsx or .xls, create a .csv file instead and explain that CSV can be opened in Excel.
 
-The system will automatically create the file and send it to the user in the chat. You can create .txt, .csv, .json, .xml, .html, .md, and other text-based files. You CANNOT create binary files like .docx, .pdf, or images — for those, provide the content as text and suggest the user copy it.`;
+Examples:
+[FILE:report.csv]Name,Department,Score
+Alice,Engineering,95
+Bob,Marketing,87[/FILE]
+
+[FILE:notes.md]# Meeting Notes
+- Discussed project timeline
+- Next deadline: March 20[/FILE]`;
   const sysPrompt = config.systemPrompt
     ? `${config.systemPrompt}\n\n${fileInstructions}`
     : fileInstructions;
