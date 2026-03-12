@@ -952,7 +952,7 @@ async function processBubbleCallback(body) {
     const botFirstName = (sdk?.connectedUser?.firstName || "").toLowerCase();
     const hasBotTrigger = (botName && contentLower.includes(botName))
       || (botFirstName && botFirstName.length > 2 && contentLower.includes(botFirstName))
-      || contentLower.includes("jojo")
+      || contentLower.includes("juju")
       || contentLower.includes("@ai")
       || contentLower.startsWith("bot:")
       || contentLower.startsWith("bot :");
@@ -1262,7 +1262,7 @@ async function start() {
       const botFirstName = (sdk.connectedUser?.firstName || "").toLowerCase();
       const hasBotTrigger = (botName && contentLower.includes(botName))
         || (botFirstName && botFirstName.length > 2 && contentLower.includes(botFirstName))
-        || contentLower.includes("jojo")
+        || contentLower.includes("juju")
         || contentLower.includes("@ai")
         || contentLower.startsWith("bot ")
         || contentLower.startsWith("bot:")
