@@ -7,6 +7,10 @@
     "start": "node bot.js"
   },
   "dependencies": {
+    "@xmpp/client": "^0.14.0",
+    "@xmpp/client-core": "^0.14.0",
+    "@xmpp/jid": "^0.14.0",
+    "@xmpp/xml": "^0.14.0",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",
     "rainbow-node-sdk": "2.42.0-lts.1",
