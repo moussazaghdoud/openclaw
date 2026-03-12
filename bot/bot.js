@@ -32,7 +32,7 @@ const config = {
   agentId: process.env.OPENCLAW_AGENT_ID || "main",
   systemPrompt: process.env.OPENCLAW_SYSTEM_PROMPT || "",
   maxTokens: parseInt(process.env.OPENCLAW_MAX_TOKENS || "4096", 10),
-  timeoutMs: parseInt(process.env.OPENCLAW_TIMEOUT_MS || "30000", 10),
+  timeoutMs: parseInt(process.env.OPENCLAW_TIMEOUT_MS || "60000", 10),
   welcomeMsg: process.env.OPENCLAW_WELCOME_MSG || "",
   fallbackMsg: process.env.OPENCLAW_FALLBACK_MSG || "Sorry, I'm temporarily unavailable. Please try again later.",
 };
@@ -134,7 +134,7 @@ async function saveGreeted(jid) {
 
 // ── OpenClaw API ─────────────────────────────────────────
 
-async function callOpenClaw(userId, userMessage) {
+async function callOpenClaw(userId, userMessage, attempt = 1) {
   const history = await getHistory(userId);
 
   const messages = [];
@@ -188,7 +188,13 @@ async function callOpenClaw(userId, userMessage) {
     return { content: assistantMessage, model: data.model, usage: data.usage };
   } catch (err) {
     clearTimeout(timeout);
-    console.error(`${LOG} OpenClaw error:`, err.message);
+    console.error(`${LOG} OpenClaw error (attempt ${attempt}):`, err.message);
+    // Retry once on failure
+    if (attempt < 2) {
+      console.log(`${LOG} Retrying OpenClaw request in 3s...`);
+      await new Promise(r => setTimeout(r, 3000));
+      return callOpenClaw(userId, userMessage, attempt + 1);
+    }
     return null;
   }
 }
