@@ -263,6 +263,7 @@ async function downloadFile(fileInfo, attempt = 1) {
           const buf = Buffer.from(await resp.arrayBuffer());
           console.log(`${LOG} Downloaded via temp URL: ${filename} (${buf.length} bytes)`);
           if (buf.length > 10) {
+            lastDownloadResult = { fileId, filename, ok: true, bytes: buf.length, strategy: "temp-url", time: new Date().toISOString() };
             return { buffer: buf, mime, filename, filesize: buf.length };
           }
         }
@@ -324,7 +325,7 @@ async function downloadFile(fileInfo, attempt = 1) {
               if (dlResp.ok) {
                 const dlBuf = Buffer.from(await dlResp.arrayBuffer());
                 console.log(`${LOG} Downloaded via REST redirect: ${filename} (${dlBuf.length} bytes)`);
-                if (dlBuf.length > 10) return { buffer: dlBuf, mime, filename, filesize: dlBuf.length };
+                if (dlBuf.length > 10) { lastDownloadResult = { fileId, filename, ok: true, bytes: dlBuf.length, strategy: "rest-redirect", time: new Date().toISOString() }; return { buffer: dlBuf, mime, filename, filesize: dlBuf.length }; }
               }
             }
           } catch (_) {}
@@ -332,6 +333,7 @@ async function downloadFile(fileInfo, attempt = 1) {
         // Direct binary content
         if (buf.length > 10) {
           console.log(`${LOG} Downloaded via REST: ${filename} (${buf.length} bytes)`);
+          lastDownloadResult = { fileId, filename, ok: true, bytes: buf.length, strategy: "rest-direct", time: new Date().toISOString() };
           return { buffer: buf, mime, filename, filesize: buf.length };
         }
       }
