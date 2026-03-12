@@ -189,6 +189,132 @@ async function callOpenClaw(userId, userMessage) {
   }
 }
 
+// ── File Download ────────────────────────────────────────
+
+/**
+ * Extract file info from a message (SDK-parsed or raw callback).
+ * Returns { fileId, url, mime, filename, filesize } or null.
+ */
+function extractFileInfo(message, rawCb) {
+  // 1. SDK-parsed oob (from S2S attachment mapping)
+  const oob = message.oob || message.attachment || {};
+  // 2. Raw callback attachment (fallback if SDK didn't parse)
+  const rawAttach = rawCb?.attachment || {};
+
+  const url = oob.url || rawAttach.url || "";
+  const fileId = oob.fileId || rawAttach.fileId || url.split("/").pop() || "";
+
+  if (!fileId || !url) return null;
+
+  return {
+    fileId,
+    url,
+    mime: oob.mime || rawAttach.mime || "application/octet-stream",
+    filename: oob.filename || rawAttach.filename || `file_${fileId}`,
+    filesize: parseInt(oob.filesize || rawAttach.filesize || "0", 10),
+  };
+}
+
+/**
+ * Download a file from Rainbow using multiple strategies.
+ * Returns { buffer, mime, filename, filesize } or null.
+ */
+async function downloadFile(fileInfo) {
+  const { fileId, url, mime, filename, filesize } = fileInfo;
+  console.log(`${LOG} Downloading file: ${filename} (${fileId}, ${mime}, ${filesize} bytes)`);
+
+  // Strategy 1: SDK fileStorage.downloadFile (handles auth + chunking)
+  try {
+    if (sdk.fileStorage && typeof sdk.fileStorage.downloadFile === "function") {
+      const fd = { id: fileId, url, typeMIME: mime, size: filesize, fileName: filename };
+      const result = await sdk.fileStorage.downloadFile(fd);
+      if (result && result.buffer) {
+        const buf = Buffer.isBuffer(result.buffer) ? result.buffer : Buffer.from(result.buffer);
+        console.log(`${LOG} Downloaded via SDK: ${filename} (${buf.length} bytes)`);
+        return { buffer: buf, mime: result.type || mime, filename: result.fileName || filename, filesize: buf.length };
+      }
+    }
+  } catch (err) {
+    console.warn(`${LOG} SDK downloadFile failed:`, err.message);
+  }
+
+  // Strategy 2: Get temporary URL from SDK, then fetch
+  try {
+    if (sdk.fileStorage && typeof sdk.fileStorage.getFilesTemporaryURL === "function") {
+      const tmpUrl = await sdk.fileStorage.getFilesTemporaryURL(fileId);
+      if (tmpUrl) {
+        const resp = await fetch(tmpUrl);
+        if (resp.ok) {
+          const buf = Buffer.from(await resp.arrayBuffer());
+          console.log(`${LOG} Downloaded via temp URL: ${filename} (${buf.length} bytes)`);
+          return { buffer: buf, mime, filename, filesize: buf.length };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`${LOG} Temp URL download failed:`, err.message);
+  }
+
+  // Strategy 3: Direct REST API call with auth token
+  if (authToken) {
+    try {
+      const host = rainbowHost || "openrainbow.com";
+      const fileUrl = url.startsWith("http") ? url : `https://${host}${url}`;
+      const resp = await fetch(fileUrl, {
+        headers: { "Authorization": `Bearer ${authToken}` },
+      });
+      if (resp.ok) {
+        const buf = Buffer.from(await resp.arrayBuffer());
+        console.log(`${LOG} Downloaded via REST: ${filename} (${buf.length} bytes)`);
+        return { buffer: buf, mime, filename, filesize: buf.length };
+      }
+      console.warn(`${LOG} REST download failed (${resp.status}): ${await resp.text().catch(() => "")}`);
+    } catch (err) {
+      console.warn(`${LOG} REST download error:`, err.message);
+    }
+  }
+
+  console.error(`${LOG} All download strategies failed for ${filename} (${fileId})`);
+  return null;
+}
+
+/**
+ * Describe a file for the AI context (text summary of the file).
+ * For text/code files, includes the content. For others, describes metadata.
+ */
+async function describeFileForAI(fileInfo, downloaded) {
+  if (!downloaded) return `[File shared: ${fileInfo.filename} (${fileInfo.mime}, ${fileInfo.filesize} bytes) — download failed]`;
+
+  const { buffer, mime, filename } = downloaded;
+
+  // Text-based files: include content directly
+  const textTypes = ["text/", "application/json", "application/xml", "application/javascript",
+    "application/csv", "application/yaml", "application/x-yaml"];
+  const textExtensions = [".txt", ".md", ".csv", ".json", ".xml", ".yaml", ".yml", ".js", ".ts",
+    ".py", ".java", ".go", ".rs", ".html", ".css", ".sql", ".sh", ".bat", ".log", ".conf", ".ini", ".env"];
+
+  const isText = textTypes.some(t => mime.startsWith(t))
+    || textExtensions.some(ext => filename.toLowerCase().endsWith(ext));
+
+  if (isText && buffer.length < 50000) {
+    const text = buffer.toString("utf-8");
+    return `[File: ${filename}]\n\`\`\`\n${text}\n\`\`\``;
+  }
+
+  // PDF: include raw text extraction attempt
+  if (mime === "application/pdf") {
+    return `[PDF file shared: ${filename} (${buffer.length} bytes) — content not extractable inline, but file was received]`;
+  }
+
+  // Images: describe metadata (AI can't see the image through text API)
+  if (mime.startsWith("image/")) {
+    return `[Image shared: ${filename} (${mime}, ${buffer.length} bytes)]`;
+  }
+
+  // Other binary files
+  return `[File shared: ${filename} (${mime}, ${buffer.length} bytes)]`;
+}
+
 // ── Send message to bubble via REST API ─────────────────
 
 async function sendMessageToBubble(bubble, text) {
@@ -394,6 +520,7 @@ app.use((req, res, next) => {
           is_group: !!msg.is_group,
           conversation_id: msg.conversation_id || req.body?.conversation_id || "",
           from_userId: msg.from || req.body?.from || "",
+          attachment: msg.attachment || null,
         });
         // Bound the map
         if (rawCallbackMap.size > 100) {
@@ -864,7 +991,6 @@ async function start() {
       const botLogin = sdk.connectedUser?.loginEmail || config.login;
       if (botLogin && fromJid.startsWith(botLogin.replace("@", "_").split("/")[0])) return;
       if (fromId && sdk.connectedUser?.id && fromId === sdk.connectedUser.id) return;
-      if (!content || !content.trim()) return;
 
       // Deduplicate: skip if we already processed this message ID recently
       const msgId = message.id || message.messageId || "";
@@ -883,6 +1009,19 @@ async function start() {
 
       // Primary: check raw callback is_group flag (most reliable in S2S mode)
       const rawCb = msgId ? rawCallbackMap.get(msgId) : null;
+
+      // Detect and download attached files
+      const fileInfo = extractFileInfo(message, rawCb);
+      let fileContext = "";
+      if (fileInfo) {
+        console.log(`${LOG} File detected: ${fileInfo.filename} (${fileInfo.mime})`);
+        const downloaded = await downloadFile(fileInfo);
+        fileContext = await describeFileForAI(fileInfo, downloaded);
+        console.log(`${LOG} File context: ${fileContext.substring(0, 100)}`);
+      }
+
+      // Skip messages with no content AND no file
+      if ((!content || !content.trim()) && !fileContext) return;
       let isBubble = !!(rawCb?.is_group)
         || !!(message.fromBubbleJid || message.fromBubbleId)
         || (conv.type === 1) || !!(conv.bubble && conv.bubble.id)
@@ -1039,7 +1178,9 @@ async function start() {
       } catch {}
 
       // Call OpenClaw (use historyKey so bubble messages share conversation context)
-      const result = await callOpenClaw(historyKey, content);
+      // Append file context to the user message if a file was shared
+      const userMessage = fileContext ? `${content}\n\n${fileContext}` : content;
+      const result = await callOpenClaw(historyKey, userMessage);
       const responseText = result?.content || config.fallbackMsg;
 
       // Typing indicator OFF
