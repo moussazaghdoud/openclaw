@@ -195,14 +195,17 @@ async function callOpenClaw(userId, userMessage) {
  * Extract file info from a message (SDK-parsed or raw callback).
  * Returns { fileId, url, mime, filename, filesize } or null.
  */
-function extractFileInfo(message, rawCb) {
+function extractFileInfo(message, rawCb, convId) {
   // 1. SDK-parsed oob (from S2S attachment mapping)
   const oob = message.oob || message.attachment || {};
   // 2. Raw callback attachment (fallback if SDK didn't parse)
   const rawAttach = rawCb?.attachment || {};
+  // 3. Recent file in this conversation (fallback for separate file+text messages)
+  const recentFile = convId ? recentFilesByConv.get(convId) : null;
+  const convAttach = (recentFile && (Date.now() - recentFile.time) < 5 * 60 * 1000) ? recentFile.attachment : {};
 
-  const url = oob.url || rawAttach.url || "";
-  const fileId = oob.fileId || rawAttach.fileId || url.split("/").pop() || "";
+  const url = oob.url || rawAttach.url || convAttach.url || "";
+  const fileId = oob.fileId || rawAttach.fileId || convAttach.fileId || url.split("/").pop() || "";
 
   if (!fileId || !url) return null;
 
@@ -494,6 +497,8 @@ const debugCallbacks = [];
 const rawCallbackMap = new Map();
 // Map conversation_id to bubble JID (built from callbacks)
 const convIdToBubbleJid = new Map();
+// Map conversation_id to most recent file attachment (so follow-up messages can access it)
+const recentFilesByConv = new Map();
 
 // Log ALL incoming requests (before SDK handles them)
 app.use((req, res, next) => {
@@ -515,10 +520,11 @@ app.use((req, res, next) => {
     const msg = req.body?.message;
     if (msg) {
       const msgId = msg.id || "";
+      const convId = msg.conversation_id || req.body?.conversation_id || "";
       if (msgId) {
         rawCallbackMap.set(msgId, {
           is_group: !!msg.is_group,
-          conversation_id: msg.conversation_id || req.body?.conversation_id || "",
+          conversation_id: convId,
           from_userId: msg.from || req.body?.from || "",
           attachment: msg.attachment || null,
         });
@@ -527,6 +533,15 @@ app.use((req, res, next) => {
           const first = rawCallbackMap.keys().next().value;
           rawCallbackMap.delete(first);
         }
+      }
+      // Store attachment per conversation so follow-up messages can find it
+      if (msg.attachment && convId) {
+        recentFilesByConv.set(convId, {
+          attachment: msg.attachment,
+          from: msg.from || req.body?.from || "",
+          time: Date.now(),
+        });
+        console.log(`${LOG} File attachment stored for conv ${convId}: ${msg.attachment.filename}`);
       }
     }
   }
@@ -1011,7 +1026,8 @@ async function start() {
       const rawCb = msgId ? rawCallbackMap.get(msgId) : null;
 
       // Detect and download attached files
-      const fileInfo = extractFileInfo(message, rawCb);
+      const rawConvId = rawCb?.conversation_id || conversationId || "";
+      const fileInfo = extractFileInfo(message, rawCb, rawConvId);
       let fileContext = "";
       if (fileInfo) {
         console.log(`${LOG} File detected: ${fileInfo.filename} (${fileInfo.mime})`);
