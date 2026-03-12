@@ -951,7 +951,7 @@ async function processBubbleCallback(body) {
     const botFirstName = (sdk?.connectedUser?.firstName || "").toLowerCase();
     const hasBotTrigger = (botName && contentLower.includes(botName))
       || (botFirstName && botFirstName.length > 2 && contentLower.includes(botFirstName))
-      || contentLower.includes("@bot")
+      || contentLower.includes("jojo")
       || contentLower.includes("@ai")
       || contentLower.startsWith("bot:")
       || contentLower.startsWith("bot :");
@@ -1242,11 +1242,9 @@ async function start() {
           }
         }
 
-        // If no text body, we've stored the file in history — done (bot will use it when asked)
-        if (!content || !content.trim()) {
-          console.log(`${LOG} File-only message stored in history for ${fHistoryKey}`);
-          return;
-        }
+        // File received — just acknowledge, don't call AI until user asks
+        console.log(`${LOG} File stored in history for ${fHistoryKey}, awaiting user question`);
+        return;
       }
 
       // Skip messages with no content
@@ -1263,7 +1261,7 @@ async function start() {
       const botFirstName = (sdk.connectedUser?.firstName || "").toLowerCase();
       const hasBotTrigger = (botName && contentLower.includes(botName))
         || (botFirstName && botFirstName.length > 2 && contentLower.includes(botFirstName))
-        || contentLower.includes("@bot")
+        || contentLower.includes("jojo")
         || contentLower.includes("@ai")
         || contentLower.startsWith("bot ")
         || contentLower.startsWith("bot:")
