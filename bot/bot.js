@@ -222,9 +222,12 @@ function extractFileInfo(message, rawCb, convId) {
  * Download a file from Rainbow using multiple strategies.
  * Returns { buffer, mime, filename, filesize } or null.
  */
-async function downloadFile(fileInfo) {
+// Store last download result for debugging
+let lastDownloadResult = null;
+
+async function downloadFile(fileInfo, attempt = 1) {
   const { fileId, url, mime, filename, filesize } = fileInfo;
-  console.log(`${LOG} Downloading file: ${filename} (${fileId}, ${mime}, ${filesize} bytes)`);
+  console.log(`${LOG} Downloading file: ${filename} (${fileId}, ${mime}, ${filesize} bytes) [attempt ${attempt}]`);
 
   // Strategy 1: SDK fileStorage.downloadFile (handles auth + chunking)
   try {
@@ -282,6 +285,7 @@ async function downloadFile(fileInfo) {
       if (result.body && result.body.length > 10) {
         const buf = Buffer.isBuffer(result.body) ? result.body : Buffer.from(result.body);
         console.log(`${LOG} Downloaded via SDK REST helper: ${filename} (${buf.length} bytes)`);
+        lastDownloadResult = { fileId, filename, ok: true, bytes: buf.length, strategy: "sdk-rest-helper", time: new Date().toISOString() };
         return { buffer: buf, mime, filename, filesize: buf.length };
       }
     }
@@ -335,7 +339,16 @@ async function downloadFile(fileInfo) {
     }
   }
 
-  console.error(`${LOG} All download strategies failed for ${filename} (${fileId})`);
+  // Retry with delay (file might not be fully uploaded to fileserver yet)
+  if (attempt < 3) {
+    const delay = attempt * 2000; // 2s, 4s
+    console.log(`${LOG} Download attempt ${attempt} failed, retrying in ${delay}ms...`);
+    await new Promise(r => setTimeout(r, delay));
+    return downloadFile(fileInfo, attempt + 1);
+  }
+
+  console.error(`${LOG} All download strategies failed for ${filename} (${fileId}) after ${attempt} attempts`);
+  lastDownloadResult = { fileId, filename, ok: false, time: new Date().toISOString() };
   return null;
 }
 
@@ -748,6 +761,11 @@ app.get("/api/file-test/:fileId", async (req, res) => {
   } catch (e) {
     res.json({ ok: false, error: e.message });
   }
+});
+
+// Debug: last file download result
+app.get("/api/last-download", (req, res) => {
+  res.json(lastDownloadResult || { message: "no download attempted yet" });
 });
 
 // JSON API (for programmatic access)
