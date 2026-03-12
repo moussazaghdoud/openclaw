@@ -1024,6 +1024,26 @@ async function start() {
           ? `bubble:${rawCb.conversation_id}` : fromJid;
         await addMessage(fHistoryKey, "user", `[${fromName} shared a file]\n${fileContext}`);
 
+        // Send confirmation to user
+        const confirmMsg = downloaded
+          ? `📎 Got it — **${fileInfo.filename}** received and ready. You can ask me about it.`
+          : `📎 I see **${fileInfo.filename}** was shared, but I couldn't download it. Try sending a text file (.txt, .csv, .json) or paste the content directly.`;
+
+        // Send confirmation via S2S REST (quick, no need to resolve full conversation)
+        const confirmConvId = rawCb?.conversation_id || conversationId;
+        if (confirmConvId && s2sConnectionId && authToken) {
+          try {
+            const host = rainbowHost || "openrainbow.com";
+            await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${confirmConvId}/messages`, {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ message: { body: confirmMsg, lang: "en" } }),
+            });
+          } catch (e) {
+            console.warn(`${LOG} Failed to send file confirmation:`, e.message);
+          }
+        }
+
         // If no text body, we've stored the file in history — done (bot will use it when asked)
         if (!content || !content.trim()) {
           console.log(`${LOG} File-only message stored in history for ${fHistoryKey}`);
