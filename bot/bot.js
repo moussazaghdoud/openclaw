@@ -9,6 +9,8 @@ require("dotenv").config();
 
 const express = require("express");
 const { createClient } = require("redis");
+let mammoth;
+try { mammoth = require("mammoth"); } catch (_) { mammoth = null; }
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -373,6 +375,19 @@ async function describeFileForAI(fileInfo, downloaded) {
   if (isText && buffer.length < 50000) {
     const text = buffer.toString("utf-8");
     return `[File: ${filename}]\n\`\`\`\n${text}\n\`\`\``;
+  }
+
+  // Word documents (.docx): extract text with mammoth
+  if ((mime.includes("wordprocessingml") || filename.toLowerCase().endsWith(".docx")) && mammoth) {
+    try {
+      const result = await mammoth.extractRawText({ buffer });
+      if (result.value && result.value.trim().length > 0) {
+        const text = result.value.trim().substring(0, 50000);
+        return `[File: ${filename}]\n\`\`\`\n${text}\n\`\`\``;
+      }
+    } catch (err) {
+      console.warn(`${LOG} mammoth extraction failed:`, err.message);
+    }
   }
 
   // PDF: include raw text extraction attempt
