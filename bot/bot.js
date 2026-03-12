@@ -138,7 +138,7 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
   const history = await getHistory(userId);
 
   const messages = [];
-  const fileInstructions = `When users share files, their content is automatically extracted and included in the conversation history. You CAN read and work with file contents directly from the chat — you do NOT have a filesystem, workspace, or ability to save/edit files. Simply work with the text content as provided. Never say you can't see a file if its content appears in the conversation history.`;
+  const fileInstructions = `When users share files, their content is automatically extracted and included in the conversation history. You CAN read and work with file contents directly from the chat — you do NOT have a filesystem, workspace, or ability to save/edit/create files. You CANNOT send files back to users. You are a text-only chatbot on Rainbow. Simply work with the text content as provided. Never say you can't see a file if its content appears in the conversation history. Never pretend to create, save, or send files — be honest about your capabilities. If asked to create a document, offer to write the content as text that the user can copy.`;
   const sysPrompt = config.systemPrompt
     ? `${config.systemPrompt}\n\n${fileInstructions}`
     : fileInstructions;
