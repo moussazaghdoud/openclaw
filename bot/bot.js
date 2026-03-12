@@ -239,6 +239,16 @@ const bubbleList = new Map();    // bubbleId → bubble
 const bubbleByJid = new Map();   // bubbleJid → bubble
 const bubbleByMember = new Map(); // memberJid → [bubbles]
 
+// ── Active conversation tracking (per bubble) ───────────
+// When bot is triggered in a bubble, follow-up messages auto-respond for 3 min
+const activeConversations = new Map(); // historyKey → { lastActivity: timestamp }
+
+function getLastRole(historyKey) {
+  const history = conversationHistories.get(historyKey);
+  if (!history || history.length === 0) return null;
+  return history[history.length - 1].role;
+}
+
 // ── Stats ───────────────────────────────────────────────
 
 let stats = { received: 0, replied: 0, errors: 0, startedAt: Date.now() };
@@ -788,6 +798,7 @@ async function start() {
         || (botFirstName && botFirstName.length > 2 && contentLower.includes(botFirstName))
         || contentLower.includes("@bot")
         || contentLower.includes("@ai")
+        || contentLower.startsWith("bot ")
         || contentLower.startsWith("bot:")
         || contentLower.startsWith("bot :");
 
@@ -810,10 +821,54 @@ async function start() {
       // Use rawConversationId as history key so all participants share context
       const historyKey = (isBubble && rawConversationId) ? `bubble:${rawConversationId}` : fromJid;
 
-      if (isBubble && !hasBotTrigger) {
+      // Active conversation tracking per bubble:
+      // When someone triggers the bot, start a "conversation mode" for that bubble.
+      // Follow-up messages within 3 minutes are auto-responded to.
+      const CONVO_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
+      let shouldRespond = hasBotTrigger;
+
+      if (isBubble && !shouldRespond) {
+        const active = activeConversations.get(historyKey);
+        if (active && (Date.now() - active.lastActivity) < CONVO_TIMEOUT_MS) {
+          // Conversation is active — check if this message seems directed at the bot
+          // (reply to bot's answer, follow-up question, short response, etc.)
+          const lastRole = getLastRole(historyKey);
+          const looksLikeFollowUp = lastRole === "assistant" // bot just spoke, likely a response to it
+            || contentLower.startsWith("yes")
+            || contentLower.startsWith("no")
+            || contentLower.startsWith("ok")
+            || contentLower.startsWith("thanks")
+            || contentLower.startsWith("thank")
+            || contentLower.startsWith("can you")
+            || contentLower.startsWith("could you")
+            || contentLower.startsWith("what ")
+            || contentLower.startsWith("how ")
+            || contentLower.startsWith("why ")
+            || contentLower.startsWith("when ")
+            || contentLower.startsWith("where ")
+            || contentLower.startsWith("who ")
+            || contentLower.startsWith("is ")
+            || contentLower.startsWith("are ")
+            || contentLower.startsWith("do ")
+            || contentLower.startsWith("does ")
+            || contentLower.startsWith("please")
+            || contentLower.endsWith("?");
+          if (looksLikeFollowUp) {
+            shouldRespond = true;
+            console.log(`${LOG} Auto-respond: active conversation + follow-up detected`);
+          }
+        }
+      }
+
+      if (isBubble && !shouldRespond) {
         // Silent listen: store message in history for context, but don't reply
         addMessage(historyKey, "user", `[${fromName}]: ${content}`);
         return;
+      }
+
+      // Mark conversation as active (or refresh timer)
+      if (isBubble) {
+        activeConversations.set(historyKey, { lastActivity: Date.now() });
       }
 
       stats.received++;
