@@ -248,13 +248,18 @@ async function downloadFile(fileInfo) {
   // Strategy 2: Get temporary URL from SDK, then fetch
   try {
     if (sdk.fileStorage && typeof sdk.fileStorage.getFilesTemporaryURL === "function") {
-      const tmpUrl = await sdk.fileStorage.getFilesTemporaryURL(fileId);
-      if (tmpUrl) {
+      const tmpResult = await sdk.fileStorage.getFilesTemporaryURL(fileId);
+      console.log(`${LOG} Temp URL result type: ${typeof tmpResult}, value: ${JSON.stringify(tmpResult).substring(0, 300)}`);
+      // Result may be a string URL or an object with url property
+      const tmpUrl = typeof tmpResult === "string" ? tmpResult : (tmpResult?.url || tmpResult?.uri || null);
+      if (tmpUrl && typeof tmpUrl === "string") {
         const resp = await fetch(tmpUrl);
         if (resp.ok) {
           const buf = Buffer.from(await resp.arrayBuffer());
           console.log(`${LOG} Downloaded via temp URL: ${filename} (${buf.length} bytes)`);
-          return { buffer: buf, mime, filename, filesize: buf.length };
+          if (buf.length > 10) {
+            return { buffer: buf, mime, filename, filesize: buf.length };
+          }
         }
       }
     }
@@ -262,22 +267,42 @@ async function downloadFile(fileInfo) {
     console.warn(`${LOG} Temp URL download failed:`, err.message);
   }
 
-  // Strategy 3: Direct REST API call with auth token
+  // Strategy 3: Direct REST API call with auth token (no /download suffix)
   if (authToken) {
     try {
       const host = rainbowHost || "openrainbow.com";
-      let fileUrl = url.startsWith("http") ? url : `https://${host}${url}`;
-      // Rainbow fileserver requires /download suffix for actual content (without it returns JSON metadata)
-      if (!fileUrl.endsWith("/download")) fileUrl += "/download";
+      const fileUrl = url.startsWith("http") ? url : `https://${host}${url}`;
       console.log(`${LOG} REST download URL: ${fileUrl}`);
       const resp = await fetch(fileUrl, {
         headers: { "Authorization": `Bearer ${authToken}`, "Accept": "*/*" },
         redirect: "follow",
       });
       if (resp.ok) {
+        const contentType = resp.headers.get("content-type") || "";
         const buf = Buffer.from(await resp.arrayBuffer());
-        console.log(`${LOG} Downloaded via REST: ${filename} (${buf.length} bytes)`);
-        if (buf.length > 0) {
+        console.log(`${LOG} REST response: ${buf.length} bytes, content-type: ${contentType}`);
+        // If we got JSON metadata instead of file content, try extracting download URL
+        if (contentType.includes("application/json") && buf.length < 5000) {
+          try {
+            const meta = JSON.parse(buf.toString("utf-8"));
+            const dlUrl = meta.url || meta.location || meta.downloadUrl || null;
+            console.log(`${LOG} REST got metadata, download URL: ${dlUrl}`);
+            if (dlUrl) {
+              const dlResp = await fetch(dlUrl, {
+                headers: { "Authorization": `Bearer ${authToken}` },
+                redirect: "follow",
+              });
+              if (dlResp.ok) {
+                const dlBuf = Buffer.from(await dlResp.arrayBuffer());
+                console.log(`${LOG} Downloaded via REST redirect: ${filename} (${dlBuf.length} bytes)`);
+                if (dlBuf.length > 10) return { buffer: dlBuf, mime, filename, filesize: dlBuf.length };
+              }
+            }
+          } catch (_) {}
+        }
+        // Direct binary content
+        if (buf.length > 10) {
+          console.log(`${LOG} Downloaded via REST: ${filename} (${buf.length} bytes)`);
           return { buffer: buf, mime, filename, filesize: buf.length };
         }
       }
