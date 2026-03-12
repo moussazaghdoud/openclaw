@@ -233,8 +233,12 @@ async function downloadFile(fileInfo) {
       const result = await sdk.fileStorage.downloadFile(fd);
       if (result && result.buffer) {
         const buf = Buffer.isBuffer(result.buffer) ? result.buffer : Buffer.from(result.buffer);
-        console.log(`${LOG} Downloaded via SDK: ${filename} (${buf.length} bytes)`);
-        return { buffer: buf, mime: result.type || mime, filename: result.fileName || filename, filesize: buf.length };
+        console.log(`${LOG} Downloaded via SDK: ${filename} (${buf.length} bytes, expected ${filesize})`);
+        // SDK sometimes returns 1-byte garbage — only accept if we got meaningful data
+        if (buf.length > 10 && (filesize === 0 || buf.length >= filesize * 0.5)) {
+          return { buffer: buf, mime: result.type || mime, filename: result.fileName || filename, filesize: buf.length };
+        }
+        console.warn(`${LOG} SDK download too small (${buf.length}/${filesize}), trying next strategy`);
       }
     }
   } catch (err) {
@@ -262,14 +266,20 @@ async function downloadFile(fileInfo) {
   if (authToken) {
     try {
       const host = rainbowHost || "openrainbow.com";
-      const fileUrl = url.startsWith("http") ? url : `https://${host}${url}`;
+      let fileUrl = url.startsWith("http") ? url : `https://${host}${url}`;
+      // Rainbow fileserver requires /download suffix for actual content (without it returns JSON metadata)
+      if (!fileUrl.endsWith("/download")) fileUrl += "/download";
+      console.log(`${LOG} REST download URL: ${fileUrl}`);
       const resp = await fetch(fileUrl, {
-        headers: { "Authorization": `Bearer ${authToken}` },
+        headers: { "Authorization": `Bearer ${authToken}`, "Accept": "*/*" },
+        redirect: "follow",
       });
       if (resp.ok) {
         const buf = Buffer.from(await resp.arrayBuffer());
         console.log(`${LOG} Downloaded via REST: ${filename} (${buf.length} bytes)`);
-        return { buffer: buf, mime, filename, filesize: buf.length };
+        if (buf.length > 0) {
+          return { buffer: buf, mime, filename, filesize: buf.length };
+        }
       }
       console.warn(`${LOG} REST download failed (${resp.status}): ${await resp.text().catch(() => "")}`);
     } catch (err) {
