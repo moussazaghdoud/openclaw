@@ -212,9 +212,9 @@ function extractFileInfo(message, rawCb, convId) {
   return {
     fileId,
     url,
-    mime: oob.mime || rawAttach.mime || "application/octet-stream",
-    filename: oob.filename || rawAttach.filename || `file_${fileId}`,
-    filesize: parseInt(oob.filesize || rawAttach.filesize || "0", 10),
+    mime: oob.mime || rawAttach.mime || convAttach.mime || "application/octet-stream",
+    filename: oob.filename || rawAttach.filename || convAttach.filename || `file_${fileId}`,
+    filesize: parseInt(oob.filesize || oob.size || rawAttach.filesize || rawAttach.size || convAttach.filesize || convAttach.size || "0", 10),
   };
 }
 
@@ -892,8 +892,8 @@ async function start() {
       s2s: { start_up: true },
       channels: { start_up: false },
       admin: { start_up: false },
-      fileServer: { start_up: false },
-      fileStorage: { start_up: false },
+      fileServer: { start_up: true },
+      fileStorage: { start_up: true },
       calllog: { start_up: false },
       favorites: { start_up: false },
       im: { start_up: true },
@@ -1029,6 +1029,7 @@ async function start() {
       const rawConvId = rawCb?.conversation_id || conversationId || "";
       const fileInfo = extractFileInfo(message, rawCb, rawConvId);
       let fileContext = "";
+      console.log(`${LOG} File check: oob=${!!message.oob}, rawAttach=${!!rawCb?.attachment}, convFile=${!!recentFilesByConv.get(rawConvId)}, result=${!!fileInfo}`);
       if (fileInfo) {
         console.log(`${LOG} File detected: ${fileInfo.filename} (${fileInfo.mime})`);
         const downloaded = await downloadFile(fileInfo);
