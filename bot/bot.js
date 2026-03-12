@@ -553,6 +553,57 @@ const bubbleByMember = new Map(); // memberJid → [bubbles]
 let stats = { received: 0, replied: 0, errors: 0, startedAt: Date.now() };
 const processedMsgIds = new Set();
 
+// ── Process file messages directly from S2S callback ────
+// (SDK doesn't fire rainbow_onmessagereceived for file-only messages in S2S mode)
+const processedFileIds = new Set();
+async function processFileFromCallback(msg, convId, fromUserId, isGroup) {
+  const fileKey = `${msg.id || ""}:${msg.attachment?.url || ""}`;
+  if (processedFileIds.has(fileKey)) return; // already handled by SDK event
+  processedFileIds.add(fileKey);
+  if (processedFileIds.size > 200) { const f = processedFileIds.values().next().value; processedFileIds.delete(f); }
+
+  console.log(`${LOG} processFileFromCallback: ${msg.attachment?.filename} from ${fromUserId} in conv ${convId}`);
+
+  const att = msg.attachment;
+  if (!att || !att.url) return;
+
+  const fileInfo = {
+    fileId: att.url.split("/").pop() || "",
+    url: att.url,
+    mime: att.mime || "application/octet-stream",
+    filename: att.filename || "file",
+    filesize: parseInt(att.size || "0", 10),
+  };
+
+  const downloaded = await downloadFile(fileInfo);
+  const fileContext = await describeFileForAI(fileInfo, downloaded);
+  console.log(`${LOG} File callback context: ${fileContext.substring(0, 200)}`);
+
+  // Store in conversation history
+  const historyKey = isGroup ? `bubble:${convId}` : (fromUserId || convId);
+  const fromName = fromUserId; // Best we have from raw callback
+  await addMessage(historyKey, "user", `[${fromName} shared a file]\n${fileContext}`);
+
+  // Send confirmation
+  const confirmMsg = downloaded
+    ? `📎 Got it — **${fileInfo.filename}** received and ready. You can ask me about it.`
+    : `📎 I see **${fileInfo.filename}** was shared, but I couldn't download it. Try pasting the content directly.`;
+
+  if (convId && s2sConnectionId && authToken) {
+    try {
+      const host = rainbowHost || "openrainbow.com";
+      await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ message: { body: confirmMsg, lang: "en" } }),
+      });
+      console.log(`${LOG} File confirmation sent to conv ${convId}`);
+    } catch (e) {
+      console.warn(`${LOG} Failed to send file confirmation:`, e.message);
+    }
+  }
+}
+
 // ── Create Express app for S2S callbacks ────────────────
 
 const app = express();
@@ -613,6 +664,13 @@ app.use((req, res, next) => {
           time: Date.now(),
         });
         console.log(`${LOG} File attachment stored for conv ${convId}: ${msg.attachment.filename}`);
+
+        // Process file directly from callback (SDK doesn't fire rainbow_onmessagereceived for file messages in S2S)
+        const fromUserId = msg.from || req.body?.from || "";
+        // Skip bot's own messages
+        if (fromUserId !== botUserId) {
+          setTimeout(() => processFileFromCallback(msg, convId, fromUserId, !!msg.is_group), 2000);
+        }
       }
     }
   }
@@ -1129,7 +1187,10 @@ async function start() {
       let fileContext = "";
       console.log(`${LOG} File check: oob=${!!message.oob}, rawAttach=${!!rawCb?.attachment}, convFile=${!!recentFilesByConv.get(rawConvId)}, result=${!!fileInfo}`);
       if (fileInfo) {
-        console.log(`${LOG} File detected: ${fileInfo.filename} (${fileInfo.mime})`);
+        // Mark as processed so callback handler doesn't double-process
+        const fileKey = `${msgId}:${fileInfo.url}`;
+        processedFileIds.add(fileKey);
+        console.log(`${LOG} File detected (SDK event): ${fileInfo.filename} (${fileInfo.mime})`);
         const downloaded = await downloadFile(fileInfo);
         fileContext = await describeFileForAI(fileInfo, downloaded);
         console.log(`${LOG} File context: ${fileContext.substring(0, 200)}`);
