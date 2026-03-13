@@ -186,9 +186,10 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
   const history = await getHistory(userId);
 
   const messages = [];
+  const fileNote = `When users share files, their content appears in conversation history. You can read and reference file contents directly. You do NOT have a filesystem or workspace — to create files, use the create_file tool. Do NOT upload files to tmpfiles.org, transfer.sh, or any external service. Do NOT reference paths like /.openclaw/workspace/. The create_file tool is the ONLY way to deliver files to the user.`;
   const sysPrompt = config.systemPrompt
-    ? `${config.systemPrompt}\n\nWhen users share files, their content appears in conversation history. You can read and reference file contents directly. You do NOT have a filesystem or workspace — to create files, use the create_file tool.`
-    : "When users share files, their content appears in conversation history. You can read and reference file contents directly. You do NOT have a filesystem or workspace — to create files, use the create_file tool.";
+    ? `${config.systemPrompt}\n\n${fileNote}`
+    : fileNote;
   messages.push({ role: "system", content: sysPrompt });
   messages.push(...history);
   messages.push({ role: "user", content: userMessage });
@@ -1141,9 +1142,12 @@ function hostFile(filename, content) {
  */
 async function rewriteFileUrls(text) {
   // Match URLs to common file hosting services
-  const urlRegex = /https?:\/\/(?:tmpfiles\.org\/dl\/\S+|transfer\.sh\/\S+|file\.io\/\S+|0x0\.st\/\S+)\S*/gi;
-  const matches = text.match(urlRegex);
+  // Match external file URLs — also catch tmpfiles.org non-/dl/ URLs (they redirect to /dl/)
+  const urlRegex = /https?:\/\/(?:tmpfiles\.org\/\S+|transfer\.sh\/\S+|file\.io\/\S+|0x0\.st\/\S+)[^\s*)\]>]*/gi;
+  let matches = text.match(urlRegex);
   if (!matches || matches.length === 0) return text;
+  // Clean trailing markdown/punctuation from URLs
+  matches = matches.map(u => u.replace(/[*_`~\[\]()]+$/g, ""));
 
   let result = text;
   for (const originalUrl of matches) {
