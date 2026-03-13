@@ -1120,7 +1120,7 @@ app.get("/files/:id", (req, res) => {
   if (!file) return res.status(404).send("File not found or expired");
   res.setHeader("Content-Type", file.mime);
   res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
-  res.send(Buffer.from(file.content, "utf-8"));
+  res.send(file.binary ? file.content : Buffer.from(file.content, "utf-8"));
 });
 
 function hostFile(filename, content) {
@@ -1133,6 +1133,55 @@ function hostFile(filename, content) {
   }
   const baseUrl = config.hostCallback || `http://localhost:${PORT}`;
   return `${baseUrl}/files/${id}`;
+}
+
+/**
+ * Detect external file URLs in AI response, download them, re-host locally.
+ * Handles: tmpfiles.org, workspace paths, and other external URLs.
+ */
+async function rewriteFileUrls(text) {
+  // Match URLs to common file hosting services
+  const urlRegex = /https?:\/\/(?:tmpfiles\.org\/dl\/\S+|transfer\.sh\/\S+|file\.io\/\S+|0x0\.st\/\S+)\S*/gi;
+  const matches = text.match(urlRegex);
+  if (!matches || matches.length === 0) return text;
+
+  let result = text;
+  for (const originalUrl of matches) {
+    try {
+      console.log(`${LOG} Downloading external file: ${originalUrl}`);
+      const resp = await fetch(originalUrl, { redirect: "follow" });
+      if (!resp.ok) {
+        console.warn(`${LOG} External file download failed (${resp.status}): ${originalUrl}`);
+        continue;
+      }
+      const buf = Buffer.from(await resp.arrayBuffer());
+      // Extract filename from URL or Content-Disposition
+      const disp = resp.headers.get("content-disposition") || "";
+      let filename = disp.match(/filename="?([^";\n]+)"?/)?.[1]
+        || originalUrl.split("/").pop().split("?")[0]
+        || "download.bin";
+      // Clean filename
+      filename = filename.replace(/[^\w.\-]/g, "_");
+
+      const id = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+      const mime = resp.headers.get("content-type") || guessMime(filename);
+      hostedFiles.set(id, { filename, content: buf, mime, createdAt: Date.now(), binary: true });
+      const baseUrl = config.hostCallback || `http://localhost:${PORT}`;
+      const localUrl = `${baseUrl}/files/${id}`;
+      result = result.replace(originalUrl, localUrl);
+      console.log(`${LOG} Re-hosted: ${originalUrl} -> ${localUrl} (${filename}, ${buf.length} bytes)`);
+    } catch (err) {
+      console.warn(`${LOG} Failed to re-host ${originalUrl}:`, err.message);
+    }
+  }
+
+  // Also replace workspace paths with a note
+  result = result.replace(/\/?\.openclaw\/workspace\/[\w.\-/]+/g, (path) => {
+    console.log(`${LOG} Stripped workspace path: ${path}`);
+    return "(file created — see download link above)";
+  });
+
+  return result;
 }
 
 // JSON API (for programmatic access)
@@ -1297,6 +1346,9 @@ async function processBubbleCallback(body) {
       console.log(`${LOG} File hosted: ${fname.trim()} -> ${url}`);
       return `📎 **${fname.trim()}**: ${url}`;
     });
+
+    // Re-host any external file URLs (tmpfiles.org, etc.) on our server
+    responseText = await rewriteFileUrls(responseText);
 
     // Send reply to bubble
     if (bubble) {
@@ -1807,6 +1859,9 @@ async function start() {
         console.log(`${LOG} File hosted (fallback): ${fname.trim()} -> ${url}`);
         return `📎 **${fname.trim()}**: ${url}`;
       });
+
+      // Re-host any external file URLs (tmpfiles.org, etc.) on our server
+      responseText = await rewriteFileUrls(responseText);
 
       // Typing indicator OFF
       try {
