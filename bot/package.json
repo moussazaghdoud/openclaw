@@ -31,6 +31,7 @@
     "express": "^4.21.0",
     "jszip": "^3.10.1",
     "mammoth": "^1.11.0",
+    "pdf-parse": "^2.4.5",
     "rainbow-node-sdk": "2.42.0-lts.1",
     "redis": "^5.11.0",
     "rxjs": "^6.6.7"

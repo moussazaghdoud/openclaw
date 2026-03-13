@@ -13,6 +13,8 @@ let mammoth;
 try { mammoth = require("mammoth"); } catch (_) { mammoth = null; }
 let JSZip;
 try { JSZip = require("jszip"); } catch (_) { JSZip = null; }
+let pdfParse;
+try { pdfParse = require("pdf-parse"); } catch (_) { pdfParse = null; }
 let pii;
 try { pii = require("./pii"); console.log("[OpenClawBot] PII module loaded OK"); } catch (e) { pii = null; console.warn("[OpenClawBot] PII module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
@@ -224,7 +226,7 @@ async function executeTranslateDocument(args) {
 function detectIntent(userMessage) {
   const msg = userMessage.toLowerCase();
 
-  // 1. Translate a docx — detect "translate to <lang>" with a stored docx
+  // 1. Translate a document — detect "translate to <lang>" with a stored file
   const transPatterns = [
     /\btranslat\w*\b.*?\bto\s+(\w+)/i,
     /\btraduir\w*\b.*?\ben\s+(\w+)/i,
@@ -235,18 +237,25 @@ function detectIntent(userMessage) {
   for (const re of transPatterns) {
     const m = userMessage.match(re);
     if (m) {
-      // Check memory first, then any stored docx key
+      // Check for PDF first (most recently uploaded wins)
+      for (const [key] of storedPdfFiles) {
+        return { type: "translate_pdf", language: m[1], fileKey: key };
+      }
+      // Then check for docx
       for (const [key] of storedDocxFiles) {
         return { type: "translate_docx", language: m[1], docxKey: key };
       }
-      // Also try to find a docx filename mentioned in the message or conversation history
+      // Also try to find a filename mentioned in the message
       const docxMatch = userMessage.match(/[\w\s-]+\.docx?\b/i);
       if (docxMatch) {
         return { type: "translate_docx", language: m[1], docxKey: docxMatch[0].trim().toLowerCase() };
       }
-      // No specific file found, but user asked to translate — use a generic key
-      // handleDocxTranslation will check Redis for any stored docx
-      return { type: "translate_docx", language: m[1], docxKey: "__last_docx__" };
+      const pdfMatch = userMessage.match(/[\w\s-]+\.pdf\b/i);
+      if (pdfMatch) {
+        return { type: "translate_pdf", language: m[1], fileKey: pdfMatch[0].trim().toLowerCase() };
+      }
+      // No specific file found — check Redis for any stored file
+      return { type: "translate_any", language: m[1], fileKey: "__last_file__" };
     }
   }
 
@@ -373,6 +382,165 @@ ${numberedParas}`;
   }
   console.error(`${LOG} translate_document failed:`, parsed.error);
   return `Sorry, something went wrong building the translated document. Please try again.`;
+}
+
+/**
+ * Handle PDF translation: extract text, translate via AI, output as .docx
+ */
+async function handlePdfTranslation(userId, userMessage, language, fileKey) {
+  console.log(`${LOG} [INTENT] translate_pdf: lang=${language}, file=${fileKey}`);
+
+  let activeKey = fileKey;
+
+  // If no PDF in memory, try Redis
+  if (!storedPdfFiles.get(activeKey) && redis) {
+    try {
+      let b64 = await redis.get(`pdf:${activeKey}`);
+      if (!b64) {
+        const keys = await redis.keys("pdf:*");
+        if (keys.length > 0) {
+          const foundKey = keys[keys.length - 1];
+          b64 = await redis.get(foundKey);
+          activeKey = foundKey.replace(/^pdf:/, "");
+          console.log(`${LOG} Found PDF in Redis: ${activeKey}`);
+        }
+      }
+      if (b64) {
+        storedPdfFiles.set(activeKey, { buffer: Buffer.from(b64, "base64"), storedAt: Date.now() });
+        console.log(`${LOG} Loaded PDF from Redis: ${activeKey}`);
+      }
+    } catch (err) { console.warn(`${LOG} Redis PDF load failed:`, err.message); }
+  }
+
+  if (!storedPdfFiles.get(activeKey)) {
+    console.warn(`${LOG} No stored PDF found for key: ${activeKey}`);
+    return `I don't have any PDF document stored. Please share the PDF file first, then ask me to translate it.`;
+  }
+
+  if (!pdfParse) {
+    return `Sorry, PDF parsing is not available. Please share a .docx file instead.`;
+  }
+
+  // Extract text from PDF
+  let paragraphs;
+  try {
+    const pdfData = await pdfParse(storedPdfFiles.get(activeKey).buffer);
+    if (!pdfData.text || pdfData.text.trim().length === 0) {
+      return `The PDF appears to have no extractable text (it might be a scanned image). Please share a text-based PDF or a .docx file.`;
+    }
+    // Split by double newlines (paragraph breaks in PDF text)
+    paragraphs = pdfData.text.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+  } catch (err) {
+    console.error(`${LOG} PDF text extraction failed:`, err.message);
+    return `Sorry, I couldn't read the PDF. Please try again or share a .docx file instead.`;
+  }
+
+  if (paragraphs.length === 0) return `The PDF appears to have no text content to translate.`;
+  console.log(`${LOG} Extracted ${paragraphs.length} paragraphs from PDF for translation`);
+
+  // AI translates — structured prompt, return JSON only
+  const numberedParas = paragraphs.map((p, i) => `[${i}] ${p}`).join("\n");
+  const translationPrompt = `Translate each numbered paragraph below to ${language}. Return ONLY a JSON array of translated strings (same order, same count). No explanation, no markdown, just the JSON array.
+
+${numberedParas}`;
+
+  const translationResult = await callOpenClaw(userId, translationPrompt);
+  if (!translationResult?.content) return `Sorry, the translation request timed out. Please try again.`;
+
+  let translated;
+  try {
+    const jsonMatch = translationResult.content.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) throw new Error("No JSON array found");
+    translated = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(translated)) throw new Error("Not an array");
+  } catch (err) {
+    console.error(`${LOG} Failed to parse translation JSON:`, err.message);
+    return `Sorry, the translation failed. Please try again.`;
+  }
+
+  console.log(`${LOG} Got ${translated.length} translated paragraphs from PDF`);
+
+  // Build a .docx from the translated paragraphs
+  if (!JSZip) return `Sorry, document creation is not available. Translation:\n\n${translated.join("\n\n")}`;
+
+  try {
+    const zip = new JSZip();
+    // Build minimal docx XML
+    const escapedParas = translated.map(p => {
+      const escaped = p.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      return `<w:p><w:r><w:t xml:space="preserve">${escaped}</w:t></w:r></w:p>`;
+    }).join("");
+
+    const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"
+            xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+            xmlns:o="urn:schemas-microsoft-com:office:office"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"
+            xmlns:v="urn:schemas-microsoft-com:vml"
+            xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+            xmlns:w10="urn:schemas-microsoft-com:office:word"
+            xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"
+            xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"
+            xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk"
+            xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml"
+            xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+            mc:Ignorable="w14 wp14">
+  <w:body>${escapedParas}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body>
+</w:document>`;
+
+    zip.file("word/document.xml", docXml);
+    zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`);
+    zip.file("_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`);
+    zip.file("word/_rels/document.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+</Relationships>`);
+
+    const docxBuffer = await zip.generateAsync({ type: "nodebuffer" });
+    const baseName = activeKey.replace(/\.pdf$/i, "");
+    const outFilename = `${baseName}_translated_${language}.docx`;
+    const url = hostFile(outFilename, docxBuffer);
+    console.log(`${LOG} PDF translation complete: ${outFilename} (${docxBuffer.length} bytes) -> ${url}`);
+    return `Here's your translated document (${language}):\n\n📎 ${outFilename}\n${url}`;
+  } catch (err) {
+    console.error(`${LOG} PDF translation docx creation failed:`, err.message);
+    return `Sorry, something went wrong creating the translated document. Please try again.`;
+  }
+}
+
+/**
+ * Handle translation when no file is in memory — check Redis for PDF or docx.
+ */
+async function handleAnyTranslation(userId, userMessage, language) {
+  console.log(`${LOG} [INTENT] translate_any: lang=${language}, checking Redis for stored files...`);
+  if (redis) {
+    try {
+      // Check for PDF first
+      const pdfKeys = await redis.keys("pdf:*");
+      if (pdfKeys.length > 0) {
+        const foundKey = pdfKeys[pdfKeys.length - 1];
+        const fileKey = foundKey.replace(/^pdf:/, "");
+        return handlePdfTranslation(userId, userMessage, language, fileKey);
+      }
+      // Then check for docx
+      const docxKeys = await redis.keys("docx:*");
+      if (docxKeys.length > 0) {
+        const foundKey = docxKeys[docxKeys.length - 1];
+        const docxKey = foundKey.replace(/^docx:/, "");
+        return handleDocxTranslation(userId, userMessage, language, docxKey);
+      }
+    } catch (err) { console.warn(`${LOG} Redis file scan failed:`, err.message); }
+  }
+  return `I don't have any document stored. Please share a PDF or .docx file first, then ask me to translate it.`;
 }
 
 /**
@@ -849,8 +1017,12 @@ async function describeFileForAI(fileInfo, downloaded) {
   // Word documents (.docx): extract text only (lightweight), store raw buffer for translate_document tool
   if ((mime.includes("wordprocessingml") || filename.toLowerCase().endsWith(".docx")) && mammoth) {
     // Store raw docx buffer so translate_document tool can use it later
+    // Clear old stored files when a new one is uploaded
+    storedPdfFiles.clear();
     storedDocxFiles.set(filename.toLowerCase(), { buffer, storedAt: Date.now() });
     if (redis) {
+      // Clean old PDF keys and store new docx
+      redis.keys("pdf:*").then(keys => keys.forEach(k => redis.del(k))).catch(() => {});
       redis.set(`docx:${filename.toLowerCase()}`, buffer.toString("base64"), { EX: 24 * 3600 }).catch(() => {});
     }
     console.log(`${LOG} Stored raw docx: ${filename} (${buffer.length} bytes)`);
@@ -865,9 +1037,30 @@ async function describeFileForAI(fileInfo, downloaded) {
     }
   }
 
-  // PDF: include raw text extraction attempt
-  if (mime === "application/pdf") {
-    return `[PDF file shared: ${filename} (${buffer.length} bytes) — content not extractable inline, but file was received]`;
+  // PDF: extract text and store buffer for translation
+  if (mime === "application/pdf" || filename.toLowerCase().endsWith(".pdf")) {
+    // Clear old stored files when a new one is uploaded
+    storedDocxFiles.clear();
+    storedPdfFiles.set(filename.toLowerCase(), { buffer, storedAt: Date.now() });
+    if (redis) {
+      // Clean old docx keys and store new PDF
+      redis.keys("docx:*").then(keys => keys.forEach(k => redis.del(k))).catch(() => {});
+      redis.set(`pdf:${filename.toLowerCase()}`, buffer.toString("base64"), { EX: 24 * 3600 }).catch(() => {});
+    }
+    console.log(`${LOG} Stored raw PDF: ${filename} (${buffer.length} bytes)`);
+
+    if (pdfParse) {
+      try {
+        const pdfData = await pdfParse(buffer);
+        if (pdfData.text && pdfData.text.trim().length > 0) {
+          const text = pdfData.text.trim().substring(0, 50000);
+          return `[PDF document: ${filename}]\n\`\`\`\n${text}\n\`\`\`\nTo translate this document, just ask me to translate it to any language.`;
+        }
+      } catch (err) {
+        console.warn(`${LOG} PDF text extraction failed:`, err.message);
+      }
+    }
+    return `[PDF file shared: ${filename} (${buffer.length} bytes) — file stored for translation]`;
   }
 
   // Images: describe metadata (AI can't see the image through text API)
@@ -1339,6 +1532,7 @@ app.get("/api/last-download", (req, res) => {
 // ── Self-hosted file downloads ──────────────────────────
 const hostedFiles = new Map(); // id → { filename, content, mime, createdAt }
 const storedDocxFiles = new Map(); // filename → { buffer, storedAt }
+const storedPdfFiles = new Map();  // filename → { buffer, storedAt }
 const HOSTED_FILE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 app.get("/files/:id", async (req, res) => {
@@ -1606,6 +1800,11 @@ async function processBubbleCallback(body) {
 
     if (intent.type === "translate_docx") {
       responseText = await handleDocxTranslation(fromJid, content, intent.language, intent.docxKey);
+    } else if (intent.type === "translate_pdf") {
+      responseText = await handlePdfTranslation(fromJid, content, intent.language, intent.fileKey);
+    } else if (intent.type === "translate_any") {
+      // No file in memory — check Redis for PDF or docx
+      responseText = await handleAnyTranslation(fromJid, content, intent.language);
     } else if (intent.type === "create_file") {
       responseText = await handleCreateFile(fromJid, content, intent.format);
     }
@@ -2120,6 +2319,10 @@ async function start() {
 
       if (intent.type === "translate_docx") {
         responseText = await handleDocxTranslation(historyKey, userMessage, intent.language, intent.docxKey);
+      } else if (intent.type === "translate_pdf") {
+        responseText = await handlePdfTranslation(historyKey, userMessage, intent.language, intent.fileKey);
+      } else if (intent.type === "translate_any") {
+        responseText = await handleAnyTranslation(historyKey, userMessage, intent.language);
       } else if (intent.type === "create_file") {
         responseText = await handleCreateFile(historyKey, userMessage, intent.format);
       }
