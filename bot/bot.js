@@ -11,6 +11,8 @@ const express = require("express");
 const { createClient } = require("redis");
 let mammoth;
 try { mammoth = require("mammoth"); } catch (_) { mammoth = null; }
+let pii;
+try { pii = require("./pii"); } catch (_) { pii = null; }
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -80,7 +82,7 @@ async function initRedis() {
     const greetedArr = await redis.sMembers("greeted");
     greetedArr.forEach((jid) => greeted.add(jid));
     console.log(`${LOG} Loaded ${greeted.size} greeted users from Redis`);
-    pii.init(redis);
+    if (pii) pii.init(redis);
   } catch (err) {
     console.warn(`${LOG} Redis connection failed, falling back to in-memory:`, err.message);
     redis = null;
@@ -1413,7 +1415,7 @@ async function start() {
           ? `bubble:${rawCb.conversation_id}` : fromJid;
 
         // PII secure mode: anonymize file content before storing in history
-        if (await pii.isSecureMode(fHistoryKey)) {
+        if (pii && await pii.isSecureMode(fHistoryKey)) {
           const { anonymizedText, mapping } = await pii.anonymize(fileContext);
           await pii.storePiiMapping(fHistoryKey, mapping);
           fileContext = anonymizedText;
@@ -1495,7 +1497,7 @@ async function start() {
       }
 
       // "juju secure" / "juju unsecure" — toggle PII secure mode
-      if (contentLower.trim() === "juju secure") {
+      if (pii && contentLower.trim() === "juju secure") {
         await pii.setSecureMode(historyKey, true);
         const secMsg = "🔒 **Secure mode ON** — PII will be anonymized before reaching the AI. Send \"juju unsecure\" to turn it off.";
         const secConvId = rawConversationId || conversationId;
@@ -1511,7 +1513,7 @@ async function start() {
         }
         return;
       }
-      if (contentLower.trim() === "juju unsecure") {
+      if (pii && contentLower.trim() === "juju unsecure") {
         await pii.setSecureMode(historyKey, false);
         const unsecMsg = "🔓 **Secure mode OFF** — normal processing resumed.";
         const unsecConvId = rawConversationId || conversationId;
@@ -1649,7 +1651,7 @@ async function start() {
       let userMessage = fileContext ? `${content}\n\n${fileContext}` : content;
 
       // PII secure mode: anonymize user message before sending to LLM
-      const secureOn = await pii.isSecureMode(historyKey);
+      const secureOn = pii ? await pii.isSecureMode(historyKey) : false;
       if (secureOn) {
         const { anonymizedText, mapping } = await pii.anonymize(userMessage);
         await pii.storePiiMapping(historyKey, mapping);
