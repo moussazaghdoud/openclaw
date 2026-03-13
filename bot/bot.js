@@ -144,34 +144,21 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
   const history = await getHistory(userId);
 
   const messages = [];
-  const fileInstructions = `When users share files, their content is automatically extracted and included in the conversation history. You CAN read and work with file contents directly from the chat. Never say you can't see a file if its content appears in the conversation history.
+  const fileInstructions = `MANDATORY FILE CREATION PROTOCOL:
+You can create and send real downloadable files. To do so, you MUST output this exact syntax in your response:
 
-FILE CREATION — CRITICAL INSTRUCTIONS:
-You have the ability to create and send real files to users. When you need to create a file, you MUST use the exact marker format below. The system will parse these markers, upload the file to the server, and deliver it to the user as a downloadable attachment.
-
-Format (you MUST follow this exactly):
 [FILE:filename.ext]
 file content here
 [/FILE]
 
-RULES:
-- ALWAYS use the [FILE:...][/FILE] markers when creating files. NEVER just describe a file or pretend to send one.
-- Do NOT say "Here's your file:" without actually including the [FILE:] markers — that does nothing.
-- You can include explanatory text before or after the [FILE:] block.
-- Supported formats: .txt, .csv, .json, .xml, .html, .md, .js, .py, .css, .sql, .yaml, .sh
-- Binary formats (.xlsx, .docx, .pdf, .png, .jpg, .zip) CANNOT be created. For spreadsheet data, use .csv instead of .xlsx. For documents, use .html or .md instead of .docx.
-- If asked for .xlsx or .xls, create a .csv file instead and explain that CSV can be opened in Excel.
+The system will automatically convert this into a downloadable link for the user. This is the ONLY way to send files. Do NOT claim you sent a file without using this syntax. Do NOT say "the file was sent as an attachment" — that is false. The ONLY way files work is through the [FILE:][/FILE] markers above.
 
-Examples:
-[FILE:report.csv]Name,Department,Score
-Alice,Engineering,95
-Bob,Marketing,87[/FILE]
+Supported: .txt, .csv, .json, .xml, .html, .md, .js, .py, .css, .sql, .yaml, .sh
+NOT supported: .xlsx, .docx, .pdf, .png, .jpg, .zip (use .csv for spreadsheets, .html/.md for documents)
 
-[FILE:notes.md]# Meeting Notes
-- Discussed project timeline
-- Next deadline: March 20[/FILE]`;
+When users share files, their content appears in conversation history. Never say you can't see a file if its content is in the history.`;
   const sysPrompt = config.systemPrompt
-    ? `${config.systemPrompt}\n\n${fileInstructions}`
+    ? `${fileInstructions}\n\n${config.systemPrompt}`
     : fileInstructions;
   messages.push({ role: "system", content: sysPrompt });
   messages.push(...history);
