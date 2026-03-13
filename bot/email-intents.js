@@ -86,13 +86,12 @@ function detectEmailIntent(message) {
     || message.match(/\b(?:show|get|find|search)\b.*\b(?:from|by)\s+(.+?)(?:\?|$|\.|and\b)/i)
     || message.match(/\b(?:what|any)\b.*\b(?:from)\s+(.+?)(?:\?|$|\.|and\b)/i)
     // "get/find/show the [last/latest] SENDER email" — e.g. "get the last ryanair email"
-    || message.match(/\b(?:get|find|show|open|read)\s+(?:(?:the|my|a)\s+)?(?:(?:last|latest|recent|new|most\s+recent)\s+)?(\w[\w\s.-]+?)\s+(?:email|mail|message)\b/i)
-    // "SENDER email" at start — e.g. "ryanair email"
-    || message.match(/^(\w[\w\s.-]+?)\s+(?:email|mail|message)/i);
+    || message.match(/\b(?:get|find|show|open|read)\s+(?:(?:the|my|a)\s+)?(?:(?:last|latest|recent|new|most\s+recent)\s+)?(\w[\w.-]+(?:\s+\w[\w.-]+)?)\s+(?:email|mail|message)\b/i);
   if (fromMatch) {
     const sender = (fromMatch[1] || fromMatch[2]).trim();
-    // Skip generic words that aren't senders
-    if (!/^(my|the|a|an|this|that|new|unread|recent|latest|last|urgent|important)$/i.test(sender)) {
+    // Skip generic words/phrases that aren't senders
+    if (!/^(my|the|a|an|this|that|new|unread|recent|latest|last|urgent|important|is|are|any|there|is there|is there any|do i have|have i|no|some|all|every)$/i.test(sender)
+      && sender.split(/\s+/).length <= 3) {
       // Check if there's an additional instruction after "and" or the email mention
       const extraMatch = message.match(/\b(?:email|mail|message)\b\s+(?:and|then|to)\s+(.+?)$/i)
         || message.match(/\band\s+(.+?)$/i);
@@ -109,7 +108,9 @@ function detectEmailIntent(message) {
   // Search emails
   const searchMatch = message.match(/\b(?:search|find|look for|look up)\b.*\b(?:email|mail)\b.*?(?:about|for|with|regarding|containing)\s+(.+?)(?:\?|$|\.)/i)
     || message.match(/\b(?:search|find)\b\s+(?:email|mail)s?\s+(.+?)(?:\?|$|\.)/i)
-    || message.match(/\b(?:email|mail)s?\s+(?:about|regarding|concerning)\s+(.+?)(?:\?|$|\.)/i);
+    || message.match(/\b(?:email|mail)s?\s+(?:about|regarding|concerning|for)\s+(.+?)(?:\?|$|\.)/i)
+    || message.match(/\b(?:any|is there|are there|do i have)\b.*\b(?:email|mail)s?\s+(?:about|for|regarding|concerning|with)\s+(.+?)(?:\?|$|\.)/i)
+    || message.match(/\b(?:any|is there|are there|do i have)\b.*\b(?:email|mail)s?\b.*\b(?:about|for|regarding)\s+(.+?)(?:\?|$|\.)/i);
   if (searchMatch) {
     return { type: "email_search", query: searchMatch[1].trim() };
   }
