@@ -244,7 +244,7 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
         try {
           const parsed = JSON.parse(result);
           if (parsed.success && parsed.download_url) {
-            fileLinks.push(`📎 **${parsed.filename}**: ${parsed.download_url}`);
+            fileLinks.push(`📎 ${parsed.filename}\n${parsed.download_url}`);
           }
         } catch {}
       }
@@ -1117,15 +1117,17 @@ const hostedFiles = new Map(); // id → { filename, content, mime, createdAt }
 const HOSTED_FILE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 app.get("/files/:id", async (req, res) => {
-  let file = hostedFiles.get(req.params.id);
+  // Strip trailing markdown chars (**,_,`) that may leak into URLs from chat formatting
+  const fileId = req.params.id.replace(/[*_`~\[\]()]+$/g, "");
+  let file = hostedFiles.get(fileId);
   // Fall back to Redis if not in memory (survives redeployments)
   if (!file && redis) {
     try {
-      const data = await redis.get(`file:${req.params.id}`);
+      const data = await redis.get(`file:${fileId}`);
       if (data) {
         const parsed = JSON.parse(data);
         if (parsed.binary && parsed.content) parsed.content = Buffer.from(parsed.content, "base64");
-        hostedFiles.set(req.params.id, parsed); // re-cache in memory
+        hostedFiles.set(fileId, parsed); // re-cache in memory
         file = parsed;
       }
     } catch (err) { console.warn(`${LOG} Redis file fetch error:`, err.message); }
