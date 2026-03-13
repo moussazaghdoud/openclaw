@@ -1151,6 +1151,30 @@ async function processBubbleCallback(body) {
       return;
     }
 
+    // "juju secure" / "juju unsecure" — intercept before LLM
+    if (pii && (contentLower.trim() === "juju secure" || contentLower.trim() === "juju unsecure")) {
+      const enabling = contentLower.trim() === "juju secure";
+      const histKey = `bubble:${body.conversation_id || roomJid}`;
+      await pii.setSecureMode(histKey, enabling);
+      const confirmMsg = enabling
+        ? "🔒 **Secure mode ON** — PII will be anonymized before reaching the AI. Send \"juju unsecure\" to turn it off."
+        : "🔓 **Secure mode OFF** — normal processing resumed.";
+      // Send confirmation via bubble
+      const bbl = roomJid ? bubbleByJid.get(roomJid) : null;
+      if (bbl) {
+        await sendMessageToBubble(bbl, confirmMsg);
+      } else if (body.conversation_id && s2sConnectionId && authToken) {
+        const host = rainbowHost || "openrainbow.com";
+        await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${body.conversation_id}/messages`, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ message: { body: confirmMsg, lang: "en" } }),
+        }).catch(e => console.warn(`${LOG} Failed to send secure-mode confirmation:`, e.message));
+      }
+      console.log(`${LOG} Secure mode ${enabling ? "ON" : "OFF"} for ${histKey} (bubble-intercept)`);
+      return;
+    }
+
     stats.received++;
     console.log(`${LOG} [${stats.received}] [BUBBLE-INTERCEPT] Message from ${fromJid}: ${content.substring(0, 80)}`);
 
@@ -1496,37 +1520,43 @@ async function start() {
         return;
       }
 
-      // "juju secure" / "juju unsecure" — toggle PII secure mode
-      if (pii && contentLower.trim() === "juju secure") {
-        await pii.setSecureMode(historyKey, true);
-        const secMsg = "🔒 **Secure mode ON** — PII will be anonymized before reaching the AI. Send \"juju unsecure\" to turn it off.";
-        const secConvId = rawConversationId || conversationId;
-        if (secConvId && s2sConnectionId && authToken) {
+      // "juju secure" / "juju unsecure" — toggle PII secure mode (intercept before LLM)
+      if (pii && (contentLower.trim() === "juju secure" || contentLower.trim() === "juju unsecure")) {
+        const enabling = contentLower.trim() === "juju secure";
+        await pii.setSecureMode(historyKey, enabling);
+        const confirmMsg = enabling
+          ? "🔒 **Secure mode ON** — PII will be anonymized before reaching the AI. Send \"juju unsecure\" to turn it off."
+          : "🔓 **Secure mode OFF** — normal processing resumed.";
+        console.log(`${LOG} Secure mode ${enabling ? "ON" : "OFF"} for ${historyKey}`);
+
+        // Try S2S REST first (works for both bubble and 1:1 if we have a conversation ID)
+        const piiConvId = rawConversationId || conversationId;
+        let piiSent = false;
+        if (piiConvId && s2sConnectionId && authToken) {
           try {
             const host = rainbowHost || "openrainbow.com";
-            await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${secConvId}/messages`, {
+            const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${piiConvId}/messages`, {
               method: "POST",
               headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ message: { body: secMsg, lang: "en" } }),
+              body: JSON.stringify({ message: { body: confirmMsg, lang: "en" } }),
             });
-          } catch (e) { console.warn(`${LOG} Failed to send secure-mode confirmation:`, e.message); }
+            piiSent = resp.ok;
+          } catch (e) { console.warn(`${LOG} S2S secure-mode confirm failed:`, e.message); }
         }
-        return;
-      }
-      if (pii && contentLower.trim() === "juju unsecure") {
-        await pii.setSecureMode(historyKey, false);
-        const unsecMsg = "🔓 **Secure mode OFF** — normal processing resumed.";
-        const unsecConvId = rawConversationId || conversationId;
-        if (unsecConvId && s2sConnectionId && authToken) {
+        // Fallback: resolve conversation via contact JID and use SDK
+        if (!piiSent && fromJid) {
           try {
-            const host = rainbowHost || "openrainbow.com";
-            await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${unsecConvId}/messages`, {
-              method: "POST",
-              headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ message: { body: unsecMsg, lang: "en" } }),
-            });
-          } catch (e) { console.warn(`${LOG} Failed to send unsecure-mode confirmation:`, e.message); }
+            const contact = await sdk.contacts.getContactByJid(fromJid);
+            if (contact) {
+              const conv = await sdk.conversations.openConversationForContact(contact);
+              if (conv) {
+                await sdk.im.sendMessageToConversation(conv, confirmMsg);
+                piiSent = true;
+              }
+            }
+          } catch (e) { console.warn(`${LOG} SDK secure-mode confirm failed:`, e.message); }
         }
+        if (!piiSent) console.warn(`${LOG} Could not send secure-mode confirmation to ${fromJid}`);
         return;
       }
 
