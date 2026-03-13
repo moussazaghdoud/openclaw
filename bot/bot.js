@@ -401,6 +401,7 @@ Do NOT upload files to tmpfiles.org, transfer.sh, or any external service. Do NO
     stream: false,
     user: userId,
     tools: TOOLS,
+    tool_choice: "auto",
   };
 
   const controller = new AbortController();
@@ -1414,6 +1415,53 @@ async function rewriteFileUrls(text) {
   return result;
 }
 
+/**
+ * Auto-detect file content in AI responses when the AI ignored tools.
+ * If the response contains a large code block and the user asked for a file,
+ * extract it, host it, and append a download link.
+ */
+function autoCreateFileFromResponse(responseText, userMessage) {
+  // Only trigger if user asked for file-like output
+  const fileRequestPattern = /\b(creat|generat|writ|mak|sav|export|produc|build|draft)\w*\b.*?\b(file|document|report|csv|html|script|code|spreadsheet|page)\b/i;
+  const userAskedForFile = fileRequestPattern.test(userMessage);
+  if (!userAskedForFile) return responseText;
+
+  // Already has a download link from our server — no need to intervene
+  const baseUrl = config.hostCallback || `http://localhost:${PORT}`;
+  if (responseText.includes(`${baseUrl}/files/`)) return responseText;
+
+  // Find large code blocks (>200 chars) in the response
+  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+  let bestBlock = null;
+  let bestLang = "";
+  let bestLen = 0;
+  let match;
+  while ((match = codeBlockRegex.exec(responseText)) !== null) {
+    if (match[2].length > bestLen) {
+      bestBlock = match[2];
+      bestLang = match[1].toLowerCase();
+      bestLen = match[2].length;
+    }
+  }
+
+  if (!bestBlock || bestLen < 200) return responseText;
+
+  // Determine filename from language hint
+  const extMap = {
+    html: "document.html", css: "styles.css", js: "script.js", javascript: "script.js",
+    python: "script.py", py: "script.py", json: "data.json", xml: "data.xml",
+    csv: "data.csv", sql: "query.sql", yaml: "config.yaml", yml: "config.yaml",
+    sh: "script.sh", bash: "script.sh", md: "document.md", markdown: "document.md",
+    txt: "document.txt", "": "document.txt",
+  };
+  const filename = extMap[bestLang] || `file.${bestLang || "txt"}`;
+
+  const url = hostFile(filename, bestBlock);
+  console.log(`${LOG} Auto-created file from code block: ${filename} (${bestLen} chars) -> ${url}`);
+
+  return `${responseText}\n\n📎 ${filename}\n${url}`;
+}
+
 // JSON API (for programmatic access)
 app.get("/api/status", (req, res) => {
   const bubbles = [];
@@ -2106,6 +2154,9 @@ async function start() {
 
       // Re-host any external file URLs (tmpfiles.org, etc.) on our server
       responseText = await rewriteFileUrls(responseText);
+
+      // Auto-create downloadable file if AI dumped content inline instead of using tools
+      responseText = autoCreateFileFromResponse(responseText, content);
 
       // Typing indicator OFF
       if (typingInterval) clearInterval(typingInterval);
