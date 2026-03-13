@@ -235,9 +235,18 @@ function detectIntent(userMessage) {
   for (const re of transPatterns) {
     const m = userMessage.match(re);
     if (m) {
+      // Check memory first, then any stored docx key
       for (const [key] of storedDocxFiles) {
         return { type: "translate_docx", language: m[1], docxKey: key };
       }
+      // Also try to find a docx filename mentioned in the message or conversation history
+      const docxMatch = userMessage.match(/[\w\s-]+\.docx?\b/i);
+      if (docxMatch) {
+        return { type: "translate_docx", language: m[1], docxKey: docxMatch[0].trim().toLowerCase() };
+      }
+      // No specific file found, but user asked to translate — use a generic key
+      // handleDocxTranslation will check Redis for any stored docx
+      return { type: "translate_docx", language: m[1], docxKey: "__last_docx__" };
     }
   }
 
@@ -279,21 +288,39 @@ function detectIntent(userMessage) {
 async function handleDocxTranslation(userId, userMessage, language, docxKey) {
   console.log(`${LOG} [INTENT] translate_docx: lang=${language}, file=${docxKey}`);
 
-  const stored = storedDocxFiles.get(docxKey);
-  if (!stored) {
-    // Try Redis
-    if (redis) {
-      try {
-        const b64 = await redis.get(`docx:${docxKey}`);
-        if (b64) storedDocxFiles.set(docxKey, { buffer: Buffer.from(b64, "base64"), storedAt: Date.now() });
-      } catch {}
-    }
+  let activeKey = docxKey;
+
+  // If no docx in memory for this key, scan Redis for any stored docx
+  if (!storedDocxFiles.get(activeKey) && redis) {
+    try {
+      // Try exact key first
+      let b64 = await redis.get(`docx:${activeKey}`);
+      if (!b64) {
+        // Scan Redis for any docx key
+        const keys = await redis.keys("docx:*");
+        if (keys.length > 0) {
+          // Use the most recent one (last in the list)
+          const foundKey = keys[keys.length - 1];
+          b64 = await redis.get(foundKey);
+          activeKey = foundKey.replace(/^docx:/, "");
+          console.log(`${LOG} Found docx in Redis: ${activeKey}`);
+        }
+      }
+      if (b64) {
+        storedDocxFiles.set(activeKey, { buffer: Buffer.from(b64, "base64"), storedAt: Date.now() });
+        console.log(`${LOG} Loaded docx from Redis: ${activeKey}`);
+      }
+    } catch (err) { console.warn(`${LOG} Redis docx load failed:`, err.message); }
   }
-  if (!storedDocxFiles.get(docxKey)) return null;
+
+  if (!storedDocxFiles.get(activeKey)) {
+    console.warn(`${LOG} No stored docx found for key: ${activeKey}`);
+    return `I don't have any document stored. Please share the .docx file first, then ask me to translate it.`;
+  }
 
   let paragraphs;
   try {
-    const zip = await JSZip.loadAsync(storedDocxFiles.get(docxKey).buffer);
+    const zip = await JSZip.loadAsync(storedDocxFiles.get(activeKey).buffer);
     const docXml = await zip.file("word/document.xml").async("string");
     paragraphs = [];
     const paraRegex = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g;
@@ -306,10 +333,10 @@ async function handleDocxTranslation(userId, userMessage, language, docxKey) {
     }
   } catch (err) {
     console.error(`${LOG} Docx paragraph extraction failed:`, err.message);
-    return null;
+    return `Sorry, I couldn't read the document. Please share it again.`;
   }
 
-  if (paragraphs.length === 0) return null;
+  if (paragraphs.length === 0) return `The document appears to have no text content to translate.`;
   console.log(`${LOG} Extracted ${paragraphs.length} paragraphs for translation`);
 
   // AI just translates — structured prompt, return JSON only
@@ -319,7 +346,7 @@ async function handleDocxTranslation(userId, userMessage, language, docxKey) {
 ${numberedParas}`;
 
   const translationResult = await callOpenClaw(userId, translationPrompt);
-  if (!translationResult?.content) return null;
+  if (!translationResult?.content) return `Sorry, the translation request timed out. Please try again.`;
 
   let translated;
   try {
@@ -330,13 +357,13 @@ ${numberedParas}`;
   } catch (err) {
     console.error(`${LOG} Failed to parse translation JSON:`, err.message);
     console.error(`${LOG} AI response: ${translationResult.content.substring(0, 500)}`);
-    return null;
+    return `Sorry, the translation failed. Please try again.`;
   }
 
   console.log(`${LOG} Got ${translated.length} translated paragraphs`);
 
   const result = await executeTranslateDocument({
-    source_filename: docxKey,
+    source_filename: activeKey,
     translated_paragraphs: translated,
   });
 
@@ -345,7 +372,7 @@ ${numberedParas}`;
     return `Here's your translated document (${language}):\n\n📎 ${parsed.filename}\n${parsed.download_url}`;
   }
   console.error(`${LOG} translate_document failed:`, parsed.error);
-  return null;
+  return `Sorry, something went wrong building the translated document. Please try again.`;
 }
 
 /**
@@ -379,7 +406,7 @@ Do NOT mention file paths, downloads, or tools.
 Start directly with the content.`;
 
   const result = await callOpenClaw(userId, contentPrompt);
-  if (!result?.content) return null;
+  if (!result?.content) return `Sorry, I couldn't generate the file content. Please try again.`;
 
   let content = result.content;
 
