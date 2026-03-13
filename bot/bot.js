@@ -276,6 +276,8 @@ function describeIntent(intent) {
       return `Analyzing emails for action items...`;
     case "email_briefing":
       return `Preparing inbox briefing...`;
+    case "email_compose_new":
+      return `Drafting email...`;
     case "email_draft_reply":
       return `Drafting reply...`;
     case "email_send_confirm":
