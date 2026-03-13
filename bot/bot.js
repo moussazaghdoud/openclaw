@@ -11,7 +11,6 @@ const express = require("express");
 const { createClient } = require("redis");
 let mammoth;
 try { mammoth = require("mammoth"); } catch (_) { mammoth = null; }
-const pii = require("./pii");
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
