@@ -12,7 +12,7 @@ const { createClient } = require("redis");
 let mammoth;
 try { mammoth = require("mammoth"); } catch (_) { mammoth = null; }
 let pii;
-try { pii = require("./pii"); } catch (_) { pii = null; }
+try { pii = require("./pii"); console.log("[OpenClawBot] PII module loaded OK"); } catch (e) { pii = null; console.warn("[OpenClawBot] PII module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -1521,6 +1521,7 @@ async function start() {
       }
 
       // "juju secure" / "juju unsecure" — toggle PII secure mode (intercept before LLM)
+      console.log(`${LOG} CMD check: pii=${!!pii}, contentLower="${contentLower.trim()}", match=${contentLower.trim() === "juju secure" || contentLower.trim() === "juju unsecure"}`);
       if (pii && (contentLower.trim() === "juju secure" || contentLower.trim() === "juju unsecure")) {
         const enabling = contentLower.trim() === "juju secure";
         await pii.setSecureMode(historyKey, enabling);
