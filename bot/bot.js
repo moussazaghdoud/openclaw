@@ -223,6 +223,26 @@ async function executeTranslateDocument(args) {
 // The bot decides what to do — the AI is just a content engine.
 // Returns: { type: "chat" | "translate_docx" | "create_file", ...metadata }
 
+/**
+ * Generate a short reformulation of the user's intent for immediate feedback.
+ */
+function describeIntent(intent) {
+  switch (intent.type) {
+    case "translate_docx":
+      return `Translating Word document to ${intent.language}...`;
+    case "translate_pdf":
+      return `Translating PDF to ${intent.language}...`;
+    case "translate_pptx":
+      return `Translating PowerPoint to ${intent.language}...`;
+    case "translate_any":
+      return `Translating document to ${intent.language}...`;
+    case "create_file":
+      return `Creating ${intent.format.toUpperCase()} file...`;
+    default:
+      return null; // no confirmation needed for regular chat
+  }
+}
+
 function detectIntent(userMessage) {
   const msg = userMessage.toLowerCase();
 
@@ -1997,6 +2017,13 @@ async function processBubbleCallback(body) {
     // Intent-driven processing (same as main handler)
     const intent = detectIntent(content);
     console.log(`${LOG} [BUBBLE-INTERCEPT] Intent: ${intent.type}`);
+
+    // Send short confirmation before starting the task
+    const confirmation = describeIntent(intent);
+    if (confirmation && bubble) {
+      sendMessageToBubble(bubble, confirmation).catch(() => {});
+    }
+
     let responseText = null;
 
     if (intent.type === "translate_docx") {
@@ -2516,6 +2543,18 @@ async function start() {
       // ── Intent-driven processing: bot decides, AI generates content ──
       const intent = detectIntent(content);
       console.log(`${LOG} Intent: ${intent.type} for ${fromName}`);
+
+      // Send short confirmation before starting the task
+      const confirmation = describeIntent(intent);
+      if (confirmation) {
+        try {
+          if (isBubble && targetBubble) {
+            sendMessageToBubble(targetBubble, confirmation).catch(() => {});
+          } else if (conversation) {
+            sdk.im.sendMessageToConversation(conversation, confirmation).catch(() => {});
+          }
+        } catch {}
+      }
 
       let responseText = null;
 
