@@ -286,6 +286,8 @@ function describeIntent(intent) {
       return `Marking emails as read...`;
     case "email_flag":
       return `Flagging email...`;
+    case "email_smart_query":
+      return `Checking your emails...`;
     default:
       return null; // no confirmation needed for regular chat
   }
