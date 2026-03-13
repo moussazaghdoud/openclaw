@@ -236,46 +236,36 @@ async function executeTranslateDocument(args) {
 
     let docXml = await docXmlFile.async("string");
 
-    // Extract paragraphs: each <w:p>...</w:p> block
-    const paraRegex = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g;
-    const paragraphs = docXml.match(paraRegex) || [];
-
-    // Filter to paragraphs that actually have text content
-    const textParas = [];
-    for (let i = 0; i < paragraphs.length; i++) {
-      const textContent = paragraphs[i].replace(/<[^>]+>/g, "").trim();
-      if (textContent.length > 0) {
-        textParas.push({ index: i, xml: paragraphs[i], text: textContent });
+    // Single-pass: replace text in paragraphs while preserving images/drawings
+    let textParaIndex = 0;
+    let totalTextParas = 0;
+    const newDocXml = docXml.replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, (paraXml) => {
+      // Skip paragraphs that contain images/drawings — leave them untouched
+      if (/<w:drawing\b|<w:pict\b|<mc:AlternateContent\b/.test(paraXml)) {
+        return paraXml;
       }
-    }
+      // Skip paragraphs with no text content
+      const textContent = paraXml.replace(/<[^>]+>/g, "").trim();
+      if (textContent.length === 0) return paraXml;
 
-    console.log(`${LOG} translate_document: ${textParas.length} text paragraphs, ${translated_paragraphs.length} translations`);
+      totalTextParas++;
+      // If we have a translation for this paragraph, replace the text
+      if (textParaIndex < translated_paragraphs.length) {
+        const newText = translated_paragraphs[textParaIndex++];
+        let first = true;
+        return paraXml.replace(/<w:t([^>]*)>[^<]*<\/w:t>/g, (match, attrs) => {
+          if (first) {
+            first = false;
+            const escaped = newText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+            return `<w:t${attrs}>${escaped}</w:t>`;
+          }
+          return `<w:t${attrs}></w:t>`;
+        });
+      }
+      return paraXml;
+    });
 
-    // Replace text in each paragraph that has content
-    const allParas = [...paragraphs]; // copy
-    const limit = Math.min(textParas.length, translated_paragraphs.length);
-    for (let i = 0; i < limit; i++) {
-      const para = textParas[i];
-      const newText = translated_paragraphs[i];
-      // Replace all <w:t> content: put translated text in the first <w:t>, empty the rest
-      let first = true;
-      const newParaXml = para.xml.replace(/<w:t([^>]*)>[^<]*<\/w:t>/g, (match, attrs) => {
-        if (first) {
-          first = false;
-          // Escape XML entities
-          const escaped = newText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-          return `<w:t${attrs}>${escaped}</w:t>`;
-        }
-        return `<w:t${attrs}></w:t>`;
-      });
-      allParas[para.index] = newParaXml;
-    }
-
-    // Rebuild document.xml by replacing each paragraph
-    let newDocXml = docXml;
-    for (let i = paragraphs.length - 1; i >= 0; i--) {
-      newDocXml = newDocXml.replace(paragraphs[i], allParas[i]);
-    }
+    console.log(`${LOG} translate_document: ${totalTextParas} text paragraphs found, ${textParaIndex} translated`);
 
     zip.file("word/document.xml", newDocXml);
     const newDocxBuf = await zip.generateAsync({ type: "nodebuffer" });
@@ -1967,10 +1957,13 @@ async function start() {
         }
       }
 
-      // Typing indicator ON
-      try {
-        if (conversation) sdk.im.sendIsTypingStateInConversation(conversation, true);
-      } catch {}
+      // Typing indicator ON — refresh every 5s so it persists when user switches conversations
+      let typingInterval = null;
+      const sendTyping = () => {
+        try { if (conversation) sdk.im.sendIsTypingStateInConversation(conversation, true); } catch {}
+      };
+      sendTyping();
+      typingInterval = setInterval(sendTyping, 5000);
 
       // Call OpenClaw (use historyKey so bubble messages share conversation context)
       // Append file context to the user message if a file was shared
@@ -2006,6 +1999,7 @@ async function start() {
       responseText = await rewriteFileUrls(responseText);
 
       // Typing indicator OFF
+      if (typingInterval) clearInterval(typingInterval);
       try {
         if (conversation) sdk.im.sendIsTypingStateInConversation(conversation, false);
       } catch {}
