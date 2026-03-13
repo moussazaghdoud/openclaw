@@ -11,7 +11,6 @@ const express = require("express");
 const { createClient } = require("redis");
 let mammoth;
 try { mammoth = require("mammoth"); } catch (_) { mammoth = null; }
-const pii = require("./pii");
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -259,7 +258,15 @@ async function uploadAndSendFile(filename, content, convId) {
   const mime = guessMime(filename);
   const host = rainbowHost || "openrainbow.com";
 
-  // Strategy 1: SDK internal REST helper (works for file downloads, should work for uploads)
+  // Helper: wrap a promise with a timeout so nothing hangs forever
+  function withTimeout(promise, ms, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+    ]);
+  }
+
+  // Strategy 1: SDK internal REST helper
   try {
     const restService = sdk._core?._rest;
     if (restService && typeof restService.post === "function") {
@@ -267,12 +274,12 @@ async function uploadAndSendFile(filename, content, convId) {
       const createBody = { fileName: filename, extension: filename.split(".").pop(), typeMIME: mime, size: buf.length };
       console.log(`${LOG} [S1] SDK REST POST ${createPath}`);
 
-      const createResult = await new Promise((resolve, reject) => {
+      const createResult = await withTimeout(new Promise((resolve, reject) => {
         restService.post(createPath, null, createBody, (err, response, body) => {
           if (err) return reject(err);
           resolve({ response, body });
         });
-      });
+      }), 10000, "S1 POST");
 
       const fileMeta = typeof createResult.body === "string" ? JSON.parse(createResult.body) : createResult.body;
       const fileId = fileMeta?.data?.id || fileMeta?.id;
@@ -280,12 +287,12 @@ async function uploadAndSendFile(filename, content, convId) {
 
       if (fileId && typeof restService.put === "function") {
         const uploadPath = `/api/rainbow/fileserver/v1.0/files/${fileId}`;
-        await new Promise((resolve, reject) => {
+        await withTimeout(new Promise((resolve, reject) => {
           restService.put(uploadPath, null, buf, mime, (err, response, body) => {
             if (err) return reject(err);
             resolve({ response, body });
           });
-        });
+        }), 10000, "S1 PUT");
         console.log(`${LOG} [S1] File uploaded: ${filename} (${buf.length} bytes)`);
         const fileUrl = `https://${host}/api/rainbow/fileserver/v1.0/files/${fileId}`;
         return { ok: true, url: fileUrl, fileId };
@@ -306,11 +313,11 @@ async function uploadAndSendFile(filename, content, convId) {
       console.log(`${LOG} [S2] fileStorage methods: ${methods.join(", ")}`);
 
       if (typeof fsSvc.createFileDescriptor === "function") {
-        const descriptor = await fsSvc.createFileDescriptor(filename, "", mime, buf.length);
+        const descriptor = await withTimeout(fsSvc.createFileDescriptor(filename, "", mime, buf.length), 10000, "S2 createFileDescriptor");
         console.log(`${LOG} [S2] descriptor: ${JSON.stringify(descriptor).substring(0, 300)}`);
         const fileId = descriptor?.id || descriptor?.data?.id;
         if (fileId && typeof fsSvc.uploadFileToStorage === "function") {
-          await fsSvc.uploadFileToStorage(descriptor, buf);
+          await withTimeout(fsSvc.uploadFileToStorage(descriptor, buf), 10000, "S2 uploadFileToStorage");
           console.log(`${LOG} [S2] File uploaded: ${filename}`);
           const fileUrl = `https://${host}/api/rainbow/fileserver/v1.0/files/${fileId}`;
           return { ok: true, url: fileUrl, fileId };
@@ -328,22 +335,22 @@ async function uploadAndSendFile(filename, content, convId) {
     try {
       const baseUrl = `https://${host}/api/rainbow/fileserver/v1.0/files`;
       console.log(`${LOG} [S3] Direct REST POST ${baseUrl}`);
-      const createResp = await fetch(baseUrl, {
+      const createResp = await withTimeout(fetch(baseUrl, {
         method: "POST",
         headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
         body: JSON.stringify({ fileName: filename, extension: filename.split(".").pop(), typeMIME: mime, size: buf.length }),
-      });
+      }), 10000, "S3 POST");
       const createText = await createResp.text();
       console.log(`${LOG} [S3] Response (${createResp.status}): ${createText.substring(0, 300)}`);
       if (createResp.ok) {
         const fileMeta = JSON.parse(createText);
         const fileId = fileMeta?.data?.id || fileMeta?.id;
         if (fileId) {
-          const uploadResp = await fetch(`${baseUrl}/${fileId}`, {
+          const uploadResp = await withTimeout(fetch(`${baseUrl}/${fileId}`, {
             method: "PUT",
             headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": mime },
             body: buf,
-          });
+          }), 10000, "S3 PUT");
           if (uploadResp.ok) {
             console.log(`${LOG} [S3] File uploaded: ${filename}`);
             return { ok: true, url: `${baseUrl}/${fileId}`, fileId };
