@@ -281,6 +281,104 @@ async function executeTranslateDocument(args) {
   }
 }
 
+/**
+ * Detect if the user is asking to translate a document, and if a stored docx exists.
+ * Returns { detected, language, docxKey } or { detected: false }.
+ */
+function detectTranslationRequest(userMessage) {
+  // Match: "translate ... to <language>", "traduire ... en <language>", etc.
+  const patterns = [
+    /\btranslat\w*\b.*?\bto\s+(\w+)/i,
+    /\btraduir\w*\b.*?\ben\s+(\w+)/i,
+    /\btraduc\w*\b.*?\b(?:al|a|en)\s+(\w+)/i,
+    /\bübersetzen?\b.*?\b(?:auf|ins?)\s+(\w+)/i,
+    /\btranslat\w*\b.*?\bin\s+(\w+)/i,
+  ];
+  for (const re of patterns) {
+    const m = userMessage.match(re);
+    if (m) {
+      // Check if there's a stored docx
+      for (const [key] of storedDocxFiles) {
+        return { detected: true, language: m[1], docxKey: key };
+      }
+    }
+  }
+  return { detected: false };
+}
+
+/**
+ * Handle docx translation: extract paragraphs, ask AI to translate them,
+ * rebuild the docx with translated text. Returns response text with download link,
+ * or null if it should fall through to normal processing.
+ */
+async function handleDocxTranslation(userId, userMessage, language, docxKey) {
+  console.log(`${LOG} Docx translation detected: lang=${language}, file=${docxKey}`);
+
+  // Extract paragraphs from the stored docx
+  const stored = storedDocxFiles.get(docxKey);
+  if (!stored) return null;
+
+  let paragraphs;
+  try {
+    const zip = await JSZip.loadAsync(stored.buffer);
+    const docXml = await zip.file("word/document.xml").async("string");
+    paragraphs = [];
+    const paraRegex = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g;
+    let match;
+    while ((match = paraRegex.exec(docXml)) !== null) {
+      const paraXml = match[0];
+      if (/<w:drawing\b|<w:pict\b|<mc:AlternateContent\b/.test(paraXml)) continue;
+      const text = paraXml.replace(/<[^>]+>/g, "").trim();
+      if (text.length > 0) paragraphs.push(text);
+    }
+  } catch (err) {
+    console.error(`${LOG} Docx paragraph extraction failed:`, err.message);
+    return null;
+  }
+
+  if (paragraphs.length === 0) return null;
+  console.log(`${LOG} Extracted ${paragraphs.length} paragraphs for translation`);
+
+  // Ask AI to translate the paragraphs — structured request
+  const numberedParas = paragraphs.map((p, i) => `[${i}] ${p}`).join("\n");
+  const translationPrompt = `Translate each numbered paragraph below to ${language}. Return ONLY a JSON array of translated strings (same order, same count). No explanation, no markdown, just the JSON array.
+
+${numberedParas}`;
+
+  const translationResult = await callOpenClaw(userId, translationPrompt);
+  if (!translationResult?.content) return null;
+
+  // Parse the JSON array from AI response
+  let translated;
+  try {
+    // Extract JSON array from response (AI might wrap it in markdown)
+    const jsonMatch = translationResult.content.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) throw new Error("No JSON array found");
+    translated = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(translated)) throw new Error("Not an array");
+  } catch (err) {
+    console.error(`${LOG} Failed to parse translation response:`, err.message);
+    console.error(`${LOG} AI response was: ${translationResult.content.substring(0, 500)}`);
+    return null;
+  }
+
+  console.log(`${LOG} Got ${translated.length} translated paragraphs`);
+
+  // Build the translated docx
+  const result = await executeTranslateDocument({
+    source_filename: docxKey,
+    translated_paragraphs: translated,
+  });
+
+  const parsed = JSON.parse(result);
+  if (parsed.success) {
+    return `Here's your translated document (${language}):\n\n📎 ${parsed.filename}\n${parsed.download_url}`;
+  } else {
+    console.error(`${LOG} translate_document failed:`, parsed.error);
+    return null;
+  }
+}
+
 async function callOpenClaw(userId, userMessage, attempt = 1) {
   const history = await getHistory(userId);
 
@@ -1969,23 +2067,34 @@ async function start() {
       // Append file context to the user message if a file was shared
       let userMessage = fileContext ? `${content}\n\n${fileContext}` : content;
 
-      // PII secure mode: anonymize user message before sending to LLM
-      const secureOn = pii ? await pii.isSecureMode(historyKey) : false;
-      if (secureOn) {
-        const { anonymizedText, mapping } = await pii.anonymize(userMessage);
-        await pii.storePiiMapping(historyKey, mapping);
-        userMessage = anonymizedText;
-        console.log(`${LOG} [PII] User message anonymized for ${historyKey}`);
+      // Detect docx translation request — handle it directly instead of relying on AI tools
+      const transReq = detectTranslationRequest(content);
+      let responseText = null;
+      if (transReq.detected) {
+        console.log(`${LOG} Translation request detected: ${transReq.language} for ${transReq.docxKey}`);
+        responseText = await handleDocxTranslation(historyKey, userMessage, transReq.language, transReq.docxKey);
       }
 
-      const result = await callOpenClaw(historyKey, userMessage);
-      let responseText = result?.content || config.fallbackMsg;
+      if (!responseText) {
+        // Normal AI call (no translation detected, or translation fell through)
+        // PII secure mode: anonymize user message before sending to LLM
+        const secureOn = pii ? await pii.isSecureMode(historyKey) : false;
+        if (secureOn) {
+          const { anonymizedText, mapping } = await pii.anonymize(userMessage);
+          await pii.storePiiMapping(historyKey, mapping);
+          userMessage = anonymizedText;
+          console.log(`${LOG} [PII] User message anonymized for ${historyKey}`);
+        }
 
-      // PII secure mode: deanonymize AI response
-      if (secureOn) {
-        const mapping = await pii.getPiiMapping(historyKey);
-        responseText = await pii.deanonymize(responseText, mapping);
-        console.log(`${LOG} [PII] AI response deanonymized for ${historyKey}`);
+        const result = await callOpenClaw(historyKey, userMessage);
+        responseText = result?.content || config.fallbackMsg;
+
+        // PII secure mode: deanonymize AI response
+        if (secureOn) {
+          const mapping = await pii.getPiiMapping(historyKey);
+          responseText = await pii.deanonymize(responseText, mapping);
+          console.log(`${LOG} [PII] AI response deanonymized for ${historyKey}`);
+        }
       }
 
       // Fallback: host any [FILE:] markers as downloadable links
