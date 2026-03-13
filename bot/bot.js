@@ -1038,6 +1038,30 @@ app.get("/api/last-download", (req, res) => {
   res.json(lastDownloadResult || { message: "no download attempted yet" });
 });
 
+// ── Self-hosted file downloads ──────────────────────────
+const hostedFiles = new Map(); // id → { filename, content, mime, createdAt }
+const HOSTED_FILE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+app.get("/files/:id", (req, res) => {
+  const file = hostedFiles.get(req.params.id);
+  if (!file) return res.status(404).send("File not found or expired");
+  res.setHeader("Content-Type", file.mime);
+  res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
+  res.send(Buffer.from(file.content, "utf-8"));
+});
+
+function hostFile(filename, content) {
+  const id = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const mime = guessMime(filename);
+  hostedFiles.set(id, { filename, content, mime, createdAt: Date.now() });
+  // Cleanup expired files
+  for (const [fid, f] of hostedFiles) {
+    if (Date.now() - f.createdAt > HOSTED_FILE_TTL) hostedFiles.delete(fid);
+  }
+  const baseUrl = config.hostCallback || `http://localhost:${PORT}`;
+  return `${baseUrl}/files/${id}`;
+}
+
 // JSON API (for programmatic access)
 app.get("/api/status", (req, res) => {
   const bubbles = [];
@@ -1194,8 +1218,12 @@ async function processBubbleCallback(body) {
     const result = await callOpenClaw(fromJid, content);
     let responseText = result?.content || config.fallbackMsg;
 
-    // Strip [FILE:] markers from AI response (file upload not yet supported)
-    responseText = responseText.replace(/\[FILE:([^\]]+)\]\n?[\s\S]*?\[\/FILE\]/g, "(file creation not available)");
+    // Host any [FILE:] markers as downloadable links
+    responseText = responseText.replace(/\[FILE:([^\]]+)\]\n?([\s\S]*?)\[\/FILE\]/g, (_, fname, fcontent) => {
+      const url = hostFile(fname.trim(), fcontent);
+      console.log(`${LOG} File hosted: ${fname.trim()} -> ${url}`);
+      return `📎 **${fname.trim()}**: ${url}`;
+    });
 
     // Send reply to bubble
     if (bubble) {
