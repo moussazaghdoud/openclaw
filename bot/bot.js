@@ -140,28 +140,49 @@ async function saveGreeted(jid) {
 
 // ── OpenClaw API ─────────────────────────────────────────
 
+// Tool definitions for OpenAI-compatible function calling
+const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "create_file",
+      description: "Create a file and return a download link to the user. Use this whenever the user asks you to create, generate, or write a file.",
+      parameters: {
+        type: "object",
+        properties: {
+          filename: { type: "string", description: "The filename with extension, e.g. report.csv, notes.txt, data.json" },
+          content: { type: "string", description: "The full text content of the file" },
+        },
+        required: ["filename", "content"],
+      },
+    },
+  },
+];
+
+// Execute a tool call and return the result
+function executeTool(toolCall) {
+  const { name, arguments: argsStr } = toolCall.function;
+  try {
+    const args = JSON.parse(argsStr);
+    if (name === "create_file") {
+      const url = hostFile(args.filename, args.content);
+      console.log(`${LOG} Tool create_file: ${args.filename} -> ${url}`);
+      return JSON.stringify({ success: true, filename: args.filename, download_url: url });
+    }
+    return JSON.stringify({ error: `Unknown tool: ${name}` });
+  } catch (err) {
+    console.error(`${LOG} Tool execution error:`, err.message);
+    return JSON.stringify({ error: err.message });
+  }
+}
+
 async function callOpenClaw(userId, userMessage, attempt = 1) {
   const history = await getHistory(userId);
 
   const messages = [];
-  const fileInstructions = `IMPORTANT — FILE HANDLING OVERRIDE:
-You are running inside a Rainbow chat bot. You do NOT have a filesystem. You do NOT have a workspace. Paths like /.openclaw/workspace/ do NOT exist and do NOT work here. NEVER reference filesystem paths.
-
-To send a file to the user, you MUST include this exact syntax in your response text:
-
-[FILE:filename.ext]
-file content here
-[/FILE]
-
-The bot will parse this, host the file, and replace it with a clickable download link. This is the ONLY way to create files. Any other method (filesystem paths, attachments, workspace references) will NOT work.
-
-Supported: .txt, .csv, .json, .xml, .html, .md, .js, .py, .css, .sql, .yaml, .sh
-NOT supported: .xlsx, .docx, .pdf, .png, .jpg, .zip (use .csv for spreadsheets, .html/.md for documents)
-
-When users share files, their content appears in conversation history. Never say you can't see a file if its content is in the history.`;
   const sysPrompt = config.systemPrompt
-    ? `${fileInstructions}\n\n${config.systemPrompt}`
-    : fileInstructions;
+    ? `${config.systemPrompt}\n\nWhen users share files, their content appears in conversation history. You can read and reference file contents directly. You do NOT have a filesystem or workspace — to create files, use the create_file tool.`
+    : "When users share files, their content appears in conversation history. You can read and reference file contents directly. You do NOT have a filesystem or workspace — to create files, use the create_file tool.";
   messages.push({ role: "system", content: sysPrompt });
   messages.push(...history);
   messages.push({ role: "user", content: userMessage });
@@ -172,6 +193,7 @@ When users share files, their content appears in conversation history. Never say
     max_tokens: config.maxTokens,
     stream: false,
     user: userId,
+    tools: TOOLS,
   };
 
   const controller = new AbortController();
@@ -199,7 +221,63 @@ When users share files, their content appears in conversation history. Never say
     }
 
     const data = await response.json();
-    const assistantMessage = data.choices?.[0]?.message?.content || "";
+    const choice = data.choices?.[0];
+    let assistantMessage = choice?.message?.content || "";
+
+    // Handle tool calls (function calling)
+    if (choice?.message?.tool_calls && choice.message.tool_calls.length > 0) {
+      console.log(`${LOG} AI requested ${choice.message.tool_calls.length} tool call(s)`);
+      const toolResults = [];
+      const fileLinks = [];
+
+      for (const tc of choice.message.tool_calls) {
+        const result = executeTool(tc);
+        toolResults.push({ role: "tool", tool_call_id: tc.id, content: result });
+        // Collect file links for the response
+        try {
+          const parsed = JSON.parse(result);
+          if (parsed.success && parsed.download_url) {
+            fileLinks.push(`📎 **${parsed.filename}**: ${parsed.download_url}`);
+          }
+        } catch {}
+      }
+
+      // Send tool results back to get the final response
+      const followUp = {
+        model: `openclaw:${config.agentId}`,
+        messages: [...messages, choice.message, ...toolResults],
+        max_tokens: config.maxTokens,
+        stream: false,
+        user: userId,
+      };
+
+      const controller2 = new AbortController();
+      const timeout2 = setTimeout(() => controller2.abort(), config.timeoutMs);
+      try {
+        const resp2 = await fetch(url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify(followUp),
+          signal: controller2.signal,
+        });
+        clearTimeout(timeout2);
+        if (resp2.ok) {
+          const data2 = await resp2.json();
+          assistantMessage = data2.choices?.[0]?.message?.content || "";
+        }
+      } catch (err2) {
+        clearTimeout(timeout2);
+        console.warn(`${LOG} Tool follow-up failed:`, err2.message);
+      }
+
+      // Append file links if they're not already in the response
+      if (fileLinks.length > 0) {
+        const linksText = fileLinks.join("\n");
+        if (!assistantMessage.includes(fileLinks[0])) {
+          assistantMessage = assistantMessage ? `${assistantMessage}\n\n${linksText}` : linksText;
+        }
+      }
+    }
 
     await addMessage(userId, "user", userMessage);
     await addMessage(userId, "assistant", assistantMessage);
@@ -1717,8 +1795,12 @@ async function start() {
         console.log(`${LOG} [PII] AI response deanonymized for ${historyKey}`);
       }
 
-      // Strip [FILE:] markers from AI response (file upload not yet supported)
-      responseText = responseText.replace(/\[FILE:([^\]]+)\]\n?[\s\S]*?\[\/FILE\]/g, "(file creation not available)");
+      // Fallback: host any [FILE:] markers as downloadable links
+      responseText = responseText.replace(/\[FILE:([^\]]+)\]\n?([\s\S]*?)\[\/FILE\]/g, (_, fname, fcontent) => {
+        const url = hostFile(fname.trim(), fcontent);
+        console.log(`${LOG} File hosted (fallback): ${fname.trim()} -> ${url}`);
+        return `📎 **${fname.trim()}**: ${url}`;
+      });
 
       // Typing indicator OFF
       try {
