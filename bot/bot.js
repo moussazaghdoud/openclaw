@@ -146,12 +146,12 @@ const TOOLS = [
     type: "function",
     function: {
       name: "create_file",
-      description: "Create a file and return a download link to the user. Use this whenever the user asks you to create, generate, or write a file.",
+      description: "Create a text-based file and return a download link. Use this when the user asks to create, generate, or write a file. IMPORTANT: Only text-based formats work (.txt, .csv, .json, .xml, .html, .md, .js, .py, .css, .sql, .yaml, .sh). For documents/Word files, ALWAYS use .html (Word opens HTML natively). NEVER use .docx/.xlsx/.pdf — these are binary and will be corrupted.",
       parameters: {
         type: "object",
         properties: {
-          filename: { type: "string", description: "The filename with extension, e.g. report.csv, notes.txt, data.json" },
-          content: { type: "string", description: "The full text content of the file" },
+          filename: { type: "string", description: "Filename with extension. Use .html for documents (NOT .docx), .csv for spreadsheets (NOT .xlsx), e.g. report.html, data.csv, notes.md" },
+          content: { type: "string", description: "The full text content of the file. For .html files, include proper HTML with inline CSS for formatting." },
         },
         required: ["filename", "content"],
       },
@@ -165,8 +165,14 @@ function executeTool(toolCall) {
   try {
     const args = JSON.parse(argsStr);
     if (name === "create_file") {
-      const url = hostFile(args.filename, args.content);
-      console.log(`${LOG} Tool create_file: ${args.filename} -> ${url}`);
+      // Force binary extensions to their text equivalents
+      let fname = args.filename;
+      const ext = (fname.split(".").pop() || "").toLowerCase();
+      if (["docx", "doc"].includes(ext)) fname = fname.replace(/\.docx?$/i, ".html");
+      if (["xlsx", "xls"].includes(ext)) fname = fname.replace(/\.xlsx?$/i, ".csv");
+      if (["pdf"].includes(ext)) fname = fname.replace(/\.pdf$/i, ".html");
+      const url = hostFile(fname, args.content);
+      console.log(`${LOG} Tool create_file: ${fname} -> ${url}`);
       return JSON.stringify({ success: true, filename: args.filename, download_url: url });
     }
     return JSON.stringify({ error: `Unknown tool: ${name}` });
