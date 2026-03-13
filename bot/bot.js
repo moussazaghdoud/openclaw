@@ -1168,56 +1168,8 @@ async function processBubbleCallback(body) {
     const result = await callOpenClaw(fromJid, content);
     let responseText = result?.content || config.fallbackMsg;
 
-    // Handle file creation markers in AI response
-    const { text: cleanedText, files } = parseFileMarkers(responseText);
-    if (files.length > 0) {
-      console.log(`${LOG} Found ${files.length} file marker(s) in AI response`);
-      // Get a conversation ID for file uploads
-      let fileConvId = null;
-      if (s2sConnectionId && authToken) {
-        // Try creating an S2S conversation for this bubble
-        if (bubble) {
-          try {
-            const host = rainbowHost || "openrainbow.com";
-            const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations`, {
-              method: "POST",
-              headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ conversation: { peerId: bubble.id } }),
-            });
-            const convText = await convResp.text();
-            console.log(`${LOG} File conv creation response (${convResp.status}): ${convText.substring(0, 300)}`);
-            try {
-              const convData = JSON.parse(convText);
-              fileConvId = convData?.data?.id || convData?.id;
-            } catch {}
-          } catch (err) {
-            console.warn(`${LOG} Failed to create conv for file upload:`, err.message);
-          }
-        }
-      } else {
-        console.warn(`${LOG} Cannot upload files: s2sConnectionId=${s2sConnectionId}, authToken=${authToken ? "OK" : "MISSING"}`);
-      }
-
-      let fileText = cleanedText;
-      if (fileConvId) {
-        for (const f of files) {
-          console.log(`${LOG} Uploading file ${f.filename} to convId=${fileConvId}...`);
-          const result2 = await uploadAndSendFile(f.filename, f.content, fileConvId);
-          console.log(`${LOG} File creation ${f.filename}: ${result2.ok ? "SUCCESS" : "FAILED"}${result2.url ? " url=" + result2.url : ""}`);
-          if (result2.ok && result2.url) {
-            fileText = fileText.replace(f.placeholder, `📎 ${f.filename}: ${result2.url}`);
-          } else {
-            fileText = fileText.replace(f.placeholder, `(failed to create ${f.filename})`);
-          }
-        }
-      } else {
-        console.warn(`${LOG} Cannot upload files: no conversation ID (bubble=${bubble?.name || "none"})`);
-        for (const f of files) {
-          fileText = fileText.replace(f.placeholder, `(could not upload ${f.filename})`);
-        }
-      }
-      responseText = fileText;
-    }
+    // Strip [FILE:] markers from AI response (file upload not yet supported)
+    responseText = responseText.replace(/\[FILE:([^\]]+)\]\n?[\s\S]*?\[\/FILE\]/g, "(file creation not available)");
 
     // Send reply to bubble
     if (bubble) {
@@ -1715,38 +1667,8 @@ async function start() {
         console.log(`${LOG} [PII] AI response deanonymized for ${historyKey}`);
       }
 
-      // Handle file creation markers in AI response
-      const { text: cleanedText, files: filesToSend } = parseFileMarkers(responseText);
-      if (filesToSend.length > 0) {
-        // Determine conversation ID for file upload
-        const fileUploadConvId = rawConversationId || conversation?.dbId || "";
-        let fileText = cleanedText;
-        if (fileUploadConvId && s2sConnectionId && authToken) {
-          // PII secure mode: deanonymize file content before uploading
-          if (secureOn) {
-            const fileMapping = await pii.getPiiMapping(historyKey);
-            for (const f of filesToSend) {
-              f.content = await pii.deanonymize(f.content, fileMapping);
-            }
-            console.log(`${LOG} [PII] File content deanonymized before upload for ${historyKey}`);
-          }
-          for (const f of filesToSend) {
-            const result2 = await uploadAndSendFile(f.filename, f.content, fileUploadConvId);
-            console.log(`${LOG} File creation ${f.filename}: ${result2.ok ? "SUCCESS" : "FAILED"}${result2.url ? " url=" + result2.url : ""}`);
-            if (result2.ok && result2.url) {
-              fileText = fileText.replace(f.placeholder, `📎 ${f.filename}: ${result2.url}`);
-            } else {
-              fileText = fileText.replace(f.placeholder, `(failed to create ${f.filename})`);
-            }
-          }
-        } else {
-          console.warn(`${LOG} Cannot upload files: no conversation ID or auth`);
-          for (const f of filesToSend) {
-            fileText = fileText.replace(f.placeholder, `(could not upload ${f.filename})`);
-          }
-        }
-        responseText = fileText;
-      }
+      // Strip [FILE:] markers from AI response (file upload not yet supported)
+      responseText = responseText.replace(/\[FILE:([^\]]+)\]\n?[\s\S]*?\[\/FILE\]/g, "(file creation not available)");
 
       // Typing indicator OFF
       try {
