@@ -374,26 +374,9 @@ async function handleDocxTranslation(userId, userMessage, language, docxKey) {
   if (paragraphs.length === 0) return `The document appears to have no text content to translate.`;
   console.log(`${LOG} Extracted ${paragraphs.length} paragraphs for translation`);
 
-  // AI just translates — structured prompt, return JSON only
-  const numberedParas = paragraphs.map((p, i) => `[${i}] ${p}`).join("\n");
-  const translationPrompt = `Translate each numbered paragraph below to ${language}. Return ONLY a JSON array of translated strings (same order, same count). No explanation, no markdown, just the JSON array.
-
-${numberedParas}`;
-
-  const translationResult = await callOpenClaw(userId, translationPrompt);
-  if (!translationResult?.content) return `Sorry, the translation request timed out. Please try again.`;
-
-  let translated;
-  try {
-    const jsonMatch = translationResult.content.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) throw new Error("No JSON array found");
-    translated = JSON.parse(jsonMatch[0]);
-    if (!Array.isArray(translated)) throw new Error("Not an array");
-  } catch (err) {
-    console.error(`${LOG} Failed to parse translation JSON:`, err.message);
-    console.error(`${LOG} AI response: ${translationResult.content.substring(0, 500)}`);
-    return `Sorry, the translation failed. Please try again.`;
-  }
+  // Translate via dedicated call (longer timeout, chunking, no history)
+  const translated = await callTranslation(paragraphs, language);
+  if (!translated) return `Sorry, the translation request failed. Please try again.`;
 
   console.log(`${LOG} Got ${translated.length} translated paragraphs`);
 
@@ -464,25 +447,9 @@ async function handlePdfTranslation(userId, userMessage, language, fileKey) {
   if (paragraphs.length === 0) return `The PDF appears to have no text content to translate.`;
   console.log(`${LOG} Extracted ${paragraphs.length} paragraphs from PDF for translation`);
 
-  // AI translates — structured prompt, return JSON only
-  const numberedParas = paragraphs.map((p, i) => `[${i}] ${p}`).join("\n");
-  const translationPrompt = `Translate each numbered paragraph below to ${language}. Return ONLY a JSON array of translated strings (same order, same count). No explanation, no markdown, just the JSON array.
-
-${numberedParas}`;
-
-  const translationResult = await callOpenClaw(userId, translationPrompt);
-  if (!translationResult?.content) return `Sorry, the translation request timed out. Please try again.`;
-
-  let translated;
-  try {
-    const jsonMatch = translationResult.content.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) throw new Error("No JSON array found");
-    translated = JSON.parse(jsonMatch[0]);
-    if (!Array.isArray(translated)) throw new Error("Not an array");
-  } catch (err) {
-    console.error(`${LOG} Failed to parse translation JSON:`, err.message);
-    return `Sorry, the translation failed. Please try again.`;
-  }
+  // Translate via dedicated call (longer timeout, chunking, no history)
+  const translated = await callTranslation(paragraphs, language);
+  if (!translated) return `Sorry, the translation request failed. Please try again.`;
 
   console.log(`${LOG} Got ${translated.length} translated paragraphs from PDF`);
 
@@ -623,25 +590,10 @@ async function handlePptxTranslation(userId, userMessage, language, fileKey) {
   if (allParagraphs.length === 0) return `The presentation appears to have no text content to translate.`;
   console.log(`${LOG} Extracted ${allParagraphs.length} text paragraphs from ${slideEntries.length} slides`);
 
-  // AI translates all paragraphs at once
-  const numberedParas = allParagraphs.map((p, i) => `[${i}] ${p.text}`).join("\n");
-  const translationPrompt = `Translate each numbered paragraph below to ${language}. Return ONLY a JSON array of translated strings (same order, same count). No explanation, no markdown, just the JSON array.
-
-${numberedParas}`;
-
-  const translationResult = await callOpenClaw(userId, translationPrompt);
-  if (!translationResult?.content) return `Sorry, the translation request timed out. Please try again.`;
-
-  let translated;
-  try {
-    const jsonMatch = translationResult.content.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) throw new Error("No JSON array found");
-    translated = JSON.parse(jsonMatch[0]);
-    if (!Array.isArray(translated)) throw new Error("Not an array");
-  } catch (err) {
-    console.error(`${LOG} Failed to parse PPTX translation JSON:`, err.message);
-    return `Sorry, the translation failed. Please try again.`;
-  }
+  // Translate via dedicated call (longer timeout, chunking, no history)
+  const pptxTexts = allParagraphs.map(p => p.text);
+  const translated = await callTranslation(pptxTexts, language);
+  if (!translated) return `Sorry, the translation request failed. Please try again.`;
 
   console.log(`${LOG} Got ${translated.length} translated paragraphs for PPTX`);
 
@@ -842,6 +794,73 @@ Do NOT mention tools, downloads, or file creation capabilities. Just answer natu
     }
     return null;
   }
+}
+
+/**
+ * Dedicated translation call — longer timeout, no conversation history, chunking for large docs.
+ * Returns the full translated JSON array or null on failure.
+ */
+async function callTranslation(paragraphs, language) {
+  const CHUNK_SIZE = 40; // max paragraphs per API call
+  const TRANSLATION_TIMEOUT = 180000; // 3 minutes per chunk
+
+  const allTranslated = [];
+
+  for (let start = 0; start < paragraphs.length; start += CHUNK_SIZE) {
+    const chunk = paragraphs.slice(start, start + CHUNK_SIZE);
+    const numberedParas = chunk.map((p, i) => `[${i}] ${p}`).join("\n");
+    const prompt = `Translate each numbered paragraph below to ${language}. Return ONLY a JSON array of translated strings (same order, same count). No explanation, no markdown, just the JSON array.
+
+${numberedParas}`;
+
+    console.log(`${LOG} Translation chunk ${Math.floor(start / CHUNK_SIZE) + 1}/${Math.ceil(paragraphs.length / CHUNK_SIZE)}: ${chunk.length} paragraphs`);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TRANSLATION_TIMEOUT);
+
+    try {
+      const response = await fetch(`${config.endpoint}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: `openclaw:${config.agentId}`,
+          messages: [
+            { role: "system", content: "You are a professional translator. Return ONLY the JSON array of translated strings. No commentary." },
+            { role: "user", content: prompt },
+          ],
+          max_tokens: config.maxTokens,
+          stream: false,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error(`${LOG} Translation API error: ${response.status} ${errText.substring(0, 200)}`);
+        return null;
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content || "";
+      const jsonMatch = content.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) { console.error(`${LOG} No JSON array in translation response`); return null; }
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (!Array.isArray(parsed)) { console.error(`${LOG} Translation response is not an array`); return null; }
+
+      allTranslated.push(...parsed);
+      console.log(`${LOG} Chunk translated: got ${parsed.length} paragraphs`);
+    } catch (err) {
+      clearTimeout(timeout);
+      console.error(`${LOG} Translation call failed:`, err.message);
+      return null;
+    }
+  }
+
+  return allTranslated;
 }
 
 // ── File Creation & Upload ───────────────────────────────
