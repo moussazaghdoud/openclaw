@@ -19,6 +19,10 @@ let pii;
 try { pii = require("./pii"); console.log("[OpenClawBot] PII module loaded OK"); } catch (e) { pii = null; console.warn("[OpenClawBot] PII module failed to load:", e.message); }
 let m365Auth;
 try { m365Auth = require("./auth"); console.log("[OpenClawBot] M365 auth module loaded OK"); } catch (e) { m365Auth = null; console.warn("[OpenClawBot] M365 auth module failed to load:", e.message); }
+let m365Graph;
+try { m365Graph = require("./graph"); console.log("[OpenClawBot] M365 graph module loaded OK"); } catch (e) { m365Graph = null; console.warn("[OpenClawBot] M365 graph module failed to load:", e.message); }
+let emailIntents;
+try { emailIntents = require("./email-intents"); console.log("[OpenClawBot] Email intents module loaded OK"); } catch (e) { emailIntents = null; console.warn("[OpenClawBot] Email intents module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -90,6 +94,10 @@ async function initRedis() {
     console.log(`${LOG} Loaded ${greeted.size} greeted users from Redis`);
     if (pii) pii.init(redis);
     if (m365Auth) m365Auth.init(redis);
+    if (emailIntents && m365Auth && m365Graph) {
+      emailIntents.init({ graphModule: m365Graph, authModule: m365Auth, callOpenClaw, pii, redis });
+      console.log(`${LOG} Email intents module initialized`);
+    }
   } catch (err) {
     console.warn(`${LOG} Redis connection failed, falling back to in-memory:`, err.message);
     redis = null;
@@ -241,6 +249,28 @@ function describeIntent(intent) {
       return `Translating document to ${intent.language}...`;
     case "create_file":
       return `Creating ${intent.format.toUpperCase()} file...`;
+    case "email_summarize_unread":
+      return `Checking your unread emails...`;
+    case "email_list_recent":
+      return `Fetching recent emails...`;
+    case "email_from_sender":
+      return `Searching emails from ${intent.sender}...`;
+    case "email_search":
+      return `Searching emails for "${intent.query}"...`;
+    case "email_action_needed":
+      return `Analyzing emails for action items...`;
+    case "email_briefing":
+      return `Preparing inbox briefing...`;
+    case "email_draft_reply":
+      return `Drafting reply...`;
+    case "email_send_confirm":
+      return `Sending email...`;
+    case "email_archive":
+      return `Archiving email...`;
+    case "email_mark_read":
+      return `Marking emails as read...`;
+    case "email_flag":
+      return `Flagging email...`;
     default:
       return null; // no confirmation needed for regular chat
   }
@@ -313,7 +343,13 @@ function detectIntent(userMessage) {
     }
   }
 
-  // 3. Default — regular chat
+  // 3. Email commands (if M365 is configured)
+  if (emailIntents) {
+    const emailIntent = emailIntents.detectEmailIntent(userMessage);
+    if (emailIntent) return emailIntent;
+  }
+
+  // 4. Default — regular chat
   return { type: "chat" };
 }
 
@@ -2115,6 +2151,8 @@ async function processBubbleCallback(body) {
       responseText = await handleAnyTranslation(fromJid, content, intent.language);
     } else if (intent.type === "create_file") {
       responseText = await handleCreateFile(fromJid, content, intent.format);
+    } else if (intent.type.startsWith("email_") && emailIntents) {
+      responseText = await emailIntents.handleEmailIntent(fromJid, intent, content);
     }
 
     if (!responseText) {
@@ -2691,6 +2729,76 @@ async function start() {
       // Append file context to the user message if a file was shared
       let userMessage = fileContext ? `${content}\n\n${fileContext}` : content;
 
+      // ── Email context: check for pending actions and number-only replies ──
+      if (emailIntents && redis) {
+        const trimmed = content.trim().toLowerCase();
+        // "yes" with a pending email send
+        if (trimmed === "yes" || trimmed === "oui") {
+          const pending = await redis.get(`pending:${fromJid}`).catch(() => null);
+          if (pending) {
+            const tokenResult = await m365Auth.getValidToken(fromJid);
+            if (tokenResult) {
+              const responseText = await emailIntents.handleEmailIntent(fromJid, { type: "email_send_confirm" }, content);
+              // Send response and return early
+              const convId = rawConversationId || conversationId;
+              if (convId && s2sConnectionId && authToken) {
+                const host = rainbowHost || "openrainbow.com";
+                await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+                  method: "POST", headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({ message: { body: responseText, lang: "en" } }),
+                }).catch(() => {});
+              } else if (conversation) {
+                await sdk.im.sendMessageToConversation(conversation, responseText).catch(() => {});
+              }
+              if (typingInterval) clearInterval(typingInterval);
+              return;
+            }
+          }
+        }
+        // "no" cancels pending action
+        if (trimmed === "no" || trimmed === "non" || trimmed === "cancel") {
+          const pending = await redis.get(`pending:${fromJid}`).catch(() => null);
+          if (pending) {
+            await redis.del(`pending:${fromJid}`);
+            const responseText = "Email cancelled.";
+            const convId = rawConversationId || conversationId;
+            if (convId && s2sConnectionId && authToken) {
+              const host = rainbowHost || "openrainbow.com";
+              await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+                method: "POST", headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ message: { body: responseText, lang: "en" } }),
+              }).catch(() => {});
+            } else if (conversation) {
+              await sdk.im.sendMessageToConversation(conversation, responseText).catch(() => {});
+            }
+            if (typingInterval) clearInterval(typingInterval);
+            return;
+          }
+        }
+        // Number-only reply → email detail if email context exists
+        const numMatch = trimmed.match(/^(\d+)$/);
+        if (numMatch) {
+          const emailContext = await redis.get(`email:context:${fromJid}`).catch(() => null);
+          if (emailContext) {
+            const responseText = await emailIntents.handleEmailIntent(fromJid, { type: "email_detail_number", number: parseInt(numMatch[1], 10) }, content);
+            if (responseText) {
+              const convId = rawConversationId || conversationId;
+              if (convId && s2sConnectionId && authToken) {
+                const host = rainbowHost || "openrainbow.com";
+                await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+                  method: "POST", headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({ message: { body: responseText, lang: "en" } }),
+                }).catch(() => {});
+              } else if (conversation) {
+                await sdk.im.sendMessageToConversation(conversation, responseText).catch(() => {});
+              }
+              if (typingInterval) clearInterval(typingInterval);
+              return;
+            }
+          }
+        }
+      }
+
       // ── Intent-driven processing: bot decides, AI generates content ──
       const intent = detectIntent(content);
       console.log(`${LOG} Intent: ${intent.type} for ${fromName}`);
@@ -2719,6 +2827,8 @@ async function start() {
         responseText = await handleAnyTranslation(historyKey, userMessage, intent.language);
       } else if (intent.type === "create_file") {
         responseText = await handleCreateFile(historyKey, userMessage, intent.format);
+      } else if (intent.type.startsWith("email_") && emailIntents) {
+        responseText = await emailIntents.handleEmailIntent(fromJid, intent, userMessage);
       }
 
       if (!responseText) {
