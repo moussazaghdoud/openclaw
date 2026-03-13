@@ -1368,7 +1368,9 @@ app.get("/files/:id", async (req, res) => {
     console.log(`${LOG} Serving file: ${file.filename} (${buf.length} bytes, mime=${file.mime})`);
     res.setHeader("Content-Type", file.mime || "application/octet-stream");
     res.setHeader("Content-Length", buf.length);
-    res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
+    // Sanitize filename for Content-Disposition header (no special chars)
+    const safeFilename = file.filename.replace(/[^\w.\-]/g, "_");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"`);
     res.end(buf);
   } catch (err) {
     console.error(`${LOG} File serve error:`, err);
