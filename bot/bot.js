@@ -646,8 +646,15 @@ function guessMime(filename) {
     md: "text/markdown", js: "application/javascript", py: "text/x-python",
     css: "text/css", sql: "text/x-sql", yaml: "application/x-yaml",
     yml: "application/x-yaml", sh: "text/x-shellscript",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    doc: "application/msword",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    xls: "application/vnd.ms-excel",
+    pdf: "application/pdf",
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+    svg: "image/svg+xml", zip: "application/zip",
   };
-  return mimes[ext] || "text/plain";
+  return mimes[ext] || "application/octet-stream";
 }
 
 // ── File Download ────────────────────────────────────────
@@ -1320,25 +1327,38 @@ const storedDocxFiles = new Map(); // filename → { buffer, storedAt }
 const HOSTED_FILE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 app.get("/files/:id", async (req, res) => {
-  // Strip trailing markdown chars (**,_,`) that may leak into URLs from chat formatting
-  const fileId = req.params.id.replace(/[*_`~\[\]()]+$/g, "");
-  let file = hostedFiles.get(fileId);
-  // Fall back to Redis if not in memory (survives redeployments)
-  if (!file && redis) {
-    try {
-      const data = await redis.get(`file:${fileId}`);
-      if (data) {
-        const parsed = JSON.parse(data);
-        if (parsed.binary && parsed.content) parsed.content = Buffer.from(parsed.content, "base64");
-        hostedFiles.set(fileId, parsed); // re-cache in memory
-        file = parsed;
-      }
-    } catch (err) { console.warn(`${LOG} Redis file fetch error:`, err.message); }
+  try {
+    // Strip trailing markdown chars (**,_,`) that may leak into URLs from chat formatting
+    const fileId = req.params.id.replace(/[*_`~\[\]()]+$/g, "");
+    console.log(`${LOG} File download request: ${fileId}`);
+    let file = hostedFiles.get(fileId);
+    // Fall back to Redis if not in memory (survives redeployments)
+    if (!file && redis) {
+      try {
+        const data = await redis.get(`file:${fileId}`);
+        if (data) {
+          const parsed = JSON.parse(data);
+          if (parsed.binary && parsed.content) parsed.content = Buffer.from(parsed.content, "base64");
+          hostedFiles.set(fileId, parsed); // re-cache in memory
+          file = parsed;
+          console.log(`${LOG} File loaded from Redis: ${fileId} (${parsed.filename})`);
+        }
+      } catch (err) { console.warn(`${LOG} Redis file fetch error:`, err.message); }
+    }
+    if (!file) {
+      console.warn(`${LOG} File not found: ${fileId}`);
+      return res.status(404).send("File not found or expired");
+    }
+    const buf = file.binary ? file.content : Buffer.from(file.content, "utf-8");
+    console.log(`${LOG} Serving file: ${file.filename} (${buf.length} bytes, mime=${file.mime})`);
+    res.setHeader("Content-Type", file.mime || "application/octet-stream");
+    res.setHeader("Content-Length", buf.length);
+    res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
+    res.end(buf);
+  } catch (err) {
+    console.error(`${LOG} File serve error:`, err);
+    if (!res.headersSent) res.status(500).send("Internal error serving file");
   }
-  if (!file) return res.status(404).send("File not found or expired");
-  res.setHeader("Content-Type", file.mime);
-  res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
-  res.send(file.binary ? file.content : Buffer.from(file.content, "utf-8"));
 });
 
 function hostFile(filename, content, binary = false) {
