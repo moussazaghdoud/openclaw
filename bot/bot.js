@@ -11,6 +11,7 @@ const express = require("express");
 const { createClient } = require("redis");
 let mammoth;
 try { mammoth = require("mammoth"); } catch (_) { mammoth = null; }
+const pii = require("./pii");
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -35,6 +36,9 @@ const config = {
   timeoutMs: parseInt(process.env.OPENCLAW_TIMEOUT_MS || "60000", 10),
   welcomeMsg: process.env.OPENCLAW_WELCOME_MSG || "",
   fallbackMsg: process.env.OPENCLAW_FALLBACK_MSG || "Sorry, I'm temporarily unavailable. Please try again later.",
+
+  // Presidio PII service
+  presidioUrl: process.env.PRESIDIO_URL || "",
 };
 
 // ── Validate ─────────────────────────────────────────────
@@ -77,6 +81,7 @@ async function initRedis() {
     const greetedArr = await redis.sMembers("greeted");
     greetedArr.forEach((jid) => greeted.add(jid));
     console.log(`${LOG} Loaded ${greeted.size} greeted users from Redis`);
+    pii.init(redis);
   } catch (err) {
     console.warn(`${LOG} Redis connection failed, falling back to in-memory:`, err.message);
     redis = null;
@@ -249,79 +254,109 @@ function parseFileMarkers(response) {
  * Upload a file to Rainbow fileserver and send it in a conversation.
  */
 async function uploadAndSendFile(filename, content, convId) {
-  console.log(`${LOG} uploadAndSendFile: filename=${filename}, contentLen=${content.length}, convId=${convId}, auth=${authToken ? "OK" : "MISSING"}, cnxId=${s2sConnectionId || "MISSING"}`);
-  if (!authToken || !s2sConnectionId) {
-    console.warn(`${LOG} Cannot upload file: no auth/connection`);
-    return { ok: false, url: null };
-  }
-
-  const host = rainbowHost || "openrainbow.com";
+  console.log(`${LOG} uploadAndSendFile: filename=${filename}, contentLen=${content.length}, convId=${convId}`);
   const buf = Buffer.from(content, "utf-8");
   const mime = guessMime(filename);
+  const host = rainbowHost || "openrainbow.com";
 
+  // Strategy 1: SDK internal REST helper (works for file downloads, should work for uploads)
   try {
-    // Step 1: Create file entry on Rainbow fileserver
-    const createBody = { fileName: filename, extension: filename.split(".").pop(), typeMIME: mime, size: buf.length };
-    console.log(`${LOG} File create request: ${JSON.stringify(createBody)}`);
-    const createResp = await fetch(`https://${host}/api/rainbow/fileserver/v1.0/files`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${authToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(createBody),
-    });
+    const restService = sdk._core?._rest;
+    if (restService && typeof restService.post === "function") {
+      const createPath = "/api/rainbow/fileserver/v1.0/files";
+      const createBody = { fileName: filename, extension: filename.split(".").pop(), typeMIME: mime, size: buf.length };
+      console.log(`${LOG} [S1] SDK REST POST ${createPath}`);
 
-    const createText = await createResp.text();
-    console.log(`${LOG} File create response (${createResp.status}): ${createText.substring(0, 500)}`);
-    if (!createResp.ok) {
-      return { ok: false, url: null };
+      const createResult = await new Promise((resolve, reject) => {
+        restService.post(createPath, null, createBody, (err, response, body) => {
+          if (err) return reject(err);
+          resolve({ response, body });
+        });
+      });
+
+      const fileMeta = typeof createResult.body === "string" ? JSON.parse(createResult.body) : createResult.body;
+      const fileId = fileMeta?.data?.id || fileMeta?.id;
+      console.log(`${LOG} [S1] File created: ${fileId}, resp: ${JSON.stringify(fileMeta).substring(0, 300)}`);
+
+      if (fileId && typeof restService.put === "function") {
+        const uploadPath = `/api/rainbow/fileserver/v1.0/files/${fileId}`;
+        await new Promise((resolve, reject) => {
+          restService.put(uploadPath, null, buf, mime, (err, response, body) => {
+            if (err) return reject(err);
+            resolve({ response, body });
+          });
+        });
+        console.log(`${LOG} [S1] File uploaded: ${filename} (${buf.length} bytes)`);
+        const fileUrl = `https://${host}/api/rainbow/fileserver/v1.0/files/${fileId}`;
+        return { ok: true, url: fileUrl, fileId };
+      }
+    } else {
+      const methods = restService ? Object.getOwnPropertyNames(Object.getPrototypeOf(restService)).filter(m => /post|put|get|send|upload|file/i.test(m)).join(", ") : "no restService";
+      console.log(`${LOG} [S1] restService.post not available, methods: ${methods}`);
     }
+  } catch (err) {
+    console.warn(`${LOG} [S1] SDK REST upload failed:`, err.message);
+  }
 
-    const fileMeta = JSON.parse(createText);
-    const fileId = fileMeta.data?.id || fileMeta.id;
-    console.log(`${LOG} File entry created: ${fileId}`);
+  // Strategy 2: SDK fileStorage service
+  try {
+    const fsSvc = sdk.fileStorage || sdk._core?._fileStorage || sdk._core?.fileStorage;
+    if (fsSvc) {
+      const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(fsSvc)).filter(m => /upload|create|file|descriptor/i.test(m));
+      console.log(`${LOG} [S2] fileStorage methods: ${methods.join(", ")}`);
 
-    // Step 2: Upload file content
-    const uploadResp = await fetch(`https://${host}/api/rainbow/fileserver/v1.0/files/${fileId}`, {
-      method: "PUT",
-      headers: {
-        "Authorization": `Bearer ${authToken}`,
-        "Content-Type": mime,
-        "Content-Length": String(buf.length),
-      },
-      body: buf,
-    });
-
-    if (!uploadResp.ok) {
-      console.warn(`${LOG} File upload failed (${uploadResp.status}): ${await uploadResp.text().catch(() => "")}`);
-      return { ok: false, url: null };
+      if (typeof fsSvc.createFileDescriptor === "function") {
+        const descriptor = await fsSvc.createFileDescriptor(filename, "", mime, buf.length);
+        console.log(`${LOG} [S2] descriptor: ${JSON.stringify(descriptor).substring(0, 300)}`);
+        const fileId = descriptor?.id || descriptor?.data?.id;
+        if (fileId && typeof fsSvc.uploadFileToStorage === "function") {
+          await fsSvc.uploadFileToStorage(descriptor, buf);
+          console.log(`${LOG} [S2] File uploaded: ${filename}`);
+          const fileUrl = `https://${host}/api/rainbow/fileserver/v1.0/files/${fileId}`;
+          return { ok: true, url: fileUrl, fileId };
+        }
+      }
+    } else {
+      console.log(`${LOG} [S2] No fileStorage service found`);
     }
+  } catch (err) {
+    console.warn(`${LOG} [S2] SDK fileStorage failed:`, err.message);
+  }
 
-    console.log(`${LOG} File uploaded: ${filename} (${buf.length} bytes)`);
-
-    const fileUrl = `https://${host}/api/rainbow/fileserver/v1.0/files/${fileId}`;
-
-    // Step 3: Try to share the file (add viewers) so recipients can download
+  // Strategy 3: Direct REST with Bearer token
+  if (authToken) {
     try {
-      await fetch(`https://${host}/api/rainbow/fileserver/v1.0/files/${fileId}/viewers`, {
+      const baseUrl = `https://${host}/api/rainbow/fileserver/v1.0/files`;
+      console.log(`${LOG} [S3] Direct REST POST ${baseUrl}`);
+      const createResp = await fetch(baseUrl, {
         method: "POST",
         headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ viewerId: convId, type: "conversation" }),
+        body: JSON.stringify({ fileName: filename, extension: filename.split(".").pop(), typeMIME: mime, size: buf.length }),
       });
-      console.log(`${LOG} File shared with conversation ${convId}`);
-    } catch (shareErr) {
-      console.warn(`${LOG} File share (viewers) failed:`, shareErr.message);
+      const createText = await createResp.text();
+      console.log(`${LOG} [S3] Response (${createResp.status}): ${createText.substring(0, 300)}`);
+      if (createResp.ok) {
+        const fileMeta = JSON.parse(createText);
+        const fileId = fileMeta?.data?.id || fileMeta?.id;
+        if (fileId) {
+          const uploadResp = await fetch(`${baseUrl}/${fileId}`, {
+            method: "PUT",
+            headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": mime },
+            body: buf,
+          });
+          if (uploadResp.ok) {
+            console.log(`${LOG} [S3] File uploaded: ${filename}`);
+            return { ok: true, url: `${baseUrl}/${fileId}`, fileId };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`${LOG} [S3] Direct REST failed:`, err.message);
     }
-
-    // Step 4: File uploaded successfully — the caller will include the download URL in the text response
-    // No need to send a separate message here; the URL is returned to the caller
-    console.log(`${LOG} File uploaded to conversation: ${filename} (url=${fileUrl})`);
-    return { ok: true, url: fileUrl, fileId };
-  } catch (err) {
-    console.error(`${LOG} uploadAndSendFile error:`, err.message);
-    return { ok: false, url: null };
   }
+
+  console.error(`${LOG} All file upload strategies failed for ${filename}`);
+  return { ok: false, url: null };
 }
 
 function guessMime(filename) {
@@ -1417,6 +1452,15 @@ async function start() {
         // Store file context in conversation history so follow-up messages can reference it
         const fHistoryKey = (rawCb?.is_group && (rawCb?.conversation_id || ""))
           ? `bubble:${rawCb.conversation_id}` : fromJid;
+
+        // PII secure mode: anonymize file content before storing in history
+        if (await pii.isSecureMode(fHistoryKey)) {
+          const { anonymizedText, mapping } = await pii.anonymize(fileContext);
+          await pii.storePiiMapping(fHistoryKey, mapping);
+          fileContext = anonymizedText;
+          console.log(`${LOG} [PII] File content anonymized for ${fHistoryKey}`);
+        }
+
         await addMessage(fHistoryKey, "user", `[${fromName} shared a file]\n${fileContext}`);
 
         // Send confirmation to user
@@ -1488,6 +1532,40 @@ async function start() {
         activeConversations.delete(historyKey);
         console.log(`${LOG} Sleep command: bot going to sleep in ${historyKey}`);
         await addMessage(historyKey, "user", `[${fromName}]: sleep`);
+        return;
+      }
+
+      // "juju secure" / "juju unsecure" — toggle PII secure mode
+      if (contentLower.trim() === "juju secure") {
+        await pii.setSecureMode(historyKey, true);
+        const secMsg = "🔒 **Secure mode ON** — PII will be anonymized before reaching the AI. Send \"juju unsecure\" to turn it off.";
+        const secConvId = rawConversationId || conversationId;
+        if (secConvId && s2sConnectionId && authToken) {
+          try {
+            const host = rainbowHost || "openrainbow.com";
+            await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${secConvId}/messages`, {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ message: { body: secMsg, lang: "en" } }),
+            });
+          } catch (e) { console.warn(`${LOG} Failed to send secure-mode confirmation:`, e.message); }
+        }
+        return;
+      }
+      if (contentLower.trim() === "juju unsecure") {
+        await pii.setSecureMode(historyKey, false);
+        const unsecMsg = "🔓 **Secure mode OFF** — normal processing resumed.";
+        const unsecConvId = rawConversationId || conversationId;
+        if (unsecConvId && s2sConnectionId && authToken) {
+          try {
+            const host = rainbowHost || "openrainbow.com";
+            await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${unsecConvId}/messages`, {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ message: { body: unsecMsg, lang: "en" } }),
+            });
+          } catch (e) { console.warn(`${LOG} Failed to send unsecure-mode confirmation:`, e.message); }
+        }
         return;
       }
 
@@ -1609,9 +1687,26 @@ async function start() {
 
       // Call OpenClaw (use historyKey so bubble messages share conversation context)
       // Append file context to the user message if a file was shared
-      const userMessage = fileContext ? `${content}\n\n${fileContext}` : content;
+      let userMessage = fileContext ? `${content}\n\n${fileContext}` : content;
+
+      // PII secure mode: anonymize user message before sending to LLM
+      const secureOn = await pii.isSecureMode(historyKey);
+      if (secureOn) {
+        const { anonymizedText, mapping } = await pii.anonymize(userMessage);
+        await pii.storePiiMapping(historyKey, mapping);
+        userMessage = anonymizedText;
+        console.log(`${LOG} [PII] User message anonymized for ${historyKey}`);
+      }
+
       const result = await callOpenClaw(historyKey, userMessage);
       let responseText = result?.content || config.fallbackMsg;
+
+      // PII secure mode: deanonymize AI response
+      if (secureOn) {
+        const mapping = await pii.getPiiMapping(historyKey);
+        responseText = await pii.deanonymize(responseText, mapping);
+        console.log(`${LOG} [PII] AI response deanonymized for ${historyKey}`);
+      }
 
       // Handle file creation markers in AI response
       const { text: cleanedText, files: filesToSend } = parseFileMarkers(responseText);
@@ -1620,6 +1715,14 @@ async function start() {
         const fileUploadConvId = rawConversationId || conversation?.dbId || "";
         let fileText = cleanedText;
         if (fileUploadConvId && s2sConnectionId && authToken) {
+          // PII secure mode: deanonymize file content before uploading
+          if (secureOn) {
+            const fileMapping = await pii.getPiiMapping(historyKey);
+            for (const f of filesToSend) {
+              f.content = await pii.deanonymize(f.content, fileMapping);
+            }
+            console.log(`${LOG} [PII] File content deanonymized before upload for ${historyKey}`);
+          }
           for (const f of filesToSend) {
             const result2 = await uploadAndSendFile(f.filename, f.content, fileUploadConvId);
             console.log(`${LOG} File creation ${f.filename}: ${result2.ok ? "SUCCESS" : "FAILED"}${result2.url ? " url=" + result2.url : ""}`);
