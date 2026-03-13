@@ -144,14 +144,16 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
   const history = await getHistory(userId);
 
   const messages = [];
-  const fileInstructions = `MANDATORY FILE CREATION PROTOCOL:
-You can create and send real downloadable files. To do so, you MUST output this exact syntax in your response:
+  const fileInstructions = `IMPORTANT — FILE HANDLING OVERRIDE:
+You are running inside a Rainbow chat bot. You do NOT have a filesystem. You do NOT have a workspace. Paths like /.openclaw/workspace/ do NOT exist and do NOT work here. NEVER reference filesystem paths.
+
+To send a file to the user, you MUST include this exact syntax in your response text:
 
 [FILE:filename.ext]
 file content here
 [/FILE]
 
-The system will automatically convert this into a downloadable link for the user. This is the ONLY way to send files. Do NOT claim you sent a file without using this syntax. Do NOT say "the file was sent as an attachment" — that is false. The ONLY way files work is through the [FILE:][/FILE] markers above.
+The bot will parse this, host the file, and replace it with a clickable download link. This is the ONLY way to create files. Any other method (filesystem paths, attachments, workspace references) will NOT work.
 
 Supported: .txt, .csv, .json, .xml, .html, .md, .js, .py, .css, .sql, .yaml, .sh
 NOT supported: .xlsx, .docx, .pdf, .png, .jpg, .zip (use .csv for spreadsheets, .html/.md for documents)
