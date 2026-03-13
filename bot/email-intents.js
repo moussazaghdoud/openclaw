@@ -86,9 +86,9 @@ function detectEmailIntent(message) {
     || message.match(/\b(?:show|get|find|search)\b.*\b(?:from|by)\s+(.+?)(?:\?|$|\.|and\b)/i)
     || message.match(/\b(?:what|any)\b.*\b(?:from)\s+(.+?)(?:\?|$|\.|and\b)/i)
     // "get/find/show the [last/latest] SENDER email" — e.g. "get the last ryanair email"
-    || message.match(/\b(?:get|find|show|open|read)\b.*?\b(?:last|latest|recent|new)?\s*\b([A-Z][\w\s-]{1,30}?)\s+(?:email|mail|message)\b/i)
+    || message.match(/\b(?:get|find|show|open|read)\s+(?:(?:the|my|a)\s+)?(?:(?:last|latest|recent|new|most\s+recent)\s+)?(\w[\w\s.-]+?)\s+(?:email|mail|message)\b/i)
     // "SENDER email" at start — e.g. "ryanair email"
-    || message.match(/^([A-Z][\w\s-]{1,30}?)\s+(?:email|mail|message)/i);
+    || message.match(/^(\w[\w\s.-]+?)\s+(?:email|mail|message)/i);
   if (fromMatch) {
     const sender = (fromMatch[1] || fromMatch[2]).trim();
     // Skip generic words that aren't senders
