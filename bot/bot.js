@@ -237,15 +237,21 @@ function detectIntent(userMessage) {
   for (const re of transPatterns) {
     const m = userMessage.match(re);
     if (m) {
-      // Check for PDF first (most recently uploaded wins)
+      // Check stored files — most recently uploaded type wins
+      for (const [key] of storedPptxFiles) {
+        return { type: "translate_pptx", language: m[1], fileKey: key };
+      }
       for (const [key] of storedPdfFiles) {
         return { type: "translate_pdf", language: m[1], fileKey: key };
       }
-      // Then check for docx
       for (const [key] of storedDocxFiles) {
         return { type: "translate_docx", language: m[1], docxKey: key };
       }
       // Also try to find a filename mentioned in the message
+      const pptxMatch = userMessage.match(/[\w\s-]+\.pptx?\b/i);
+      if (pptxMatch) {
+        return { type: "translate_pptx", language: m[1], fileKey: pptxMatch[0].trim().toLowerCase() };
+      }
       const docxMatch = userMessage.match(/[\w\s-]+\.docx?\b/i);
       if (docxMatch) {
         return { type: "translate_docx", language: m[1], docxKey: docxMatch[0].trim().toLowerCase() };
@@ -520,18 +526,168 @@ ${numberedParas}`;
 /**
  * Handle translation when no file is in memory — check Redis for PDF or docx.
  */
+/**
+ * Handle PPTX translation: copy the pptx, replace text in each slide, preserve layout/images.
+ */
+async function handlePptxTranslation(userId, userMessage, language, fileKey) {
+  console.log(`${LOG} [INTENT] translate_pptx: lang=${language}, file=${fileKey}`);
+
+  let activeKey = fileKey;
+
+  // If no PPTX in memory, try Redis
+  if (!storedPptxFiles.get(activeKey) && redis) {
+    try {
+      let b64 = await redis.get(`pptx:${activeKey}`);
+      if (!b64) {
+        const keys = await redis.keys("pptx:*");
+        if (keys.length > 0) {
+          const foundKey = keys[keys.length - 1];
+          b64 = await redis.get(foundKey);
+          activeKey = foundKey.replace(/^pptx:/, "");
+          console.log(`${LOG} Found PPTX in Redis: ${activeKey}`);
+        }
+      }
+      if (b64) {
+        storedPptxFiles.set(activeKey, { buffer: Buffer.from(b64, "base64"), storedAt: Date.now() });
+        console.log(`${LOG} Loaded PPTX from Redis: ${activeKey}`);
+      }
+    } catch (err) { console.warn(`${LOG} Redis PPTX load failed:`, err.message); }
+  }
+
+  if (!storedPptxFiles.get(activeKey)) {
+    console.warn(`${LOG} No stored PPTX found for key: ${activeKey}`);
+    return `I don't have any PowerPoint file stored. Please share the .pptx file first, then ask me to translate it.`;
+  }
+
+  if (!JSZip) return `Sorry, PPTX processing is not available.`;
+
+  let zip;
+  try {
+    zip = await JSZip.loadAsync(storedPptxFiles.get(activeKey).buffer);
+  } catch (err) {
+    console.error(`${LOG} PPTX load failed:`, err.message);
+    return `Sorry, I couldn't read the PowerPoint file. Please share it again.`;
+  }
+
+  // Collect all text paragraphs from all slides
+  const slideEntries = [];
+  for (const [path] of Object.entries(zip.files)) {
+    if (/^ppt\/slides\/slide\d+\.xml$/i.test(path)) {
+      slideEntries.push(path);
+    }
+  }
+  slideEntries.sort(); // slide1, slide2, ...
+
+  // Extract all text paragraphs across all slides
+  const allParagraphs = []; // { slideIdx, text }
+  const slideXmls = [];
+  for (let i = 0; i < slideEntries.length; i++) {
+    const xml = await zip.file(slideEntries[i]).async("string");
+    slideXmls.push(xml);
+    // Match <a:p> paragraphs and extract text
+    const paraRegex = /<a:p\b[^>]*>[\s\S]*?<\/a:p>/g;
+    let match;
+    while ((match = paraRegex.exec(xml)) !== null) {
+      const paraXml = match[0];
+      // Skip paragraphs with images/drawings
+      if (/<a:blipFill\b|<a:prstGeom\b/.test(paraXml)) continue;
+      // Extract text from <a:t> tags
+      const textParts = paraXml.match(/<a:t>[^<]*<\/a:t>/g) || [];
+      const text = textParts.map(t => t.replace(/<\/?a:t>/g, "")).join("").trim();
+      if (text.length > 0) {
+        allParagraphs.push({ slideIdx: i, text });
+      }
+    }
+  }
+
+  if (allParagraphs.length === 0) return `The presentation appears to have no text content to translate.`;
+  console.log(`${LOG} Extracted ${allParagraphs.length} text paragraphs from ${slideEntries.length} slides`);
+
+  // AI translates all paragraphs at once
+  const numberedParas = allParagraphs.map((p, i) => `[${i}] ${p.text}`).join("\n");
+  const translationPrompt = `Translate each numbered paragraph below to ${language}. Return ONLY a JSON array of translated strings (same order, same count). No explanation, no markdown, just the JSON array.
+
+${numberedParas}`;
+
+  const translationResult = await callOpenClaw(userId, translationPrompt);
+  if (!translationResult?.content) return `Sorry, the translation request timed out. Please try again.`;
+
+  let translated;
+  try {
+    const jsonMatch = translationResult.content.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) throw new Error("No JSON array found");
+    translated = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(translated)) throw new Error("Not an array");
+  } catch (err) {
+    console.error(`${LOG} Failed to parse PPTX translation JSON:`, err.message);
+    return `Sorry, the translation failed. Please try again.`;
+  }
+
+  console.log(`${LOG} Got ${translated.length} translated paragraphs for PPTX`);
+
+  // Replace text in each slide XML — same approach as docx: replace <a:t> content
+  let transIdx = 0;
+  for (let i = 0; i < slideEntries.length; i++) {
+    let xml = slideXmls[i];
+    xml = xml.replace(/<a:p\b[^>]*>[\s\S]*?<\/a:p>/g, (paraXml) => {
+      // Skip image paragraphs
+      if (/<a:blipFill\b|<a:prstGeom\b/.test(paraXml)) return paraXml;
+      const textParts = paraXml.match(/<a:t>[^<]*<\/a:t>/g) || [];
+      const text = textParts.map(t => t.replace(/<\/?a:t>/g, "")).join("").trim();
+      if (text.length === 0) return paraXml;
+      if (transIdx >= translated.length) return paraXml;
+
+      const newText = translated[transIdx++];
+      // Put all translated text in the first <a:r><a:t> and clear the rest
+      let firstRun = true;
+      const result = paraXml.replace(/<a:r\b[^>]*>[\s\S]*?<\/a:r>/g, (runXml) => {
+        if (!/<a:t>/.test(runXml)) return runXml; // no text in this run
+        if (firstRun) {
+          firstRun = false;
+          // Replace <a:t>...</a:t> with translated text
+          const escaped = newText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          return runXml.replace(/<a:t>[^<]*<\/a:t>/, `<a:t>${escaped}</a:t>`);
+        }
+        // Clear subsequent runs' text
+        return runXml.replace(/<a:t>[^<]*<\/a:t>/, "<a:t></a:t>");
+      });
+      return result;
+    });
+    zip.file(slideEntries[i], xml);
+  }
+
+  try {
+    const pptxBuffer = await zip.generateAsync({ type: "nodebuffer" });
+    const baseName = activeKey.replace(/\.pptx?$/i, "");
+    const outFilename = `${baseName}_translated_${language}.pptx`;
+    const url = hostFile(outFilename, pptxBuffer);
+    console.log(`${LOG} PPTX translation complete: ${outFilename} (${pptxBuffer.length} bytes) -> ${url}`);
+    return `Here's your translated presentation (${language}):\n\n📎 ${outFilename}\n${url}`;
+  } catch (err) {
+    console.error(`${LOG} PPTX translation output failed:`, err.message);
+    return `Sorry, something went wrong creating the translated presentation. Please try again.`;
+  }
+}
+
 async function handleAnyTranslation(userId, userMessage, language) {
   console.log(`${LOG} [INTENT] translate_any: lang=${language}, checking Redis for stored files...`);
   if (redis) {
     try {
-      // Check for PDF first
+      // Check for PPTX first
+      const pptxKeys = await redis.keys("pptx:*");
+      if (pptxKeys.length > 0) {
+        const foundKey = pptxKeys[pptxKeys.length - 1];
+        const fileKey = foundKey.replace(/^pptx:/, "");
+        return handlePptxTranslation(userId, userMessage, language, fileKey);
+      }
+      // Then PDF
       const pdfKeys = await redis.keys("pdf:*");
       if (pdfKeys.length > 0) {
         const foundKey = pdfKeys[pdfKeys.length - 1];
         const fileKey = foundKey.replace(/^pdf:/, "");
         return handlePdfTranslation(userId, userMessage, language, fileKey);
       }
-      // Then check for docx
+      // Then docx
       const docxKeys = await redis.keys("docx:*");
       if (docxKeys.length > 0) {
         const foundKey = docxKeys[docxKeys.length - 1];
@@ -818,6 +974,8 @@ function guessMime(filename) {
     doc: "application/msword",
     xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     xls: "application/vnd.ms-excel",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ppt: "application/vnd.ms-powerpoint",
     pdf: "application/pdf",
     png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
     svg: "image/svg+xml", zip: "application/zip",
@@ -1019,10 +1177,12 @@ async function describeFileForAI(fileInfo, downloaded) {
     // Store raw docx buffer so translate_document tool can use it later
     // Clear old stored files when a new one is uploaded
     storedPdfFiles.clear();
+    storedPptxFiles.clear();
     storedDocxFiles.set(filename.toLowerCase(), { buffer, storedAt: Date.now() });
     if (redis) {
-      // Clean old PDF keys and store new docx
+      // Clean old PDF/PPTX keys and store new docx
       redis.keys("pdf:*").then(keys => keys.forEach(k => redis.del(k))).catch(() => {});
+      redis.keys("pptx:*").then(keys => keys.forEach(k => redis.del(k))).catch(() => {});
       redis.set(`docx:${filename.toLowerCase()}`, buffer.toString("base64"), { EX: 24 * 3600 }).catch(() => {});
     }
     console.log(`${LOG} Stored raw docx: ${filename} (${buffer.length} bytes)`);
@@ -1041,10 +1201,12 @@ async function describeFileForAI(fileInfo, downloaded) {
   if (mime === "application/pdf" || filename.toLowerCase().endsWith(".pdf")) {
     // Clear old stored files when a new one is uploaded
     storedDocxFiles.clear();
+    storedPptxFiles.clear();
     storedPdfFiles.set(filename.toLowerCase(), { buffer, storedAt: Date.now() });
     if (redis) {
-      // Clean old docx keys and store new PDF
+      // Clean old docx/PPTX keys and store new PDF
       redis.keys("docx:*").then(keys => keys.forEach(k => redis.del(k))).catch(() => {});
+      redis.keys("pptx:*").then(keys => keys.forEach(k => redis.del(k))).catch(() => {});
       redis.set(`pdf:${filename.toLowerCase()}`, buffer.toString("base64"), { EX: 24 * 3600 }).catch(() => {});
     }
     console.log(`${LOG} Stored raw PDF: ${filename} (${buffer.length} bytes)`);
@@ -1061,6 +1223,44 @@ async function describeFileForAI(fileInfo, downloaded) {
       }
     }
     return `[PDF file shared: ${filename} (${buffer.length} bytes) — file stored for translation]`;
+  }
+
+  // PowerPoint (.pptx): extract text from slides, store buffer for translation
+  if (mime.includes("presentationml") || filename.toLowerCase().endsWith(".pptx")) {
+    // Clear old stored files
+    storedDocxFiles.clear();
+    storedPdfFiles.clear();
+    storedPptxFiles.set(filename.toLowerCase(), { buffer, storedAt: Date.now() });
+    if (redis) {
+      redis.keys("docx:*").then(keys => keys.forEach(k => redis.del(k))).catch(() => {});
+      redis.keys("pdf:*").then(keys => keys.forEach(k => redis.del(k))).catch(() => {});
+      redis.set(`pptx:${filename.toLowerCase()}`, buffer.toString("base64"), { EX: 24 * 3600 }).catch(() => {});
+    }
+    console.log(`${LOG} Stored raw PPTX: ${filename} (${buffer.length} bytes)`);
+
+    if (JSZip) {
+      try {
+        const zip = await JSZip.loadAsync(buffer);
+        const texts = [];
+        // Extract text from all slides
+        for (const [path, file] of Object.entries(zip.files)) {
+          if (/^ppt\/slides\/slide\d+\.xml$/i.test(path)) {
+            const xml = await file.async("string");
+            // Extract text from <a:t> tags
+            const matches = xml.match(/<a:t>[^<]*<\/a:t>/g) || [];
+            const slideText = matches.map(m => m.replace(/<\/?a:t>/g, "")).join(" ").trim();
+            if (slideText) texts.push(slideText);
+          }
+        }
+        if (texts.length > 0) {
+          const text = texts.join("\n\n").substring(0, 50000);
+          return `[PowerPoint: ${filename}]\n\`\`\`\n${text}\n\`\`\`\nTo translate this presentation, just ask me to translate it to any language.`;
+        }
+      } catch (err) {
+        console.warn(`${LOG} PPTX text extraction failed:`, err.message);
+      }
+    }
+    return `[PowerPoint file shared: ${filename} (${buffer.length} bytes) — file stored for translation]`;
   }
 
   // Images: describe metadata (AI can't see the image through text API)
@@ -1533,6 +1733,7 @@ app.get("/api/last-download", (req, res) => {
 const hostedFiles = new Map(); // id → { filename, content, mime, createdAt }
 const storedDocxFiles = new Map(); // filename → { buffer, storedAt }
 const storedPdfFiles = new Map();  // filename → { buffer, storedAt }
+const storedPptxFiles = new Map(); // filename → { buffer, storedAt }
 const HOSTED_FILE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 app.get("/files/:id", async (req, res) => {
@@ -1802,8 +2003,9 @@ async function processBubbleCallback(body) {
       responseText = await handleDocxTranslation(fromJid, content, intent.language, intent.docxKey);
     } else if (intent.type === "translate_pdf") {
       responseText = await handlePdfTranslation(fromJid, content, intent.language, intent.fileKey);
+    } else if (intent.type === "translate_pptx") {
+      responseText = await handlePptxTranslation(fromJid, content, intent.language, intent.fileKey);
     } else if (intent.type === "translate_any") {
-      // No file in memory — check Redis for PDF or docx
       responseText = await handleAnyTranslation(fromJid, content, intent.language);
     } else if (intent.type === "create_file") {
       responseText = await handleCreateFile(fromJid, content, intent.format);
@@ -2321,6 +2523,8 @@ async function start() {
         responseText = await handleDocxTranslation(historyKey, userMessage, intent.language, intent.docxKey);
       } else if (intent.type === "translate_pdf") {
         responseText = await handlePdfTranslation(historyKey, userMessage, intent.language, intent.fileKey);
+      } else if (intent.type === "translate_pptx") {
+        responseText = await handlePptxTranslation(historyKey, userMessage, intent.language, intent.fileKey);
       } else if (intent.type === "translate_any") {
         responseText = await handleAnyTranslation(historyKey, userMessage, intent.language);
       } else if (intent.type === "create_file") {
