@@ -142,70 +142,6 @@ async function saveGreeted(jid) {
 
 // ── OpenClaw API ─────────────────────────────────────────
 
-// Tool definitions for OpenAI-compatible function calling
-const TOOLS = [
-  {
-    type: "function",
-    function: {
-      name: "create_file",
-      description: "Create a text-based file (.txt, .csv, .html, .md, etc.) and return a download link. For translating Word documents, use translate_document instead.",
-      parameters: {
-        type: "object",
-        properties: {
-          filename: { type: "string", description: "Filename with extension (.html, .csv, .md, .txt, etc.)" },
-          content: { type: "string", description: "The full text content of the file." },
-        },
-        required: ["filename", "content"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "translate_document",
-      description: "Translate a Word document (.docx) that was previously shared by the user. Produces a proper .docx file preserving the original layout, images, styles, and formatting — only the text is replaced with the translation. ALWAYS use this tool when the user asks to translate a Word document.",
-      parameters: {
-        type: "object",
-        properties: {
-          source_filename: { type: "string", description: "The original filename that was shared (e.g. 'report.docx')" },
-          translated_paragraphs: {
-            type: "array",
-            items: { type: "string" },
-            description: "Array of translated paragraph texts, in the same order as they appear in the original document. Each entry replaces the corresponding paragraph.",
-          },
-        },
-        required: ["source_filename", "translated_paragraphs"],
-      },
-    },
-  },
-];
-
-// Execute a tool call and return the result
-async function executeTool(toolCall) {
-  const { name, arguments: argsStr } = toolCall.function;
-  try {
-    const args = JSON.parse(argsStr);
-    if (name === "create_file") {
-      // Force binary extensions to their text equivalents
-      let fname = args.filename;
-      const ext = (fname.split(".").pop() || "").toLowerCase();
-      if (["docx", "doc"].includes(ext)) fname = fname.replace(/\.docx?$/i, ".html");
-      if (["xlsx", "xls"].includes(ext)) fname = fname.replace(/\.xlsx?$/i, ".csv");
-      if (["pdf"].includes(ext)) fname = fname.replace(/\.pdf$/i, ".html");
-      const url = hostFile(fname, args.content);
-      console.log(`${LOG} Tool create_file: ${fname} -> ${url}`);
-      return JSON.stringify({ success: true, filename: fname, download_url: url });
-    }
-    if (name === "translate_document") {
-      return await executeTranslateDocument(args);
-    }
-    return JSON.stringify({ error: `Unknown tool: ${name}` });
-  } catch (err) {
-    console.error(`${LOG} Tool execution error:`, err.message);
-    return JSON.stringify({ error: err.message });
-  }
-}
-
 /**
  * Translate a .docx by replacing paragraph text in the XML while preserving layout/images/styles.
  */
@@ -281,46 +217,83 @@ async function executeTranslateDocument(args) {
   }
 }
 
-/**
- * Detect if the user is asking to translate a document, and if a stored docx exists.
- * Returns { detected, language, docxKey } or { detected: false }.
- */
-function detectTranslationRequest(userMessage) {
-  // Match: "translate ... to <language>", "traduire ... en <language>", etc.
-  const patterns = [
+// ── Intent Detection ─────────────────────────────────────
+// The bot decides what to do — the AI is just a content engine.
+// Returns: { type: "chat" | "translate_docx" | "create_file", ...metadata }
+
+function detectIntent(userMessage) {
+  const msg = userMessage.toLowerCase();
+
+  // 1. Translate a docx — detect "translate to <lang>" with a stored docx
+  const transPatterns = [
     /\btranslat\w*\b.*?\bto\s+(\w+)/i,
     /\btraduir\w*\b.*?\ben\s+(\w+)/i,
     /\btraduc\w*\b.*?\b(?:al|a|en)\s+(\w+)/i,
     /\bübersetzen?\b.*?\b(?:auf|ins?)\s+(\w+)/i,
     /\btranslat\w*\b.*?\bin\s+(\w+)/i,
   ];
-  for (const re of patterns) {
+  for (const re of transPatterns) {
     const m = userMessage.match(re);
     if (m) {
-      // Check if there's a stored docx
       for (const [key] of storedDocxFiles) {
-        return { detected: true, language: m[1], docxKey: key };
+        return { type: "translate_docx", language: m[1], docxKey: key };
       }
     }
   }
-  return { detected: false };
+
+  // 2. Create a file — detect "create/generate/write/make ... file/document/report/..."
+  const filePatterns = [
+    /\b(creat|generat|writ|mak|produc|build|draft|prepar)\w*\b[^.?!]{0,40}\b(file|document|report|csv|html|script|spreadsheet|page|letter|email|template|contract|memo|resume|cv)\b/i,
+    /\b(sav|export|convert)\w*\b[^.?!]{0,30}\b(as|to|into)\s+\w*\s*(file|\.?\w{2,4})\b/i,
+    /\b(give|send|provide)\w*\b[^.?!]{0,30}\b(me|us)?\s*(a|the)?\s*(file|document|download)\b/i,
+  ];
+  for (const re of filePatterns) {
+    if (re.test(userMessage)) {
+      // Try to detect desired format from message
+      let format = "html"; // default
+      if (/\.csv\b|csv\s+file|spreadsheet/i.test(msg)) format = "csv";
+      else if (/\.json\b|json\s+file/i.test(msg)) format = "json";
+      else if (/\.txt\b|text\s+file/i.test(msg)) format = "txt";
+      else if (/\.md\b|markdown/i.test(msg)) format = "md";
+      else if (/\.py\b|python\s+(script|file)/i.test(msg)) format = "py";
+      else if (/\.js\b|javascript\s+(script|file)/i.test(msg)) format = "js";
+      else if (/\.sql\b|sql\s+(file|script|query)/i.test(msg)) format = "sql";
+      else if (/\.xml\b|xml\s+file/i.test(msg)) format = "xml";
+      else if (/\.yaml\b|\.yml\b|yaml\s+file/i.test(msg)) format = "yaml";
+      else if (/\.sh\b|shell\s+script|bash/i.test(msg)) format = "sh";
+      else if (/\.css\b|css\s+file|stylesheet/i.test(msg)) format = "css";
+      return { type: "create_file", format };
+    }
+  }
+
+  // 3. Default — regular chat
+  return { type: "chat" };
 }
 
+// ── Intent Handlers ──────────────────────────────────────
+
 /**
- * Handle docx translation: extract paragraphs, ask AI to translate them,
- * rebuild the docx with translated text. Returns response text with download link,
- * or null if it should fall through to normal processing.
+ * Handle docx translation: extract paragraphs, ask AI to translate,
+ * rebuild the docx with translated text preserving layout/images.
  */
 async function handleDocxTranslation(userId, userMessage, language, docxKey) {
-  console.log(`${LOG} Docx translation detected: lang=${language}, file=${docxKey}`);
+  console.log(`${LOG} [INTENT] translate_docx: lang=${language}, file=${docxKey}`);
 
-  // Extract paragraphs from the stored docx
   const stored = storedDocxFiles.get(docxKey);
-  if (!stored) return null;
+  if (!stored) {
+    // Try Redis
+    if (redis) {
+      try {
+        const b64 = await redis.get(`docx:${docxKey}`);
+        if (b64) storedDocxFiles.set(docxKey, { buffer: Buffer.from(b64, "base64"), storedAt: Date.now() });
+      } catch {}
+    }
+  }
+  if (!storedDocxFiles.get(docxKey)) return null;
 
   let paragraphs;
   try {
-    const zip = await JSZip.loadAsync(stored.buffer);
+    const zip = await JSZip.loadAsync(storedDocxFiles.get(docxKey).buffer);
     const docXml = await zip.file("word/document.xml").async("string");
     paragraphs = [];
     const paraRegex = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g;
@@ -339,7 +312,7 @@ async function handleDocxTranslation(userId, userMessage, language, docxKey) {
   if (paragraphs.length === 0) return null;
   console.log(`${LOG} Extracted ${paragraphs.length} paragraphs for translation`);
 
-  // Ask AI to translate the paragraphs — structured request
+  // AI just translates — structured prompt, return JSON only
   const numberedParas = paragraphs.map((p, i) => `[${i}] ${p}`).join("\n");
   const translationPrompt = `Translate each numbered paragraph below to ${language}. Return ONLY a JSON array of translated strings (same order, same count). No explanation, no markdown, just the JSON array.
 
@@ -348,23 +321,20 @@ ${numberedParas}`;
   const translationResult = await callOpenClaw(userId, translationPrompt);
   if (!translationResult?.content) return null;
 
-  // Parse the JSON array from AI response
   let translated;
   try {
-    // Extract JSON array from response (AI might wrap it in markdown)
     const jsonMatch = translationResult.content.match(/\[[\s\S]*\]/);
     if (!jsonMatch) throw new Error("No JSON array found");
     translated = JSON.parse(jsonMatch[0]);
     if (!Array.isArray(translated)) throw new Error("Not an array");
   } catch (err) {
-    console.error(`${LOG} Failed to parse translation response:`, err.message);
-    console.error(`${LOG} AI response was: ${translationResult.content.substring(0, 500)}`);
+    console.error(`${LOG} Failed to parse translation JSON:`, err.message);
+    console.error(`${LOG} AI response: ${translationResult.content.substring(0, 500)}`);
     return null;
   }
 
   console.log(`${LOG} Got ${translated.length} translated paragraphs`);
 
-  // Build the translated docx
   const result = await executeTranslateDocument({
     source_filename: docxKey,
     translated_paragraphs: translated,
@@ -373,10 +343,66 @@ ${numberedParas}`;
   const parsed = JSON.parse(result);
   if (parsed.success) {
     return `Here's your translated document (${language}):\n\n📎 ${parsed.filename}\n${parsed.download_url}`;
-  } else {
-    console.error(`${LOG} translate_document failed:`, parsed.error);
-    return null;
   }
+  console.error(`${LOG} translate_document failed:`, parsed.error);
+  return null;
+}
+
+/**
+ * Handle file creation: ask AI to generate content only, bot creates the file.
+ */
+async function handleCreateFile(userId, userMessage, format) {
+  console.log(`${LOG} [INTENT] create_file: format=${format}`);
+
+  // Tell AI to generate raw content only — no tools, no file paths, no links
+  const formatHints = {
+    html: "Return the content as a complete HTML document with inline CSS. No markdown wrapping.",
+    csv: "Return the content as raw CSV (comma-separated values). No markdown wrapping.",
+    json: "Return the content as raw JSON. No markdown wrapping.",
+    txt: "Return the content as plain text. No markdown wrapping.",
+    md: "Return the content as Markdown.",
+    py: "Return the Python code only. No markdown wrapping.",
+    js: "Return the JavaScript code only. No markdown wrapping.",
+    sql: "Return the SQL code only. No markdown wrapping.",
+    xml: "Return the content as raw XML. No markdown wrapping.",
+    yaml: "Return the content as raw YAML. No markdown wrapping.",
+    sh: "Return the shell script only. No markdown wrapping.",
+    css: "Return the CSS code only. No markdown wrapping.",
+  };
+  const hint = formatHints[format] || "Return the raw file content only.";
+
+  const contentPrompt = `${userMessage}
+
+IMPORTANT INSTRUCTION: Generate ONLY the file content. ${hint}
+Do NOT include any explanation, commentary, or surrounding text.
+Do NOT mention file paths, downloads, or tools.
+Start directly with the content.`;
+
+  const result = await callOpenClaw(userId, contentPrompt);
+  if (!result?.content) return null;
+
+  let content = result.content;
+
+  // Strip markdown code block wrapper if AI added one
+  const codeBlockMatch = content.match(/^```\w*\n([\s\S]*?)```\s*$/);
+  if (codeBlockMatch) {
+    content = codeBlockMatch[1];
+  }
+
+  // Generate a descriptive filename
+  let filename = `document.${format}`;
+  // Try to extract a meaningful name from the user message
+  const nameMatch = userMessage.match(/(?:called|named|titled|filename)\s+["']?([^"'\n,]+)/i)
+    || userMessage.match(/\b(\w[\w\s-]{2,30})\.(html|csv|json|txt|md|py|js|sql|xml|yaml|sh|css)\b/i);
+  if (nameMatch) {
+    const name = nameMatch[1].trim().replace(/\s+/g, "_").replace(/[^\w.-]/g, "");
+    filename = `${name}.${format}`;
+  }
+
+  const url = hostFile(filename, content);
+  console.log(`${LOG} [INTENT] File created: ${filename} (${content.length} chars) -> ${url}`);
+
+  return `Here's your file:\n\n📎 ${filename}\n${url}`;
 }
 
 async function callOpenClaw(userId, userMessage, attempt = 1) {
@@ -384,9 +410,8 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
 
   const messages = [];
   const fileNote = `When users share files, their content appears in conversation history. You can read and reference file contents directly.
-To create NEW text files, use the create_file tool.
-To TRANSLATE a Word document (.docx), ALWAYS use the translate_document tool — it preserves the original layout, images, styles, and formatting, only replacing text. Provide the translated paragraphs in the same order as they appear.
-Do NOT upload files to tmpfiles.org, transfer.sh, or any external service. Do NOT reference paths like /.openclaw/workspace/.`;
+Do NOT upload files to tmpfiles.org, transfer.sh, or any external service. Do NOT reference paths like /.openclaw/workspace/.
+Do NOT mention tools, downloads, or file creation capabilities. Just answer naturally — the system handles file delivery automatically.`;
   const sysPrompt = config.systemPrompt
     ? `${config.systemPrompt}\n\n${fileNote}`
     : fileNote;
@@ -400,8 +425,6 @@ Do NOT upload files to tmpfiles.org, transfer.sh, or any external service. Do NO
     max_tokens: config.maxTokens,
     stream: false,
     user: userId,
-    tools: TOOLS,
-    tool_choice: "auto",
   };
 
   const controller = new AbortController();
@@ -430,62 +453,7 @@ Do NOT upload files to tmpfiles.org, transfer.sh, or any external service. Do NO
 
     const data = await response.json();
     const choice = data.choices?.[0];
-    let assistantMessage = choice?.message?.content || "";
-
-    // Handle tool calls (function calling)
-    if (choice?.message?.tool_calls && choice.message.tool_calls.length > 0) {
-      console.log(`${LOG} AI requested ${choice.message.tool_calls.length} tool call(s)`);
-      const toolResults = [];
-      const fileLinks = [];
-
-      for (const tc of choice.message.tool_calls) {
-        const result = await executeTool(tc);
-        toolResults.push({ role: "tool", tool_call_id: tc.id, content: result });
-        // Collect file links for the response
-        try {
-          const parsed = JSON.parse(result);
-          if (parsed.success && parsed.download_url) {
-            fileLinks.push(`📎 ${parsed.filename}\n${parsed.download_url}`);
-          }
-        } catch {}
-      }
-
-      // Send tool results back to get the final response
-      const followUp = {
-        model: `openclaw:${config.agentId}`,
-        messages: [...messages, choice.message, ...toolResults],
-        max_tokens: config.maxTokens,
-        stream: false,
-        user: userId,
-      };
-
-      const controller2 = new AbortController();
-      const timeout2 = setTimeout(() => controller2.abort(), config.timeoutMs);
-      try {
-        const resp2 = await fetch(url, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify(followUp),
-          signal: controller2.signal,
-        });
-        clearTimeout(timeout2);
-        if (resp2.ok) {
-          const data2 = await resp2.json();
-          assistantMessage = data2.choices?.[0]?.message?.content || "";
-        }
-      } catch (err2) {
-        clearTimeout(timeout2);
-        console.warn(`${LOG} Tool follow-up failed:`, err2.message);
-      }
-
-      // Append file links if they're not already in the response
-      if (fileLinks.length > 0) {
-        const linksText = fileLinks.join("\n");
-        if (!assistantMessage.includes(fileLinks[0])) {
-          assistantMessage = assistantMessage ? `${assistantMessage}\n\n${linksText}` : linksText;
-        }
-      }
-    }
+    const assistantMessage = choice?.message?.content || "";
 
     await addMessage(userId, "user", userMessage);
     await addMessage(userId, "assistant", assistantMessage);
@@ -1415,53 +1383,6 @@ async function rewriteFileUrls(text) {
   return result;
 }
 
-/**
- * Auto-detect file content in AI responses when the AI ignored tools.
- * If the response contains a large code block and the user asked for a file,
- * extract it, host it, and append a download link.
- */
-function autoCreateFileFromResponse(responseText, userMessage) {
-  // Only trigger if user asked for file-like output
-  const fileRequestPattern = /\b(creat|generat|writ|mak|sav|export|produc|build|draft)\w*\b.*?\b(file|document|report|csv|html|script|code|spreadsheet|page)\b/i;
-  const userAskedForFile = fileRequestPattern.test(userMessage);
-  if (!userAskedForFile) return responseText;
-
-  // Already has a download link from our server — no need to intervene
-  const baseUrl = config.hostCallback || `http://localhost:${PORT}`;
-  if (responseText.includes(`${baseUrl}/files/`)) return responseText;
-
-  // Find large code blocks (>200 chars) in the response
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
-  let bestBlock = null;
-  let bestLang = "";
-  let bestLen = 0;
-  let match;
-  while ((match = codeBlockRegex.exec(responseText)) !== null) {
-    if (match[2].length > bestLen) {
-      bestBlock = match[2];
-      bestLang = match[1].toLowerCase();
-      bestLen = match[2].length;
-    }
-  }
-
-  if (!bestBlock || bestLen < 200) return responseText;
-
-  // Determine filename from language hint
-  const extMap = {
-    html: "document.html", css: "styles.css", js: "script.js", javascript: "script.js",
-    python: "script.py", py: "script.py", json: "data.json", xml: "data.xml",
-    csv: "data.csv", sql: "query.sql", yaml: "config.yaml", yml: "config.yaml",
-    sh: "script.sh", bash: "script.sh", md: "document.md", markdown: "document.md",
-    txt: "document.txt", "": "document.txt",
-  };
-  const filename = extMap[bestLang] || `file.${bestLang || "txt"}`;
-
-  const url = hostFile(filename, bestBlock);
-  console.log(`${LOG} Auto-created file from code block: ${filename} (${bestLen} chars) -> ${url}`);
-
-  return `${responseText}\n\n📎 ${filename}\n${url}`;
-}
-
 // JSON API (for programmatic access)
 app.get("/api/status", (req, res) => {
   const bubbles = [];
@@ -1614,9 +1535,21 @@ async function processBubbleCallback(body) {
       }
     }
 
-    // Call OpenClaw
-    const result = await callOpenClaw(fromJid, content);
-    let responseText = result?.content || config.fallbackMsg;
+    // Intent-driven processing (same as main handler)
+    const intent = detectIntent(content);
+    console.log(`${LOG} [BUBBLE-INTERCEPT] Intent: ${intent.type}`);
+    let responseText = null;
+
+    if (intent.type === "translate_docx") {
+      responseText = await handleDocxTranslation(fromJid, content, intent.language, intent.docxKey);
+    } else if (intent.type === "create_file") {
+      responseText = await handleCreateFile(fromJid, content, intent.format);
+    }
+
+    if (!responseText) {
+      const result = await callOpenClaw(fromJid, content);
+      responseText = result?.content || config.fallbackMsg;
+    }
 
     // Host any [FILE:] markers as downloadable links
     responseText = responseText.replace(/\[FILE:([^\]]+)\]\n?([\s\S]*?)\[\/FILE\]/g, (_, fname, fcontent) => {
@@ -2115,16 +2048,20 @@ async function start() {
       // Append file context to the user message if a file was shared
       let userMessage = fileContext ? `${content}\n\n${fileContext}` : content;
 
-      // Detect docx translation request — handle it directly instead of relying on AI tools
-      const transReq = detectTranslationRequest(content);
+      // ── Intent-driven processing: bot decides, AI generates content ──
+      const intent = detectIntent(content);
+      console.log(`${LOG} Intent: ${intent.type} for ${fromName}`);
+
       let responseText = null;
-      if (transReq.detected) {
-        console.log(`${LOG} Translation request detected: ${transReq.language} for ${transReq.docxKey}`);
-        responseText = await handleDocxTranslation(historyKey, userMessage, transReq.language, transReq.docxKey);
+
+      if (intent.type === "translate_docx") {
+        responseText = await handleDocxTranslation(historyKey, userMessage, intent.language, intent.docxKey);
+      } else if (intent.type === "create_file") {
+        responseText = await handleCreateFile(historyKey, userMessage, intent.format);
       }
 
       if (!responseText) {
-        // Normal AI call (no translation detected, or translation fell through)
+        // Regular chat or fallback if intent handler returned null
         // PII secure mode: anonymize user message before sending to LLM
         const secureOn = pii ? await pii.isSecureMode(historyKey) : false;
         if (secureOn) {
@@ -2154,9 +2091,6 @@ async function start() {
 
       // Re-host any external file URLs (tmpfiles.org, etc.) on our server
       responseText = await rewriteFileUrls(responseText);
-
-      // Auto-create downloadable file if AI dumped content inline instead of using tools
-      responseText = autoCreateFileFromResponse(responseText, content);
 
       // Typing indicator OFF
       if (typingInterval) clearInterval(typingInterval);
