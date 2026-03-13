@@ -21,6 +21,10 @@ let m365Auth;
 try { m365Auth = require("./auth"); console.log("[OpenClawBot] M365 auth module loaded OK"); } catch (e) { m365Auth = null; console.warn("[OpenClawBot] M365 auth module failed to load:", e.message); }
 let m365Graph;
 try { m365Graph = require("./graph"); console.log("[OpenClawBot] M365 graph module loaded OK"); } catch (e) { m365Graph = null; console.warn("[OpenClawBot] M365 graph module failed to load:", e.message); }
+let gmailAuth;
+try { gmailAuth = require("./gmail-auth"); console.log("[OpenClawBot] Gmail auth module loaded OK"); } catch (e) { gmailAuth = null; console.warn("[OpenClawBot] Gmail auth module failed to load:", e.message); }
+let gmailApi;
+try { gmailApi = require("./gmail-api"); console.log("[OpenClawBot] Gmail API module loaded OK"); } catch (e) { gmailApi = null; console.warn("[OpenClawBot] Gmail API module failed to load:", e.message); }
 let emailIntents;
 try { emailIntents = require("./email-intents"); console.log("[OpenClawBot] Email intents module loaded OK"); } catch (e) { emailIntents = null; console.warn("[OpenClawBot] Email intents module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
@@ -94,9 +98,20 @@ async function initRedis() {
     console.log(`${LOG} Loaded ${greeted.size} greeted users from Redis`);
     if (pii) pii.init(redis);
     if (m365Auth) m365Auth.init(redis);
-    if (emailIntents && m365Auth && m365Graph) {
-      emailIntents.init({ graphModule: m365Graph, authModule: m365Auth, callOpenClaw, pii, redis });
-      console.log(`${LOG} Email intents module initialized`);
+    if (gmailAuth) gmailAuth.init(redis);
+    if (emailIntents) {
+      const hasM365 = !!(m365Auth && m365Graph);
+      const hasGmail = !!(gmailAuth && gmailApi);
+      if (hasM365 || hasGmail) {
+        emailIntents.init({
+          m365GraphModule: hasM365 ? m365Graph : null,
+          m365AuthModule: hasM365 ? m365Auth : null,
+          gmailApiModule: hasGmail ? gmailApi : null,
+          gmailAuthModule: hasGmail ? gmailAuth : null,
+          callOpenClaw, pii, redis,
+        });
+        console.log(`${LOG} Email intents initialized (M365: ${hasM365 ? "YES" : "NO"}, Gmail: ${hasGmail ? "YES" : "NO"})`);
+      }
     }
   } catch (err) {
     console.warn(`${LOG} Redis connection failed, falling back to in-memory:`, err.message);
@@ -1926,7 +1941,7 @@ app.get("/api/status", (req, res) => {
   for (const [id, b] of bubbleList) {
     bubbles.push({ id, name: b.name, jid: b.jid, members: (b.users || []).length });
   }
-  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, m365: { configured: !!(m365Auth && m365Auth.isConfigured()) }, bubbles, lastMessages: debugMessages.slice(-5) });
+  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, m365: { configured: !!(m365Auth && m365Auth.isConfigured()) }, gmail: { configured: !!(gmailAuth && gmailAuth.isConfigured()) }, bubbles, lastMessages: debugMessages.slice(-5) });
 });
 
 // Register M365 OAuth routes
@@ -1947,6 +1962,22 @@ if (m365Auth && m365Auth.isConfigured()) {
   console.log(`${LOG} M365 integration: ENABLED (client_id=${process.env.M365_CLIENT_ID?.substring(0, 8)}...)`);
 } else {
   console.log(`${LOG} M365 integration: DISABLED (M365_CLIENT_ID/SECRET/REDIRECT_URI not set)`);
+}
+
+// Register Gmail OAuth routes
+if (gmailAuth && gmailAuth.isConfigured()) {
+  gmailAuth.registerRoutes(app, async (result) => {
+    console.log(`${LOG} Gmail link complete: ${result.rainbowUserId} → ${result.email}`);
+    if (redis) {
+      await redis.set(`gmail:linked_pending:${result.rainbowUserId}`, JSON.stringify({
+        email: result.email,
+        linkedAt: Date.now(),
+      }), { EX: 3600 }).catch(() => {});
+    }
+  });
+  console.log(`${LOG} Gmail integration: ENABLED (client_id=${process.env.GMAIL_CLIENT_ID?.substring(0, 8)}...)`);
+} else {
+  console.log(`${LOG} Gmail integration: DISABLED (GMAIL_CLIENT_ID/SECRET/REDIRECT_URI not set)`);
 }
 
 // Start Express immediately so Railway sees the port is bound
@@ -2077,9 +2108,11 @@ async function processBubbleCallback(body) {
       return;
     }
 
-    // "jojo connect email" / "jojo disconnect email" — M365 account linking
-    if (m365Auth && m365Auth.isConfigured() && /^jojo\s+(connect|disconnect)\s+email$/i.test(contentLower.trim())) {
-      const isConnect = /connect/i.test(contentLower);
+    // "jojo connect/disconnect email/outlook/gmail" — email account linking
+    const emailConnectMatch = contentLower.trim().match(/^jojo\s+(connect|disconnect)\s+(email|outlook|gmail)$/i);
+    if (emailConnectMatch) {
+      const isConnect = emailConnectMatch[1].toLowerCase() === "connect";
+      const target = emailConnectMatch[2].toLowerCase(); // email, outlook, or gmail
       const sendReply = async (msg) => {
         const bbl = roomJid ? bubbleByJid.get(roomJid) : null;
         if (bbl) await sendMessageToBubble(bbl, msg).catch(() => {});
@@ -2093,25 +2126,54 @@ async function processBubbleCallback(body) {
         }
       };
 
-      if (isConnect) {
-        const already = await m365Auth.isLinked(fromJid);
-        if (already) {
-          const email = await m365Auth.getLinkedEmail(fromJid);
-          await sendReply(`Your Outlook is already connected (${email}). Send "jojo disconnect email" first to reconnect.`);
+      // Determine which provider to use
+      const useGmail = target === "gmail" || (target === "email" && gmailAuth && gmailAuth.isConfigured() && !(m365Auth && m365Auth.isConfigured()));
+      const useM365 = target === "outlook" || target === "email" && !useGmail;
+
+      if (useGmail && gmailAuth && gmailAuth.isConfigured()) {
+        if (isConnect) {
+          const already = await gmailAuth.isLinked(fromJid);
+          if (already) {
+            const email = await gmailAuth.getLinkedEmail(fromJid);
+            await sendReply(`Your Gmail is already connected (${email}). Send "jojo disconnect gmail" first to reconnect.`);
+          } else {
+            const authUrl = await gmailAuth.getAuthUrl(fromJid, { conversationId: body.conversation_id, roomJid, isBubble: true });
+            await sendReply(`Click this link to connect your Gmail:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
+          }
         } else {
-          const authUrl = await m365Auth.getAuthUrl(fromJid, { conversationId: body.conversation_id, roomJid, isBubble: true });
-          await sendReply(`Click this link to connect your Outlook:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
+          const linked = await gmailAuth.isLinked(fromJid);
+          if (!linked) {
+            await sendReply(`Your Gmail is not connected. Send "jojo connect gmail" to link it.`);
+          } else {
+            await gmailAuth.unlinkAccount(fromJid);
+            await sendReply(`Gmail disconnected. Your tokens have been deleted.`);
+          }
         }
+        return;
+      } else if (useM365 && m365Auth && m365Auth.isConfigured()) {
+        if (isConnect) {
+          const already = await m365Auth.isLinked(fromJid);
+          if (already) {
+            const email = await m365Auth.getLinkedEmail(fromJid);
+            await sendReply(`Your Outlook is already connected (${email}). Send "jojo disconnect outlook" first to reconnect.`);
+          } else {
+            const authUrl = await m365Auth.getAuthUrl(fromJid, { conversationId: body.conversation_id, roomJid, isBubble: true });
+            await sendReply(`Click this link to connect your Outlook:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
+          }
+        } else {
+          const linked = await m365Auth.isLinked(fromJid);
+          if (!linked) {
+            await sendReply(`Your Outlook is not connected. Send "jojo connect outlook" to link it.`);
+          } else {
+            await m365Auth.unlinkAccount(fromJid);
+            await sendReply(`Outlook disconnected. Your tokens have been deleted.`);
+          }
+        }
+        return;
       } else {
-        const linked = await m365Auth.isLinked(fromJid);
-        if (!linked) {
-          await sendReply(`Your Outlook is not connected. Send "jojo connect email" to link it.`);
-        } else {
-          await m365Auth.unlinkAccount(fromJid);
-          await sendReply(`Outlook disconnected. Your tokens have been deleted.`);
-        }
+        await sendReply(`${target === "gmail" ? "Gmail" : target === "outlook" ? "Outlook" : "Email"} integration is not configured.`);
+        return;
       }
-      return;
     }
 
     stats.received++;
@@ -2534,9 +2596,11 @@ async function start() {
         return;
       }
 
-      // "jojo connect email" / "jojo disconnect email" — M365 account linking
-      if (m365Auth && m365Auth.isConfigured() && /^jojo\s+(connect|disconnect)\s+email$/i.test(contentLower.trim())) {
-        const isConnect = /connect/i.test(contentLower);
+      // "jojo connect/disconnect email/outlook/gmail" — email account linking
+      const emailConnectMatch2 = contentLower.trim().match(/^jojo\s+(connect|disconnect)\s+(email|outlook|gmail)$/i);
+      if (emailConnectMatch2) {
+        const isConnect = emailConnectMatch2[1].toLowerCase() === "connect";
+        const target = emailConnectMatch2[2].toLowerCase();
         const sendReply = async (msg) => {
           const convId = rawConversationId || conversationId;
           let sent = false;
@@ -2555,32 +2619,60 @@ async function start() {
             try {
               const contact = await sdk.contacts.getContactByJid(fromJid);
               if (contact) {
-                const conv = await sdk.conversations.openConversationForContact(contact);
-                if (conv) { await sdk.im.sendMessageToConversation(conv, msg); sent = true; }
+                const conv2 = await sdk.conversations.openConversationForContact(contact);
+                if (conv2) { await sdk.im.sendMessageToConversation(conv2, msg); sent = true; }
               }
             } catch {}
           }
         };
 
-        if (isConnect) {
-          const already = await m365Auth.isLinked(fromJid);
-          if (already) {
-            const email = await m365Auth.getLinkedEmail(fromJid);
-            await sendReply(`Your Outlook is already connected (${email}). Send "jojo disconnect email" first to reconnect.`);
+        const useGmail = target === "gmail" || (target === "email" && gmailAuth && gmailAuth.isConfigured() && !(m365Auth && m365Auth.isConfigured()));
+        const useM365 = target === "outlook" || (target === "email" && !useGmail);
+
+        if (useGmail && gmailAuth && gmailAuth.isConfigured()) {
+          if (isConnect) {
+            const already = await gmailAuth.isLinked(fromJid);
+            if (already) {
+              const email = await gmailAuth.getLinkedEmail(fromJid);
+              await sendReply(`Your Gmail is already connected (${email}). Send "jojo disconnect gmail" first to reconnect.`);
+            } else {
+              const authUrl = await gmailAuth.getAuthUrl(fromJid, { conversationId: rawConversationId || conversationId, isBubble });
+              await sendReply(`Click this link to connect your Gmail:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
+            }
           } else {
-            const authUrl = await m365Auth.getAuthUrl(fromJid, { conversationId: rawConversationId || conversationId, isBubble });
-            await sendReply(`Click this link to connect your Outlook:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
+            const linked = await gmailAuth.isLinked(fromJid);
+            if (!linked) {
+              await sendReply(`Your Gmail is not connected. Send "jojo connect gmail" to link it.`);
+            } else {
+              await gmailAuth.unlinkAccount(fromJid);
+              await sendReply(`Gmail disconnected. Your tokens have been deleted.`);
+            }
           }
+          return;
+        } else if (useM365 && m365Auth && m365Auth.isConfigured()) {
+          if (isConnect) {
+            const already = await m365Auth.isLinked(fromJid);
+            if (already) {
+              const email = await m365Auth.getLinkedEmail(fromJid);
+              await sendReply(`Your Outlook is already connected (${email}). Send "jojo disconnect outlook" first to reconnect.`);
+            } else {
+              const authUrl = await m365Auth.getAuthUrl(fromJid, { conversationId: rawConversationId || conversationId, isBubble });
+              await sendReply(`Click this link to connect your Outlook:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
+            }
+          } else {
+            const linked = await m365Auth.isLinked(fromJid);
+            if (!linked) {
+              await sendReply(`Your Outlook is not connected. Send "jojo connect outlook" to link it.`);
+            } else {
+              await m365Auth.unlinkAccount(fromJid);
+              await sendReply(`Outlook disconnected. Your tokens have been deleted.`);
+            }
+          }
+          return;
         } else {
-          const linked = await m365Auth.isLinked(fromJid);
-          if (!linked) {
-            await sendReply(`Your Outlook is not connected. Send "jojo connect email" to link it.`);
-          } else {
-            await m365Auth.unlinkAccount(fromJid);
-            await sendReply(`Outlook disconnected. Your tokens have been deleted.`);
-          }
+          await sendReply(`${target === "gmail" ? "Gmail" : target === "outlook" ? "Outlook" : "Email"} integration is not configured.`);
+          return;
         }
-        return;
       }
 
       // In bubbles: respond on explicit trigger, or evaluate intent if conversation is active (5min window)
@@ -2611,7 +2703,27 @@ async function start() {
             await redis.del(`oauth:linked_pending:${fromJid}`);
             const { email } = JSON.parse(pendingLink);
             const linkMsg = `Outlook connected! (${email})\nYou can now ask me about your emails. Try: "summarize my unread emails"`;
-            // Send via S2S REST
+            const convId = rawConversationId || conversationId;
+            if (convId && s2sConnectionId && authToken) {
+              const host = rainbowHost || "openrainbow.com";
+              fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ message: { body: linkMsg, lang: "en" } }),
+              }).catch(() => {});
+            }
+          }
+        } catch {}
+      }
+
+      // Check for pending Gmail link confirmation
+      if (gmailAuth && redis) {
+        try {
+          const pendingGmail = await redis.get(`gmail:linked_pending:${fromJid}`);
+          if (pendingGmail) {
+            await redis.del(`gmail:linked_pending:${fromJid}`);
+            const { email } = JSON.parse(pendingGmail);
+            const linkMsg = `Gmail connected! (${email})\nYou can now ask me about your emails. Try: "summarize my unread emails"`;
             const convId = rawConversationId || conversationId;
             if (convId && s2sConnectionId && authToken) {
               const host = rainbowHost || "openrainbow.com";
@@ -2736,8 +2848,8 @@ async function start() {
         if (trimmed === "yes" || trimmed === "oui") {
           const pending = await redis.get(`pending:${fromJid}`).catch(() => null);
           if (pending) {
-            const tokenResult = await m365Auth.getValidToken(fromJid);
-            if (tokenResult) {
+            const resolved = await emailIntents.resolveProvider(fromJid);
+            if (resolved) {
               const responseText = await emailIntents.handleEmailIntent(fromJid, { type: "email_send_confirm" }, content);
               // Send response and return early
               const convId = rawConversationId || conversationId;
