@@ -17,6 +17,8 @@ let pdfParse;
 try { pdfParse = require("pdf-parse"); } catch (_) { pdfParse = null; }
 let pii;
 try { pii = require("./pii"); console.log("[OpenClawBot] PII module loaded OK"); } catch (e) { pii = null; console.warn("[OpenClawBot] PII module failed to load:", e.message); }
+let m365Auth;
+try { m365Auth = require("./auth"); console.log("[OpenClawBot] M365 auth module loaded OK"); } catch (e) { m365Auth = null; console.warn("[OpenClawBot] M365 auth module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -87,6 +89,7 @@ async function initRedis() {
     greetedArr.forEach((jid) => greeted.add(jid));
     console.log(`${LOG} Loaded ${greeted.size} greeted users from Redis`);
     if (pii) pii.init(redis);
+    if (m365Auth) m365Auth.init(redis);
   } catch (err) {
     console.warn(`${LOG} Redis connection failed, falling back to in-memory:`, err.message);
     redis = null;
@@ -1887,8 +1890,28 @@ app.get("/api/status", (req, res) => {
   for (const [id, b] of bubbleList) {
     bubbles.push({ id, name: b.name, jid: b.jid, members: (b.users || []).length });
   }
-  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, bubbles, lastMessages: debugMessages.slice(-5) });
+  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, m365: { configured: !!(m365Auth && m365Auth.isConfigured()) }, bubbles, lastMessages: debugMessages.slice(-5) });
 });
+
+// Register M365 OAuth routes
+if (m365Auth && m365Auth.isConfigured()) {
+  m365Auth.registerRoutes(app, async (result) => {
+    // Called when a user successfully links their Microsoft account
+    // Send confirmation back to the user in Rainbow
+    console.log(`${LOG} M365 link complete: ${result.rainbowUserId} → ${result.email}`);
+    // We'll send the confirmation when we can resolve the user's conversation
+    // Store the link result so the next message from this user triggers a confirmation
+    if (redis) {
+      await redis.set(`oauth:linked_pending:${result.rainbowUserId}`, JSON.stringify({
+        email: result.email,
+        linkedAt: Date.now(),
+      }), { EX: 3600 }).catch(() => {});
+    }
+  });
+  console.log(`${LOG} M365 integration: ENABLED (client_id=${process.env.M365_CLIENT_ID?.substring(0, 8)}...)`);
+} else {
+  console.log(`${LOG} M365 integration: DISABLED (M365_CLIENT_ID/SECRET/REDIRECT_URI not set)`);
+}
 
 // Start Express immediately so Railway sees the port is bound
 const server = app.listen(PORT, () => {
@@ -2015,6 +2038,43 @@ async function processBubbleCallback(body) {
         }).catch(e => console.warn(`${LOG} Failed to send secure-mode confirmation:`, e.message));
       }
       console.log(`${LOG} Secure mode ${enabling ? "ON" : "OFF"} for ${histKey} (bubble-intercept)`);
+      return;
+    }
+
+    // "jojo connect email" / "jojo disconnect email" — M365 account linking
+    if (m365Auth && m365Auth.isConfigured() && /^jojo\s+(connect|disconnect)\s+email$/i.test(contentLower.trim())) {
+      const isConnect = /connect/i.test(contentLower);
+      const sendReply = async (msg) => {
+        const bbl = roomJid ? bubbleByJid.get(roomJid) : null;
+        if (bbl) await sendMessageToBubble(bbl, msg).catch(() => {});
+        else if (body.conversation_id && s2sConnectionId && authToken) {
+          const host = rainbowHost || "openrainbow.com";
+          await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${body.conversation_id}/messages`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ message: { body: msg, lang: "en" } }),
+          }).catch(() => {});
+        }
+      };
+
+      if (isConnect) {
+        const already = await m365Auth.isLinked(fromJid);
+        if (already) {
+          const email = await m365Auth.getLinkedEmail(fromJid);
+          await sendReply(`Your Outlook is already connected (${email}). Send "jojo disconnect email" first to reconnect.`);
+        } else {
+          const authUrl = await m365Auth.getAuthUrl(fromJid, { conversationId: body.conversation_id, roomJid, isBubble: true });
+          await sendReply(`Click this link to connect your Outlook:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
+        }
+      } else {
+        const linked = await m365Auth.isLinked(fromJid);
+        if (!linked) {
+          await sendReply(`Your Outlook is not connected. Send "jojo connect email" to link it.`);
+        } else {
+          await m365Auth.unlinkAccount(fromJid);
+          await sendReply(`Outlook disconnected. Your tokens have been deleted.`);
+        }
+      }
       return;
     }
 
@@ -2436,6 +2496,55 @@ async function start() {
         return;
       }
 
+      // "jojo connect email" / "jojo disconnect email" — M365 account linking
+      if (m365Auth && m365Auth.isConfigured() && /^jojo\s+(connect|disconnect)\s+email$/i.test(contentLower.trim())) {
+        const isConnect = /connect/i.test(contentLower);
+        const sendReply = async (msg) => {
+          const convId = rawConversationId || conversationId;
+          let sent = false;
+          if (convId && s2sConnectionId && authToken) {
+            try {
+              const host = rainbowHost || "openrainbow.com";
+              const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ message: { body: msg, lang: "en" } }),
+              });
+              sent = resp.ok;
+            } catch {}
+          }
+          if (!sent && fromJid) {
+            try {
+              const contact = await sdk.contacts.getContactByJid(fromJid);
+              if (contact) {
+                const conv = await sdk.conversations.openConversationForContact(contact);
+                if (conv) { await sdk.im.sendMessageToConversation(conv, msg); sent = true; }
+              }
+            } catch {}
+          }
+        };
+
+        if (isConnect) {
+          const already = await m365Auth.isLinked(fromJid);
+          if (already) {
+            const email = await m365Auth.getLinkedEmail(fromJid);
+            await sendReply(`Your Outlook is already connected (${email}). Send "jojo disconnect email" first to reconnect.`);
+          } else {
+            const authUrl = await m365Auth.getAuthUrl(fromJid, { conversationId: rawConversationId || conversationId, isBubble });
+            await sendReply(`Click this link to connect your Outlook:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
+          }
+        } else {
+          const linked = await m365Auth.isLinked(fromJid);
+          if (!linked) {
+            await sendReply(`Your Outlook is not connected. Send "jojo connect email" to link it.`);
+          } else {
+            await m365Auth.unlinkAccount(fromJid);
+            await sendReply(`Outlook disconnected. Your tokens have been deleted.`);
+          }
+        }
+        return;
+      }
+
       // In bubbles: respond on explicit trigger, or evaluate intent if conversation is active (5min window)
       if (isBubble && !hasBotTrigger) {
         const active = activeConversations.get(historyKey);
@@ -2455,6 +2564,29 @@ async function start() {
       }
 
       stats.received++;
+
+      // Check for pending M365 link confirmation
+      if (m365Auth && redis) {
+        try {
+          const pendingLink = await redis.get(`oauth:linked_pending:${fromJid}`);
+          if (pendingLink) {
+            await redis.del(`oauth:linked_pending:${fromJid}`);
+            const { email } = JSON.parse(pendingLink);
+            const linkMsg = `Outlook connected! (${email})\nYou can now ask me about your emails. Try: "summarize my unread emails"`;
+            // Send via S2S REST
+            const convId = rawConversationId || conversationId;
+            if (convId && s2sConnectionId && authToken) {
+              const host = rainbowHost || "openrainbow.com";
+              fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ message: { body: linkMsg, lang: "en" } }),
+              }).catch(() => {});
+            }
+          }
+        } catch {}
+      }
+
       console.log(`${LOG} [${stats.received}] ${isBubble ? "[BUBBLE]" : "[1:1]"} Message from ${fromName}: ${content.substring(0, 80)}${content.length > 80 ? "..." : ""}`);
       // Direct property reads
       let convTypeVal = null, convBubbleVal = null, convDbId = null;
