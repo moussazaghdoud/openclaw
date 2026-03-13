@@ -11,6 +11,8 @@ const express = require("express");
 const { createClient } = require("redis");
 let mammoth;
 try { mammoth = require("mammoth"); } catch (_) { mammoth = null; }
+let JSZip;
+try { JSZip = require("jszip"); } catch (_) { JSZip = null; }
 let pii;
 try { pii = require("./pii"); console.log("[OpenClawBot] PII module loaded OK"); } catch (e) { pii = null; console.warn("[OpenClawBot] PII module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
@@ -146,21 +148,40 @@ const TOOLS = [
     type: "function",
     function: {
       name: "create_file",
-      description: "Create a text-based file and return a download link. Use this when the user asks to create, generate, or write a file. IMPORTANT: Only text-based formats work (.txt, .csv, .json, .xml, .html, .md, .js, .py, .css, .sql, .yaml, .sh). For documents/Word files, ALWAYS use .html (Word opens HTML natively). NEVER use .docx/.xlsx/.pdf — these are binary and will be corrupted.",
+      description: "Create a text-based file (.txt, .csv, .html, .md, etc.) and return a download link. For translating Word documents, use translate_document instead.",
       parameters: {
         type: "object",
         properties: {
-          filename: { type: "string", description: "Filename with extension. Use .html for documents (NOT .docx), .csv for spreadsheets (NOT .xlsx), e.g. report.html, data.csv, notes.md" },
-          content: { type: "string", description: "The full text content of the file. For .html files, include proper HTML with inline CSS for formatting." },
+          filename: { type: "string", description: "Filename with extension (.html, .csv, .md, .txt, etc.)" },
+          content: { type: "string", description: "The full text content of the file." },
         },
         required: ["filename", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "translate_document",
+      description: "Translate a Word document (.docx) that was previously shared by the user. Produces a proper .docx file preserving the original layout, images, styles, and formatting — only the text is replaced with the translation. ALWAYS use this tool when the user asks to translate a Word document.",
+      parameters: {
+        type: "object",
+        properties: {
+          source_filename: { type: "string", description: "The original filename that was shared (e.g. 'report.docx')" },
+          translated_paragraphs: {
+            type: "array",
+            items: { type: "string" },
+            description: "Array of translated paragraph texts, in the same order as they appear in the original document. Each entry replaces the corresponding paragraph.",
+          },
+        },
+        required: ["source_filename", "translated_paragraphs"],
       },
     },
   },
 ];
 
 // Execute a tool call and return the result
-function executeTool(toolCall) {
+async function executeTool(toolCall) {
   const { name, arguments: argsStr } = toolCall.function;
   try {
     const args = JSON.parse(argsStr);
@@ -173,7 +194,10 @@ function executeTool(toolCall) {
       if (["pdf"].includes(ext)) fname = fname.replace(/\.pdf$/i, ".html");
       const url = hostFile(fname, args.content);
       console.log(`${LOG} Tool create_file: ${fname} -> ${url}`);
-      return JSON.stringify({ success: true, filename: args.filename, download_url: url });
+      return JSON.stringify({ success: true, filename: fname, download_url: url });
+    }
+    if (name === "translate_document") {
+      return await executeTranslateDocument(args);
     }
     return JSON.stringify({ error: `Unknown tool: ${name}` });
   } catch (err) {
@@ -182,11 +206,99 @@ function executeTool(toolCall) {
   }
 }
 
+/**
+ * Translate a .docx by replacing paragraph text in the XML while preserving layout/images/styles.
+ */
+async function executeTranslateDocument(args) {
+  const { source_filename, translated_paragraphs } = args;
+  if (!JSZip) return JSON.stringify({ error: "jszip not installed" });
+  if (!translated_paragraphs || !Array.isArray(translated_paragraphs)) {
+    return JSON.stringify({ error: "translated_paragraphs must be an array" });
+  }
+
+  // Find stored docx buffer
+  const key = source_filename.toLowerCase();
+  let docxBuf = storedDocxFiles.get(key)?.buffer;
+  if (!docxBuf && redis) {
+    try {
+      const b64 = await redis.get(`docx:${key}`);
+      if (b64) docxBuf = Buffer.from(b64, "base64");
+    } catch {}
+  }
+  if (!docxBuf) {
+    return JSON.stringify({ error: `Original document '${source_filename}' not found. The user must share the file first.` });
+  }
+
+  try {
+    const zip = await JSZip.loadAsync(docxBuf);
+    const docXmlFile = zip.file("word/document.xml");
+    if (!docXmlFile) return JSON.stringify({ error: "Invalid docx: no word/document.xml" });
+
+    let docXml = await docXmlFile.async("string");
+
+    // Extract paragraphs: each <w:p>...</w:p> block
+    const paraRegex = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g;
+    const paragraphs = docXml.match(paraRegex) || [];
+
+    // Filter to paragraphs that actually have text content
+    const textParas = [];
+    for (let i = 0; i < paragraphs.length; i++) {
+      const textContent = paragraphs[i].replace(/<[^>]+>/g, "").trim();
+      if (textContent.length > 0) {
+        textParas.push({ index: i, xml: paragraphs[i], text: textContent });
+      }
+    }
+
+    console.log(`${LOG} translate_document: ${textParas.length} text paragraphs, ${translated_paragraphs.length} translations`);
+
+    // Replace text in each paragraph that has content
+    const allParas = [...paragraphs]; // copy
+    const limit = Math.min(textParas.length, translated_paragraphs.length);
+    for (let i = 0; i < limit; i++) {
+      const para = textParas[i];
+      const newText = translated_paragraphs[i];
+      // Replace all <w:t> content: put translated text in the first <w:t>, empty the rest
+      let first = true;
+      const newParaXml = para.xml.replace(/<w:t([^>]*)>[^<]*<\/w:t>/g, (match, attrs) => {
+        if (first) {
+          first = false;
+          // Escape XML entities
+          const escaped = newText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+          return `<w:t${attrs}>${escaped}</w:t>`;
+        }
+        return `<w:t${attrs}></w:t>`;
+      });
+      allParas[para.index] = newParaXml;
+    }
+
+    // Rebuild document.xml by replacing each paragraph
+    let newDocXml = docXml;
+    for (let i = paragraphs.length - 1; i >= 0; i--) {
+      newDocXml = newDocXml.replace(paragraphs[i], allParas[i]);
+    }
+
+    zip.file("word/document.xml", newDocXml);
+    const newDocxBuf = await zip.generateAsync({ type: "nodebuffer" });
+
+    // Host the translated docx
+    const outName = source_filename.replace(/\.docx?$/i, "_translated.docx");
+    const url = hostFile(outName, newDocxBuf, true);
+    console.log(`${LOG} translate_document: created ${outName} (${newDocxBuf.length} bytes) -> ${url}`);
+    return JSON.stringify({ success: true, filename: outName, download_url: url });
+  } catch (err) {
+    console.error(`${LOG} translate_document error:`, err);
+    return JSON.stringify({ error: err.message });
+  }
+}
+
 async function callOpenClaw(userId, userMessage, attempt = 1) {
   const history = await getHistory(userId);
 
   const messages = [];
-  const fileNote = `When users share files, their content appears in conversation history. You can read and reference file contents directly. You do NOT have a filesystem or workspace — to create files, use the create_file tool. Do NOT upload files to tmpfiles.org, transfer.sh, or any external service. Do NOT reference paths like /.openclaw/workspace/. The create_file tool is the ONLY way to deliver files to the user.`;
+  const fileNote = `When users share files, their content appears in conversation history. You can read and reference file contents directly.
+To create NEW text files, use the create_file tool.
+To TRANSLATE a Word document (.docx), ALWAYS use the translate_document tool — it preserves the original layout, images, styles, and formatting, only replacing text. Provide the translated paragraphs in the same order as they appear.
+Do NOT upload files to tmpfiles.org, transfer.sh, or any external service. Do NOT reference paths like /.openclaw/workspace/.`;
   const sysPrompt = config.systemPrompt
     ? `${config.systemPrompt}\n\n${fileNote}`
     : fileNote;
@@ -238,7 +350,7 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
       const fileLinks = [];
 
       for (const tc of choice.message.tool_calls) {
-        const result = executeTool(tc);
+        const result = await executeTool(tc);
         toolResults.push({ role: "tool", tool_call_id: tc.id, content: result });
         // Collect file links for the response
         try {
@@ -643,16 +755,22 @@ async function describeFileForAI(fileInfo, downloaded) {
     return `[File: ${filename}]\n\`\`\`\n${text}\n\`\`\``;
   }
 
-  // Word documents (.docx): convert to HTML (preserves images as inline base64)
+  // Word documents (.docx): extract text only (lightweight), store raw buffer for translate_document tool
   if ((mime.includes("wordprocessingml") || filename.toLowerCase().endsWith(".docx")) && mammoth) {
+    // Store raw docx buffer so translate_document tool can use it later
+    storedDocxFiles.set(filename.toLowerCase(), { buffer, storedAt: Date.now() });
+    if (redis) {
+      redis.set(`docx:${filename.toLowerCase()}`, buffer.toString("base64"), { EX: 24 * 3600 }).catch(() => {});
+    }
+    console.log(`${LOG} Stored raw docx: ${filename} (${buffer.length} bytes)`);
     try {
-      const result = await mammoth.convertToHtml({ buffer });
+      const result = await mammoth.extractRawText({ buffer });
       if (result.value && result.value.trim().length > 0) {
-        const html = result.value.trim().substring(0, 80000);
-        return `[File: ${filename} — HTML with inline images]\n\`\`\`html\n${html}\n\`\`\`\nIMPORTANT: When creating a translated version of this document, preserve ALL <img> tags exactly as-is (they contain base64-encoded images). Only translate the text content.`;
+        const text = result.value.trim().substring(0, 50000);
+        return `[Word document: ${filename}]\n\`\`\`\n${text}\n\`\`\`\nTo translate or modify this document, use the translate_document tool. It will produce a proper .docx file preserving the original layout, images, and formatting.`;
       }
     } catch (err) {
-      console.warn(`${LOG} mammoth HTML conversion failed:`, err.message);
+      console.warn(`${LOG} mammoth extraction failed:`, err.message);
     }
   }
 
@@ -1114,6 +1232,7 @@ app.get("/api/last-download", (req, res) => {
 
 // ── Self-hosted file downloads ──────────────────────────
 const hostedFiles = new Map(); // id → { filename, content, mime, createdAt }
+const storedDocxFiles = new Map(); // filename → { buffer, storedAt }
 const HOSTED_FILE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 app.get("/files/:id", async (req, res) => {
