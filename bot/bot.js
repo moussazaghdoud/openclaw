@@ -643,16 +643,16 @@ async function describeFileForAI(fileInfo, downloaded) {
     return `[File: ${filename}]\n\`\`\`\n${text}\n\`\`\``;
   }
 
-  // Word documents (.docx): extract text with mammoth
+  // Word documents (.docx): convert to HTML (preserves images as inline base64)
   if ((mime.includes("wordprocessingml") || filename.toLowerCase().endsWith(".docx")) && mammoth) {
     try {
-      const result = await mammoth.extractRawText({ buffer });
+      const result = await mammoth.convertToHtml({ buffer });
       if (result.value && result.value.trim().length > 0) {
-        const text = result.value.trim().substring(0, 50000);
-        return `[File: ${filename}]\n\`\`\`\n${text}\n\`\`\``;
+        const html = result.value.trim().substring(0, 80000);
+        return `[File: ${filename} — HTML with inline images]\n\`\`\`html\n${html}\n\`\`\`\nIMPORTANT: When creating a translated version of this document, preserve ALL <img> tags exactly as-is (they contain base64-encoded images). Only translate the text content.`;
       }
     } catch (err) {
-      console.warn(`${LOG} mammoth extraction failed:`, err.message);
+      console.warn(`${LOG} mammoth HTML conversion failed:`, err.message);
     }
   }
 
