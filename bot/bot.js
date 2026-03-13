@@ -1295,6 +1295,21 @@ app.get("/api/intercepted", (req, res) => {
 });
 
 // Debug endpoint: test file download with a given fileId
+// Debug: inspect a hosted file's metadata without downloading
+app.get("/api/file-info/:id", (req, res) => {
+  const fileId = req.params.id.replace(/[*_`~\[\]()]+$/g, "");
+  const file = hostedFiles.get(fileId);
+  if (!file) return res.json({ found: false, id: fileId, hostedCount: hostedFiles.size });
+  res.json({
+    found: true, id: fileId,
+    filename: file.filename, mime: file.mime, binary: file.binary,
+    contentType: typeof file.content,
+    isBuffer: Buffer.isBuffer(file.content),
+    contentLength: file.content?.length || 0,
+    createdAt: new Date(file.createdAt).toISOString(),
+  });
+});
+
 app.get("/api/file-test/:fileId", async (req, res) => {
   const fileId = req.params.fileId;
   const fileInfo = {
@@ -1357,7 +1372,7 @@ app.get("/files/:id", async (req, res) => {
     res.end(buf);
   } catch (err) {
     console.error(`${LOG} File serve error:`, err);
-    if (!res.headersSent) res.status(500).send("Internal error serving file");
+    if (!res.headersSent) res.status(500).send(`File serve error: ${err.message}`);
   }
 });
 
