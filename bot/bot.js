@@ -1116,19 +1116,40 @@ app.get("/api/last-download", (req, res) => {
 const hostedFiles = new Map(); // id → { filename, content, mime, createdAt }
 const HOSTED_FILE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
-app.get("/files/:id", (req, res) => {
-  const file = hostedFiles.get(req.params.id);
+app.get("/files/:id", async (req, res) => {
+  let file = hostedFiles.get(req.params.id);
+  // Fall back to Redis if not in memory (survives redeployments)
+  if (!file && redis) {
+    try {
+      const data = await redis.get(`file:${req.params.id}`);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (parsed.binary && parsed.content) parsed.content = Buffer.from(parsed.content, "base64");
+        hostedFiles.set(req.params.id, parsed); // re-cache in memory
+        file = parsed;
+      }
+    } catch (err) { console.warn(`${LOG} Redis file fetch error:`, err.message); }
+  }
   if (!file) return res.status(404).send("File not found or expired");
   res.setHeader("Content-Type", file.mime);
   res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
   res.send(file.binary ? file.content : Buffer.from(file.content, "utf-8"));
 });
 
-function hostFile(filename, content) {
+function hostFile(filename, content, binary = false) {
   const id = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   const mime = guessMime(filename);
-  hostedFiles.set(id, { filename, content, mime, createdAt: Date.now() });
-  // Cleanup expired files
+  const entry = { filename, content, mime, createdAt: Date.now(), binary };
+  hostedFiles.set(id, entry);
+  // Persist to Redis so files survive redeployments
+  if (redis) {
+    const toStore = { ...entry };
+    if (binary && Buffer.isBuffer(content)) toStore.content = content.toString("base64");
+    redis.set(`file:${id}`, JSON.stringify(toStore), { EX: 24 * 3600 }).catch(err =>
+      console.warn(`${LOG} Redis file persist error:`, err.message)
+    );
+  }
+  // Cleanup expired files from memory
   for (const [fid, f] of hostedFiles) {
     if (Date.now() - f.createdAt > HOSTED_FILE_TTL) hostedFiles.delete(fid);
   }
@@ -1167,11 +1188,7 @@ async function rewriteFileUrls(text) {
       // Clean filename
       filename = filename.replace(/[^\w.\-]/g, "_");
 
-      const id = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-      const mime = resp.headers.get("content-type") || guessMime(filename);
-      hostedFiles.set(id, { filename, content: buf, mime, createdAt: Date.now(), binary: true });
-      const baseUrl = config.hostCallback || `http://localhost:${PORT}`;
-      const localUrl = `${baseUrl}/files/${id}`;
+      const localUrl = hostFile(filename, buf, true);
       result = result.replace(originalUrl, localUrl);
       console.log(`${LOG} Re-hosted: ${originalUrl} -> ${localUrl} (${filename}, ${buf.length} bytes)`);
     } catch (err) {
