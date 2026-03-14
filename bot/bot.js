@@ -2492,18 +2492,23 @@ async function processBubbleCallback(body) {
 
     // Enterprise access control
     if (enterprise && enterprise.isEnterpriseMode()) {
-      let bubbleEmail = body.from_email || "";
-      if (!bubbleEmail && fromJid && fromJid.includes("@")) {
-        const jidLocal = fromJid.split("@")[0];
-        const lastUnderscore = jidLocal.lastIndexOf("_");
-        if (lastUnderscore > 0) {
-          bubbleEmail = jidLocal.substring(0, lastUnderscore) + "@" + jidLocal.substring(lastUnderscore + 1);
+      try {
+        let bubbleEmail = body.from_email || "";
+        if (!bubbleEmail && fromJid && fromJid.includes("@")) {
+          const jidLocal = fromJid.split("@")[0];
+          const lastUnderscore = jidLocal.lastIndexOf("_");
+          if (lastUnderscore > 0) {
+            bubbleEmail = jidLocal.substring(0, lastUnderscore) + "@" + jidLocal.substring(lastUnderscore + 1);
+          }
         }
-      }
-      const access = await enterprise.checkAccess(fromJid, bubbleEmail);
-      if (!access.allowed) {
-        console.log(`${LOG} Access denied (bubble): ${fromJid} (${bubbleEmail})`);
-        return;
+        console.log(`${LOG} Enterprise check (bubble): jid=${fromJid} email=${bubbleEmail}`);
+        const access = await enterprise.checkAccess(fromJid, bubbleEmail);
+        if (!access.allowed) {
+          console.log(`${LOG} Access denied (bubble): ${fromJid} (${bubbleEmail})`);
+          return;
+        }
+      } catch (e) {
+        console.error(`${LOG} Enterprise check ERROR (bubble, allowing):`, e.message);
       }
     }
 
@@ -2934,20 +2939,27 @@ async function start() {
 
       // Enterprise access control
       if (enterprise && enterprise.isEnterpriseMode()) {
-        // Try multiple sources for the user's email
-        let rainbowEmail = message.from?.loginEmail || message.from?.email || "";
-        // Extract email from JID if needed (JID format: user_domain.com@openrainbow.com)
-        if (!rainbowEmail && fromJid && fromJid.includes("@")) {
-          const jidLocal = fromJid.split("@")[0]; // e.g. moussa.zaghdoud_al-enterprise.com
-          const lastUnderscore = jidLocal.lastIndexOf("_");
-          if (lastUnderscore > 0) {
-            rainbowEmail = jidLocal.substring(0, lastUnderscore) + "@" + jidLocal.substring(lastUnderscore + 1);
+        try {
+          // Try multiple sources for the user's email
+          let rainbowEmail = message.from?.loginEmail || message.from?.email || "";
+          // Extract email from JID if needed (JID format: user_domain.com@openrainbow.com)
+          if (!rainbowEmail && fromJid && fromJid.includes("@")) {
+            const jidLocal = fromJid.split("@")[0];
+            const lastUnderscore = jidLocal.lastIndexOf("_");
+            if (lastUnderscore > 0) {
+              rainbowEmail = jidLocal.substring(0, lastUnderscore) + "@" + jidLocal.substring(lastUnderscore + 1);
+            }
           }
-        }
-        const access = await enterprise.checkAccess(fromJid, rainbowEmail);
-        if (!access.allowed) {
-          console.log(`${LOG} Access denied (1:1): ${fromJid} (${rainbowEmail})`);
-          return;
+          console.log(`${LOG} Enterprise check: jid=${fromJid} email=${rainbowEmail}`);
+          const access = await enterprise.checkAccess(fromJid, rainbowEmail);
+          if (!access.allowed) {
+            console.log(`${LOG} Access denied (1:1): ${fromJid} (${rainbowEmail})`);
+            return;
+          }
+          console.log(`${LOG} Access granted: ${fromJid}`);
+        } catch (e) {
+          console.error(`${LOG} Enterprise check ERROR (allowing):`, e.message);
+          // Don't block on enterprise errors — allow the message through
         }
       }
 
