@@ -262,6 +262,11 @@ function describeIntent(intent) {
       return `Translating PowerPoint to ${intent.language}...`;
     case "translate_any":
       return `Translating document to ${intent.language}...`;
+    case "anonymize_pptx":
+    case "anonymize_pdf":
+    case "anonymize_docx":
+    case "anonymize_any":
+      return `Anonymizing document...`;
     case "create_file":
       return `Creating ${intent.format.toUpperCase()} file...`;
     case "email_summarize_unread":
@@ -337,7 +342,21 @@ function detectIntent(userMessage) {
     }
   }
 
-  // 2. Create a file — detect "create/generate/write/make ... file/document/report/..."
+  // 2. Anonymize a document — detect "anonymize/anonymise/redact/mask" with a stored file
+  if (/\b(anonymi[sz]e|redact|mask|hide\s+(pii|personal|sensitive)|remove\s+(pii|personal|names|sensitive)|anonym\w*)\b/i.test(userMessage)) {
+    for (const [key] of storedPptxFiles) {
+      return { type: "anonymize_pptx", fileKey: key };
+    }
+    for (const [key] of storedPdfFiles) {
+      return { type: "anonymize_pdf", fileKey: key };
+    }
+    for (const [key] of storedDocxFiles) {
+      return { type: "anonymize_docx", fileKey: key };
+    }
+    return { type: "anonymize_any" };
+  }
+
+  // 3. Create a file — detect "create/generate/write/make ... file/document/report/..."
   const filePatterns = [
     /\b(creat|generat|writ|mak|produc|build|draft|prepar)\w*\b[^.?!]{0,40}\b(file|document|report|csv|html|script|spreadsheet|page|letter|email|template|contract|memo|resume|cv)\b/i,
     /\b(sav|export|convert)\w*\b[^.?!]{0,30}\b(as|to|into)\s+\w*\s*(file|\.?\w{2,4})\b/i,
@@ -727,6 +746,215 @@ async function handleAnyTranslation(userId, userMessage, language) {
     } catch (err) { console.warn(`${LOG} Redis file scan failed:`, err.message); }
   }
   return `I don't have any document stored. Please share a PDF or .docx file first, then ask me to translate it.`;
+}
+
+/**
+ * Handle document anonymization: extract text, run through PII anonymizer,
+ * rebuild document with anonymized text. Supports PPTX, PDF, and DOCX.
+ */
+async function handleAnonymizeDocument(userId, intentType, fileKey) {
+  if (!pii) return "Anonymization is not available (PII module not loaded).";
+  if (!JSZip) return "Document processing is not available (JSZip not installed).";
+
+  console.log(`${LOG} [INTENT] ${intentType}: file=${fileKey || "auto"}`);
+
+  // Resolve which file type to anonymize
+  let type = null; // "pptx", "pdf", "docx"
+  let activeKey = fileKey;
+  let buffer = null;
+
+  if (intentType === "anonymize_pptx" || intentType === "anonymize_any") {
+    // Check PPTX
+    for (const [key, val] of storedPptxFiles) {
+      type = "pptx"; activeKey = key; buffer = val.buffer; break;
+    }
+    if (!buffer && redis) {
+      try {
+        const keys = await redis.keys("pptx:*");
+        if (keys.length > 0) {
+          const b64 = await redis.get(keys[keys.length - 1]);
+          if (b64) { type = "pptx"; activeKey = keys[keys.length - 1].replace(/^pptx:/, ""); buffer = Buffer.from(b64, "base64"); }
+        }
+      } catch {}
+    }
+  }
+  if (!buffer && (intentType === "anonymize_pdf" || intentType === "anonymize_any")) {
+    for (const [key, val] of storedPdfFiles) {
+      type = "pdf"; activeKey = key; buffer = val.buffer; break;
+    }
+    if (!buffer && redis) {
+      try {
+        const keys = await redis.keys("pdf:*");
+        if (keys.length > 0) {
+          const b64 = await redis.get(keys[keys.length - 1]);
+          if (b64) { type = "pdf"; activeKey = keys[keys.length - 1].replace(/^pdf:/, ""); buffer = Buffer.from(b64, "base64"); }
+        }
+      } catch {}
+    }
+  }
+  if (!buffer && (intentType === "anonymize_docx" || intentType === "anonymize_any")) {
+    for (const [key, val] of storedDocxFiles) {
+      type = "docx"; activeKey = key; buffer = val.buffer; break;
+    }
+    if (!buffer && redis) {
+      try {
+        const keys = await redis.keys("docx:*");
+        if (keys.length > 0) {
+          const b64 = await redis.get(keys[keys.length - 1]);
+          if (b64) { type = "docx"; activeKey = keys[keys.length - 1].replace(/^docx:/, ""); buffer = Buffer.from(b64, "base64"); }
+        }
+      } catch {}
+    }
+  }
+
+  if (!buffer) return "I don't have any document stored. Please share a file first, then ask me to anonymize it.";
+  console.log(`${LOG} Anonymizing ${type} file: ${activeKey} (${buffer.length} bytes)`);
+
+  try {
+    if (type === "pptx") {
+      return await anonymizePptx(activeKey, buffer);
+    } else if (type === "docx") {
+      return await anonymizeDocx(activeKey, buffer);
+    } else if (type === "pdf") {
+      return await anonymizePdf(activeKey, buffer);
+    }
+  } catch (err) {
+    console.error(`${LOG} Anonymize error:`, err.message);
+    return "Sorry, something went wrong anonymizing the document. Please try again.";
+  }
+}
+
+async function anonymizePptx(activeKey, buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  const slideEntries = [];
+  for (const [path] of Object.entries(zip.files)) {
+    if (/^ppt\/slides\/slide\d+\.xml$/i.test(path)) slideEntries.push(path);
+  }
+  slideEntries.sort();
+
+  let totalAnonymized = 0;
+  for (const slidePath of slideEntries) {
+    let xml = await zip.file(slidePath).async("string");
+    xml = await replaceTextInXml(xml, /<a:t>([^<]*)<\/a:t>/g, async (fullMatch, text) => {
+      if (text.trim().length === 0) return fullMatch;
+      const { anonymizedText } = await pii.anonymize(text);
+      if (anonymizedText !== text) totalAnonymized++;
+      return `<a:t>${escapeXml(anonymizedText)}</a:t>`;
+    });
+    zip.file(slidePath, xml);
+  }
+
+  const outBuffer = await zip.generateAsync({ type: "nodebuffer" });
+  const baseName = activeKey.replace(/\.pptx?$/i, "");
+  const outFilename = `${baseName}_anonymized.pptx`;
+  const url = hostFile(outFilename, outBuffer);
+  console.log(`${LOG} PPTX anonymized: ${outFilename} (${totalAnonymized} replacements) -> ${url}`);
+  return `Here's your anonymized presentation:\n\n📎 ${outFilename}\n${url}\n\n${totalAnonymized} text segments anonymized.`;
+}
+
+async function anonymizeDocx(activeKey, buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  const docXmlFile = zip.file("word/document.xml");
+  if (!docXmlFile) return "Invalid docx file.";
+
+  let xml = await docXmlFile.async("string");
+  let totalAnonymized = 0;
+  xml = await replaceTextInXml(xml, /<w:t([^>]*)>([^<]*)<\/w:t>/g, async (fullMatch, attrs, text) => {
+    if (text.trim().length === 0) return fullMatch;
+    const { anonymizedText } = await pii.anonymize(text);
+    if (anonymizedText !== text) totalAnonymized++;
+    return `<w:t${attrs}>${escapeXml(anonymizedText)}</w:t>`;
+  });
+  zip.file("word/document.xml", xml);
+
+  const outBuffer = await zip.generateAsync({ type: "nodebuffer" });
+  const baseName = activeKey.replace(/\.docx?$/i, "");
+  const outFilename = `${baseName}_anonymized.docx`;
+  const url = hostFile(outFilename, outBuffer);
+  console.log(`${LOG} DOCX anonymized: ${outFilename} (${totalAnonymized} replacements) -> ${url}`);
+  return `Here's your anonymized document:\n\n📎 ${outFilename}\n${url}\n\n${totalAnonymized} text segments anonymized.`;
+}
+
+async function anonymizePdf(activeKey, buffer) {
+  if (!pdfParse) return "PDF parsing is not available.";
+
+  const pdfData = await pdfParse(buffer);
+  if (!pdfData.text || pdfData.text.trim().length === 0) {
+    return "The PDF has no extractable text (might be a scanned image).";
+  }
+
+  // Split into paragraphs, anonymize each, output as docx
+  const paragraphs = pdfData.text.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+  const anonymizedParas = [];
+  let totalAnonymized = 0;
+  for (const para of paragraphs) {
+    const { anonymizedText } = await pii.anonymize(para);
+    if (anonymizedText !== para) totalAnonymized++;
+    anonymizedParas.push(anonymizedText);
+  }
+
+  // Build a docx from anonymized text
+  const zip = new JSZip();
+  const escapedParas = anonymizedParas.map(p => {
+    const escaped = p.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return `<w:p><w:r><w:t xml:space="preserve">${escaped}</w:t></w:r></w:p>`;
+  }).join("");
+
+  const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"
+            xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            mc:Ignorable="w14 wp14">
+  <w:body>${escapedParas}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body>
+</w:document>`;
+
+  zip.file("word/document.xml", docXml);
+  zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`);
+  zip.file("_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`);
+  zip.file("word/_rels/document.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+</Relationships>`);
+
+  const docxBuffer = await zip.generateAsync({ type: "nodebuffer" });
+  const baseName = activeKey.replace(/\.pdf$/i, "");
+  const outFilename = `${baseName}_anonymized.docx`;
+  const url = hostFile(outFilename, docxBuffer);
+  console.log(`${LOG} PDF anonymized: ${outFilename} (${totalAnonymized} replacements) -> ${url}`);
+  return `Here's your anonymized document (PDF → DOCX):\n\n📎 ${outFilename}\n${url}\n\n${totalAnonymized} text segments anonymized.`;
+}
+
+/**
+ * Helper: async regex replace for XML text nodes.
+ * Runs the async replacer on each match sequentially.
+ */
+async function replaceTextInXml(xml, regex, asyncReplacer) {
+  const matches = [];
+  let match;
+  const re = new RegExp(regex.source, regex.flags);
+  while ((match = re.exec(xml)) !== null) {
+    matches.push({ fullMatch: match[0], index: match.index, groups: match.slice(1) });
+  }
+  // Process in reverse order to preserve indices
+  let result = xml;
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const m = matches[i];
+    const replacement = await asyncReplacer(m.fullMatch, ...m.groups);
+    result = result.substring(0, m.index) + replacement + result.substring(m.index + m.fullMatch.length);
+  }
+  return result;
+}
+
+function escapeXml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 /**
@@ -2215,6 +2443,8 @@ async function processBubbleCallback(body) {
       responseText = await handlePptxTranslation(fromJid, content, intent.language, intent.fileKey);
     } else if (intent.type === "translate_any") {
       responseText = await handleAnyTranslation(fromJid, content, intent.language);
+    } else if (intent.type.startsWith("anonymize_")) {
+      responseText = await handleAnonymizeDocument(fromJid, intent.type, intent.fileKey);
     } else if (intent.type === "create_file") {
       responseText = await handleCreateFile(fromJid, content, intent.format);
     } else if (intent.type.startsWith("email_") && emailIntents) {
@@ -2941,6 +3171,8 @@ async function start() {
         responseText = await handlePptxTranslation(historyKey, userMessage, intent.language, intent.fileKey);
       } else if (intent.type === "translate_any") {
         responseText = await handleAnyTranslation(historyKey, userMessage, intent.language);
+      } else if (intent.type.startsWith("anonymize_")) {
+        responseText = await handleAnonymizeDocument(historyKey, intent.type, intent.fileKey);
       } else if (intent.type === "create_file") {
         responseText = await handleCreateFile(historyKey, userMessage, intent.format);
       } else if (intent.type.startsWith("email_") && emailIntents) {
