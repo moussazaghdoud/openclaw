@@ -33,6 +33,12 @@ let calendarGoogle;
 try { calendarGoogle = require("./calendar-google"); console.log("[OpenClawBot] Calendar Google module loaded OK"); } catch (e) { calendarGoogle = null; console.warn("[OpenClawBot] Calendar Google module failed to load:", e.message); }
 let calendarIntents;
 try { calendarIntents = require("./calendar-intents"); console.log("[OpenClawBot] Calendar intents module loaded OK"); } catch (e) { calendarIntents = null; console.warn("[OpenClawBot] Calendar intents module failed to load:", e.message); }
+let sfAuth;
+try { sfAuth = require("./salesforce-auth"); console.log("[OpenClawBot] Salesforce auth module loaded OK"); } catch (e) { sfAuth = null; console.warn("[OpenClawBot] Salesforce auth module failed to load:", e.message); }
+let sfApi;
+try { sfApi = require("./salesforce-api"); console.log("[OpenClawBot] Salesforce API module loaded OK"); } catch (e) { sfApi = null; console.warn("[OpenClawBot] Salesforce API module failed to load:", e.message); }
+let sfIntents;
+try { sfIntents = require("./salesforce-intents"); console.log("[OpenClawBot] Salesforce intents module loaded OK"); } catch (e) { sfIntents = null; console.warn("[OpenClawBot] Salesforce intents module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -132,6 +138,11 @@ async function initRedis() {
         });
         console.log(`${LOG} Calendar intents initialized (Outlook: ${hasOutlookCal ? "YES" : "NO"}, Google: ${hasGoogleCal ? "YES" : "NO"})`);
       }
+    }
+    if (sfAuth) sfAuth.init(redis);
+    if (sfIntents && sfAuth && sfApi) {
+      sfIntents.init({ salesforceApiMod: sfApi, salesforceAuthMod: sfAuth, callOpenClaw, redis });
+      console.log(`${LOG} Salesforce intents initialized`);
     }
   } catch (err) {
     console.warn(`${LOG} Redis connection failed, falling back to in-memory:`, err.message);
@@ -341,6 +352,22 @@ function describeIntent(intent) {
       return `Creating meeting...`;
     case "calendar_confirm_cancel":
       return `Cancelling meeting...`;
+    case "sf_search_accounts":
+      return `Searching Salesforce accounts...`;
+    case "sf_account_details":
+      return `Loading account details...`;
+    case "sf_search_contacts":
+      return `Searching Salesforce contacts...`;
+    case "sf_opportunities":
+      return `Loading opportunities...`;
+    case "sf_activity":
+      return `Loading CRM activity...`;
+    case "sf_briefing":
+      return `Preparing customer briefing...`;
+    case "sf_global_search":
+      return `Searching CRM...`;
+    case "sf_smart_query":
+      return `Checking CRM data...`;
     default:
       return null; // no confirmation needed for regular chat
   }
@@ -439,7 +466,13 @@ function detectIntent(userMessage) {
     if (calIntent) return calIntent;
   }
 
-  // 5. Default — regular chat
+  // 5. Salesforce CRM commands
+  if (sfIntents) {
+    const sfIntent = sfIntents.detectSalesforceIntent(userMessage);
+    if (sfIntent) return sfIntent;
+  }
+
+  // 6. Default — regular chat
   return { type: "chat" };
 }
 
@@ -2225,7 +2258,7 @@ app.get("/api/status", (req, res) => {
   for (const [id, b] of bubbleList) {
     bubbles.push({ id, name: b.name, jid: b.jid, members: (b.users || []).length });
   }
-  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, m365: { configured: !!(m365Auth && m365Auth.isConfigured()) }, gmail: { configured: !!(gmailAuth && gmailAuth.isConfigured()) }, calendar: { outlookReady: !!(m365Auth && calendarGraph), googleReady: !!(gmailAuth && calendarGoogle) }, bubbles, lastMessages: debugMessages.slice(-5) });
+  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, m365: { configured: !!(m365Auth && m365Auth.isConfigured()) }, gmail: { configured: !!(gmailAuth && gmailAuth.isConfigured()) }, calendar: { outlookReady: !!(m365Auth && calendarGraph), googleReady: !!(gmailAuth && calendarGoogle) }, salesforce: { configured: !!(sfAuth && sfAuth.isConfigured()) }, bubbles, lastMessages: debugMessages.slice(-5) });
 });
 
 // Register M365 OAuth routes
@@ -2262,6 +2295,22 @@ if (gmailAuth && gmailAuth.isConfigured()) {
   console.log(`${LOG} Gmail integration: ENABLED (client_id=${process.env.GMAIL_CLIENT_ID?.substring(0, 8)}...)`);
 } else {
   console.log(`${LOG} Gmail integration: DISABLED (GMAIL_CLIENT_ID/SECRET/REDIRECT_URI not set)`);
+}
+
+// Register Salesforce OAuth routes
+if (sfAuth && sfAuth.isConfigured()) {
+  sfAuth.registerRoutes(app, async (result) => {
+    console.log(`${LOG} Salesforce link complete: ${result.rainbowUserId} → ${result.email}`);
+    if (redis) {
+      await redis.set(`sf:linked_pending:${result.rainbowUserId}`, JSON.stringify({
+        email: result.email,
+        linkedAt: Date.now(),
+      }), { EX: 3600 }).catch(() => {});
+    }
+  });
+  console.log(`${LOG} Salesforce integration: ENABLED (client_id=${process.env.SALESFORCE_CLIENT_ID?.substring(0, 8)}...)`);
+} else {
+  console.log(`${LOG} Salesforce integration: DISABLED (SALESFORCE_CLIENT_ID/SECRET/REDIRECT_URI not set)`);
 }
 
 // Start Express immediately so Railway sees the port is bound
@@ -2392,8 +2441,8 @@ async function processBubbleCallback(body) {
       return;
     }
 
-    // "jojo connect/disconnect email/outlook/gmail" — email account linking
-    const emailConnectMatch = contentLower.trim().match(/^jojo\s+(connect|disconnect)\s+(email|outlook|gmail)$/i);
+    // "jojo connect/disconnect email/outlook/gmail/salesforce" — account linking
+    const emailConnectMatch = contentLower.trim().match(/^jojo\s+(connect|disconnect)\s+(email|outlook|gmail|salesforce)$/i);
     if (emailConnectMatch) {
       const isConnect = emailConnectMatch[1].toLowerCase() === "connect";
       const target = emailConnectMatch[2].toLowerCase(); // email, outlook, or gmail
@@ -2454,8 +2503,28 @@ async function processBubbleCallback(body) {
           }
         }
         return;
+      } else if (target === "salesforce" && sfAuth && sfAuth.isConfigured()) {
+        if (isConnect) {
+          const already = await sfAuth.isLinked(fromJid);
+          if (already) {
+            const email = await sfAuth.getLinkedEmail(fromJid);
+            await sendReply(`Your Salesforce is already connected (${email}). Send "jojo disconnect salesforce" first to reconnect.`);
+          } else {
+            const authUrl = await sfAuth.getAuthUrl(fromJid, { conversationId: body.conversation_id, roomJid, isBubble: true });
+            await sendReply(`Click this link to connect your Salesforce:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
+          }
+        } else {
+          const linked = await sfAuth.isLinked(fromJid);
+          if (!linked) {
+            await sendReply(`Your Salesforce is not connected. Send "jojo connect salesforce" to link it.`);
+          } else {
+            await sfAuth.unlinkAccount(fromJid);
+            await sendReply(`Salesforce disconnected. Your tokens have been deleted.`);
+          }
+        }
+        return;
       } else {
-        await sendReply(`${target === "gmail" ? "Gmail" : target === "outlook" ? "Outlook" : "Email"} integration is not configured.`);
+        await sendReply(`${target === "gmail" ? "Gmail" : target === "outlook" ? "Outlook" : target === "salesforce" ? "Salesforce" : "Email"} integration is not configured.`);
         return;
       }
     }
@@ -2503,6 +2572,8 @@ async function processBubbleCallback(body) {
       responseText = await emailIntents.handleEmailIntent(fromJid, intent, content);
     } else if (intent.type.startsWith("calendar_") && calendarIntents) {
       responseText = await calendarIntents.handleCalendarIntent(fromJid, intent, content);
+    } else if (intent.type.startsWith("sf_") && sfIntents) {
+      responseText = await sfIntents.handleSalesforceIntent(fromJid, intent, content);
     }
 
     if (!responseText) {
@@ -2898,8 +2969,8 @@ async function start() {
         return;
       }
 
-      // "jojo connect/disconnect email/outlook/gmail" — email account linking
-      const emailConnectMatch2 = contentLower.trim().match(/^jojo\s+(connect|disconnect)\s+(email|outlook|gmail)$/i);
+      // "jojo connect/disconnect email/outlook/gmail/salesforce" — account linking
+      const emailConnectMatch2 = contentLower.trim().match(/^jojo\s+(connect|disconnect)\s+(email|outlook|gmail|salesforce)$/i);
       if (emailConnectMatch2) {
         const isConnect = emailConnectMatch2[1].toLowerCase() === "connect";
         const target = emailConnectMatch2[2].toLowerCase();
@@ -2971,8 +3042,28 @@ async function start() {
             }
           }
           return;
+        } else if (target === "salesforce" && sfAuth && sfAuth.isConfigured()) {
+          if (isConnect) {
+            const already = await sfAuth.isLinked(fromJid);
+            if (already) {
+              const email = await sfAuth.getLinkedEmail(fromJid);
+              await sendReply(`Your Salesforce is already connected (${email}). Send "jojo disconnect salesforce" first to reconnect.`);
+            } else {
+              const authUrl = await sfAuth.getAuthUrl(fromJid, { conversationId: rawConversationId || conversationId, isBubble });
+              await sendReply(`Click this link to connect your Salesforce:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
+            }
+          } else {
+            const linked = await sfAuth.isLinked(fromJid);
+            if (!linked) {
+              await sendReply(`Your Salesforce is not connected. Send "jojo connect salesforce" to link it.`);
+            } else {
+              await sfAuth.unlinkAccount(fromJid);
+              await sendReply(`Salesforce disconnected. Your tokens have been deleted.`);
+            }
+          }
+          return;
         } else {
-          await sendReply(`${target === "gmail" ? "Gmail" : target === "outlook" ? "Outlook" : "Email"} integration is not configured.`);
+          await sendReply(`${target === "gmail" ? "Gmail" : target === "outlook" ? "Outlook" : target === "salesforce" ? "Salesforce" : "Email"} integration is not configured.`);
           return;
         }
       }
@@ -3247,6 +3338,8 @@ async function start() {
         responseText = await emailIntents.handleEmailIntent(fromJid, intent, userMessage);
       } else if (intent.type.startsWith("calendar_") && calendarIntents) {
         responseText = await calendarIntents.handleCalendarIntent(fromJid, intent, userMessage);
+      } else if (intent.type.startsWith("sf_") && sfIntents) {
+        responseText = await sfIntents.handleSalesforceIntent(fromJid, intent, userMessage);
       }
 
       if (!responseText) {
