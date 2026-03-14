@@ -131,6 +131,13 @@ function detectCalendarIntent(message) {
     return { type: "calendar_details", instructions: message };
   }
 
+  // Follow-up calendar questions (e.g. after viewing a meeting)
+  // Patterns: "and after this one?", "what's next?", "and the next one?",
+  //           "next meeting?", "what about after?", "and then?", "what comes after?"
+  if (/^(and\s+)?(after\s+(this|that)\s+one|the\s+next\s+one|what('?s|\s+is)\s+next|next\s+(one|meeting)|what\s+(about\s+)?after|and\s+then|what\s+comes\s+(next|after))\s*\??$/i.test(msg)) {
+    return { type: "calendar_next", instructions: message };
+  }
+
   // Smart catch-all: any message with calendar/meeting/schedule keywords
   if (/\b(calendar|meeting|schedule|agenda|appointment|event)\b/i.test(msg)) {
     return { type: "calendar_smart_query", query: message };
@@ -170,6 +177,8 @@ async function handleCalendarIntent(userId, intent, originalMessage) {
         return await handleAcceptEvent(api, token, userId, intent, providerLabel);
       case "calendar_decline":
         return await handleDeclineEvent(api, token, userId, intent, providerLabel);
+      case "calendar_next":
+        return await handleNextMeeting(api, token, userId, intent, providerLabel);
       case "calendar_details":
         return await handleMeetingDetails(api, token, userId, intent, providerLabel);
       case "calendar_smart_query":
@@ -516,6 +525,50 @@ Output ONLY JSON.`;
 
   if (!result) return `Sorry, failed to ${action} the meeting.`;
   return `Meeting **"${event.subject}"** has been **${action}ed** (${providerLabel}).`;
+}
+
+// ── Next Meeting (follow-up) ────────────────────────────
+
+async function handleNextMeeting(api, token, userId, intent, providerLabel) {
+  // Get today's events and find the next one after now
+  const events = await api.getTodayEvents(token);
+  if (!events || events._error || events.length === 0) {
+    // Fall back to tomorrow
+    const tomorrowEvents = await api.getTomorrowEvents(token);
+    if (!tomorrowEvents || tomorrowEvents._error || tomorrowEvents.length === 0) {
+      return `No more meetings coming up (${providerLabel}).`;
+    }
+    const nextEvent = tomorrowEvents[0];
+    return formatSingleEvent(nextEvent, "Next Meeting (tomorrow)", providerLabel);
+  }
+
+  const now = new Date();
+  // Find meetings that haven't started yet, or the next one after the current one
+  const upcoming = events.filter(e => new Date(e.start) > now);
+
+  if (upcoming.length === 0) {
+    // All today's meetings have started — check tomorrow
+    const tomorrowEvents = await api.getTomorrowEvents(token);
+    if (!tomorrowEvents || tomorrowEvents._error || tomorrowEvents.length === 0) {
+      return `No more meetings today or tomorrow (${providerLabel}).`;
+    }
+    return formatSingleEvent(tomorrowEvents[0], "Next Meeting (tomorrow)", providerLabel);
+  }
+
+  return formatSingleEvent(upcoming[0], "Next Meeting", providerLabel);
+}
+
+function formatSingleEvent(event, title, providerLabel) {
+  let output = `**${title}** (${providerLabel}):\n\n`;
+  output += `**${event.subject}**\n`;
+  output += `Time: ${formatTime(event.start)} — ${formatTime(event.end)}\n`;
+  if (event.location) output += `Location: ${event.location}\n`;
+  if (event.isOnlineMeeting) output += `Online meeting\n`;
+  if (event.organizer) output += `Organizer: ${event.organizer}\n`;
+  if (event.attendees && event.attendees.length > 0 && event.attendees.length <= 5) {
+    output += `With: ${event.attendees.map(a => a.name || a.email).join(", ")}\n`;
+  }
+  return output;
 }
 
 // ── Meeting Details ─────────────────────────────────────

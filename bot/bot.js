@@ -2713,6 +2713,13 @@ async function processBubbleCallback(body) {
       }
     }
 
+    // If an intent handler produced a response, add to history for context
+    if (responseText) {
+      const bubbleHistKey = `bubble:${body.conversation_id || roomJid}`;
+      await addMessage(bubbleHistKey, "user", content);
+      await addMessage(bubbleHistKey, "assistant", responseText);
+    }
+
     if (!responseText) {
       const result = await callOpenClaw(fromJid, content);
       responseText = result?.content || config.fallbackMsg;
@@ -3520,6 +3527,13 @@ async function start() {
             }
           }
         }
+      }
+
+      // If an intent handler produced a response, add both user message and
+      // bot response to conversation history so follow-up questions have context.
+      if (responseText) {
+        await addMessage(historyKey, "user", userMessage);
+        await addMessage(historyKey, "assistant", responseText);
       }
 
       if (!responseText) {
