@@ -128,7 +128,7 @@ async function initRedis() {
           m365AuthModule: hasM365 ? m365Auth : null,
           gmailApiModule: hasGmail ? gmailApi : null,
           gmailAuthModule: hasGmail ? gmailAuth : null,
-          callOpenClaw, pii, redis,
+          callOpenClaw: callAIStandalone, pii, redis,
         });
         console.log(`${LOG} Email intents initialized (M365: ${hasM365 ? "YES" : "NO"}, Gmail: ${hasGmail ? "YES" : "NO"})`);
       }
@@ -142,24 +142,24 @@ async function initRedis() {
           m365AuthMod: hasOutlookCal ? m365Auth : null,
           googleCalendarMod: hasGoogleCal ? calendarGoogle : null,
           gmailAuthMod: hasGoogleCal ? gmailAuth : null,
-          callOpenClaw, redis,
+          callOpenClaw: callAIStandalone, redis,
         });
         console.log(`${LOG} Calendar intents initialized (Outlook: ${hasOutlookCal ? "YES" : "NO"}, Google: ${hasGoogleCal ? "YES" : "NO"})`);
       }
     }
     if (sfAuth) sfAuth.init(redis);
     if (sfIntents && sfAuth && sfApi) {
-      sfIntents.init({ salesforceApiMod: sfApi, salesforceAuthMod: sfAuth, callOpenClaw, redis });
+      sfIntents.init({ salesforceApiMod: sfApi, salesforceAuthMod: sfAuth, callOpenClaw: callAIStandalone, redis });
       console.log(`${LOG} Salesforce intents initialized`);
     }
     if (spIntents && spApi && m365Auth) {
-      spIntents.init({ sharepointApiMod: spApi, m365AuthMod: m365Auth, callOpenClaw, redis, mammoth, JSZip, pdfParse: pdfParse });
+      spIntents.init({ sharepointApiMod: spApi, m365AuthMod: m365Auth, callOpenClaw: callAIStandalone, redis, mammoth, JSZip, pdfParse: pdfParse });
       console.log(`${LOG} SharePoint intents initialized`);
     }
     if (briefing) {
       briefing.init({
         emailIntents, calendarIntents, sfIntents, spIntents,
-        callOpenClaw, redis,
+        callOpenClaw: callAIStandalone, redis,
         m365Auth, gmailAuth: gmailAuth, sfAuth,
         m365Graph: m365Graph, gmailApi: gmailApi,
         calendarGraph, calendarGoogle, sfApi, spApi,
@@ -1224,6 +1224,41 @@ You are an AI assistant integrated with the user's calendar, email, and CRM. Whe
       await new Promise(r => setTimeout(r, 3000));
       return callOpenClaw(userId, userMessage, attempt + 1);
     }
+    return null;
+  }
+}
+
+/**
+ * Standalone AI call — no conversation history, just system + user prompt.
+ * Used by intent modules for AI-powered features (parsing, summarizing, smart queries).
+ */
+async function callAIStandalone(userIdOrPrompt, promptOrUndefined) {
+  // Supports both callAIStandalone(prompt) and callAIStandalone(userId, prompt)
+  const userPrompt = promptOrUndefined !== undefined ? promptOrUndefined : userIdOrPrompt;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+  try {
+    const response = await fetch(`${config.endpoint}/v1/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: `openclaw:${config.agentId}`,
+        messages: [
+          { role: "system", content: "You are a concise executive AI assistant. Answer directly." },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: config.maxTokens,
+        stream: false,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || null;
+  } catch (e) {
+    clearTimeout(timeout);
+    console.error(`${LOG} callAIStandalone error:`, e.message);
     return null;
   }
 }
