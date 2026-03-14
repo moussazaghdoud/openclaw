@@ -27,6 +27,12 @@ let gmailApi;
 try { gmailApi = require("./gmail-api"); console.log("[OpenClawBot] Gmail API module loaded OK"); } catch (e) { gmailApi = null; console.warn("[OpenClawBot] Gmail API module failed to load:", e.message); }
 let emailIntents;
 try { emailIntents = require("./email-intents"); console.log("[OpenClawBot] Email intents module loaded OK"); } catch (e) { emailIntents = null; console.warn("[OpenClawBot] Email intents module failed to load:", e.message); }
+let calendarGraph;
+try { calendarGraph = require("./calendar-graph"); console.log("[OpenClawBot] Calendar Graph module loaded OK"); } catch (e) { calendarGraph = null; console.warn("[OpenClawBot] Calendar Graph module failed to load:", e.message); }
+let calendarGoogle;
+try { calendarGoogle = require("./calendar-google"); console.log("[OpenClawBot] Calendar Google module loaded OK"); } catch (e) { calendarGoogle = null; console.warn("[OpenClawBot] Calendar Google module failed to load:", e.message); }
+let calendarIntents;
+try { calendarIntents = require("./calendar-intents"); console.log("[OpenClawBot] Calendar intents module loaded OK"); } catch (e) { calendarIntents = null; console.warn("[OpenClawBot] Calendar intents module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -111,6 +117,20 @@ async function initRedis() {
           callOpenClaw, pii, redis,
         });
         console.log(`${LOG} Email intents initialized (M365: ${hasM365 ? "YES" : "NO"}, Gmail: ${hasGmail ? "YES" : "NO"})`);
+      }
+    }
+    if (calendarIntents) {
+      const hasOutlookCal = !!(m365Auth && calendarGraph);
+      const hasGoogleCal = !!(gmailAuth && calendarGoogle);
+      if (hasOutlookCal || hasGoogleCal) {
+        calendarIntents.init({
+          m365CalendarMod: hasOutlookCal ? calendarGraph : null,
+          m365AuthMod: hasOutlookCal ? m365Auth : null,
+          googleCalendarMod: hasGoogleCal ? calendarGoogle : null,
+          gmailAuthMod: hasGoogleCal ? gmailAuth : null,
+          callOpenClaw, redis,
+        });
+        console.log(`${LOG} Calendar intents initialized (Outlook: ${hasOutlookCal ? "YES" : "NO"}, Google: ${hasGoogleCal ? "YES" : "NO"})`);
       }
     }
   } catch (err) {
@@ -295,6 +315,32 @@ function describeIntent(intent) {
       return `Flagging email...`;
     case "email_smart_query":
       return `Checking your emails...`;
+    case "calendar_today":
+      return `Checking today's schedule...`;
+    case "calendar_tomorrow":
+      return `Checking tomorrow's schedule...`;
+    case "calendar_week":
+      return `Checking this week's schedule...`;
+    case "calendar_free_slots":
+      return `Finding free slots...`;
+    case "calendar_create":
+      return `Preparing meeting...`;
+    case "calendar_reschedule":
+      return `Rescheduling meeting...`;
+    case "calendar_cancel":
+      return `Processing cancellation...`;
+    case "calendar_accept":
+      return `Accepting meeting...`;
+    case "calendar_decline":
+      return `Declining meeting...`;
+    case "calendar_details":
+      return `Loading meeting details...`;
+    case "calendar_smart_query":
+      return `Checking your calendar...`;
+    case "calendar_confirm_create":
+      return `Creating meeting...`;
+    case "calendar_confirm_cancel":
+      return `Cancelling meeting...`;
     default:
       return null; // no confirmation needed for regular chat
   }
@@ -387,7 +433,13 @@ function detectIntent(userMessage) {
     if (emailIntent) return emailIntent;
   }
 
-  // 4. Default — regular chat
+  // 4. Calendar commands
+  if (calendarIntents) {
+    const calIntent = calendarIntents.detectCalendarIntent(userMessage);
+    if (calIntent) return calIntent;
+  }
+
+  // 5. Default — regular chat
   return { type: "chat" };
 }
 
@@ -2173,7 +2225,7 @@ app.get("/api/status", (req, res) => {
   for (const [id, b] of bubbleList) {
     bubbles.push({ id, name: b.name, jid: b.jid, members: (b.users || []).length });
   }
-  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, m365: { configured: !!(m365Auth && m365Auth.isConfigured()) }, gmail: { configured: !!(gmailAuth && gmailAuth.isConfigured()) }, bubbles, lastMessages: debugMessages.slice(-5) });
+  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, m365: { configured: !!(m365Auth && m365Auth.isConfigured()) }, gmail: { configured: !!(gmailAuth && gmailAuth.isConfigured()) }, calendar: { outlookReady: !!(m365Auth && calendarGraph), googleReady: !!(gmailAuth && calendarGoogle) }, bubbles, lastMessages: debugMessages.slice(-5) });
 });
 
 // Register M365 OAuth routes
@@ -2449,6 +2501,22 @@ async function processBubbleCallback(body) {
       responseText = await handleCreateFile(fromJid, content, intent.format);
     } else if (intent.type.startsWith("email_") && emailIntents) {
       responseText = await emailIntents.handleEmailIntent(fromJid, intent, content);
+    } else if (intent.type.startsWith("calendar_") && calendarIntents) {
+      responseText = await calendarIntents.handleCalendarIntent(fromJid, intent, content);
+    }
+
+    if (!responseText) {
+      // Check for pending calendar confirmations (yes/no answers)
+      if (calendarIntents) {
+        const pendingResult = await calendarIntents.checkPendingAction(fromJid, content);
+        if (pendingResult) {
+          if (typeof pendingResult === "string") {
+            responseText = pendingResult;
+          } else {
+            responseText = await calendarIntents.handleCalendarIntent(fromJid, pendingResult, content);
+          }
+        }
+      }
     }
 
     if (!responseText) {
@@ -3177,6 +3245,22 @@ async function start() {
         responseText = await handleCreateFile(historyKey, userMessage, intent.format);
       } else if (intent.type.startsWith("email_") && emailIntents) {
         responseText = await emailIntents.handleEmailIntent(fromJid, intent, userMessage);
+      } else if (intent.type.startsWith("calendar_") && calendarIntents) {
+        responseText = await calendarIntents.handleCalendarIntent(fromJid, intent, userMessage);
+      }
+
+      if (!responseText) {
+        // Check for pending calendar confirmations (yes/no answers)
+        if (calendarIntents) {
+          const pendingResult = await calendarIntents.checkPendingAction(fromJid, userMessage);
+          if (pendingResult) {
+            if (typeof pendingResult === "string") {
+              responseText = pendingResult;
+            } else {
+              responseText = await calendarIntents.handleCalendarIntent(fromJid, pendingResult, userMessage);
+            }
+          }
+        }
       }
 
       if (!responseText) {

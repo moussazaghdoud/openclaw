@@ -24,6 +24,8 @@ const SCOPES = [
   "https://www.googleapis.com/auth/gmail.labels",
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
 ].join(" ");
 
 const AUTH_BASE = "https://accounts.google.com/o/oauth2/v2/auth";

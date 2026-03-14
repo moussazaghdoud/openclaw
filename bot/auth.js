@@ -18,7 +18,7 @@ const M365_TENANT_ID = process.env.M365_TENANT_ID || "common";
 const M365_REDIRECT_URI = process.env.M365_REDIRECT_URI || "";
 const ENCRYPTION_KEY_HEX = process.env.M365_TOKEN_ENCRYPTION_KEY || "";
 
-const SCOPES = "openid profile email offline_access Mail.Read Mail.ReadWrite Mail.Send User.Read";
+const SCOPES = "openid profile email offline_access Mail.Read Mail.ReadWrite Mail.Send User.Read Calendars.ReadWrite";
 const AUTH_BASE = `https://login.microsoftonline.com/${M365_TENANT_ID}/oauth2/v2.0`;
 const TOKEN_TTL = 90 * 24 * 3600; // 90 days (refresh tokens last longer, but we'll refresh)
 
