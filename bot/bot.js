@@ -2492,7 +2492,7 @@ async function processBubbleCallback(body) {
 
     // Enterprise access control
     if (enterprise && enterprise.isEnterpriseMode()) {
-      const access = await enterprise.checkAccess(fromJid);
+      const access = await enterprise.checkAccess(fromJid, body.from_email || "");
       if (!access.allowed) {
         console.log(`${LOG} Access denied (bubble): ${fromJid}`);
         return;
@@ -2926,9 +2926,10 @@ async function start() {
 
       // Enterprise access control
       if (enterprise && enterprise.isEnterpriseMode()) {
-        const access = await enterprise.checkAccess(fromJid);
+        const rainbowEmail = message.from?.loginEmail || "";
+        const access = await enterprise.checkAccess(fromJid, rainbowEmail);
         if (!access.allowed) {
-          console.log(`${LOG} Access denied (1:1): ${fromJid}`);
+          console.log(`${LOG} Access denied (1:1): ${fromJid} (${rainbowEmail})`);
           return;
         }
       }

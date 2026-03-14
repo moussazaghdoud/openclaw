@@ -484,11 +484,18 @@ async function linkRainbowUser(jid, rainbowEmail) {
  *
  * If enterprise mode is not configured (no ADMIN_PASSWORD), allows all users.
  */
-async function checkAccess(jid) {
+async function checkAccess(jid, rainbowEmail) {
   // If enterprise mode is not configured, allow everyone (backward compatible)
   if (!ADMIN_PASSWORD || !redisClient) return { allowed: true, user: null };
 
-  const user = await getUserByRainbowJid(jid);
+  // Try direct JID lookup first
+  let user = await getUserByRainbowJid(jid);
+
+  // If not found by JID, try auto-linking by email
+  if (!user && rainbowEmail) {
+    user = await linkRainbowUser(jid, rainbowEmail);
+  }
+
   if (!user) return { allowed: false, user: null };
   if (user.status !== "ACTIVE") return { allowed: false, user };
 
