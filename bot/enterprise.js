@@ -488,16 +488,30 @@ async function checkAccess(jid, rainbowEmail) {
   // If enterprise mode is not configured, allow everyone (backward compatible)
   if (!ADMIN_PASSWORD || !redisClient) return { allowed: true, user: null };
 
+  // If no users have been provisioned yet, allow everyone (admin hasn't set up users)
+  const userCount = await redisClient.sCard("tenant:users").catch(() => 0);
+  if (userCount === 0) {
+    console.log(`${LOG} No enterprise users provisioned — allowing all (jid=${jid})`);
+    return { allowed: true, user: null };
+  }
+
   // Try direct JID lookup first
   let user = await getUserByRainbowJid(jid);
 
   // If not found by JID, try auto-linking by email
   if (!user && rainbowEmail) {
+    console.log(`${LOG} JID not found, trying email auto-link: ${rainbowEmail}`);
     user = await linkRainbowUser(jid, rainbowEmail);
   }
 
-  if (!user) return { allowed: false, user: null };
-  if (user.status !== "ACTIVE") return { allowed: false, user };
+  if (!user) {
+    console.log(`${LOG} Access denied: no matching user for jid=${jid} email=${rainbowEmail}`);
+    return { allowed: false, user: null };
+  }
+  if (user.status !== "ACTIVE") {
+    console.log(`${LOG} Access denied: user ${user.email} status=${user.status}`);
+    return { allowed: false, user };
+  }
 
   return { allowed: true, user };
 }

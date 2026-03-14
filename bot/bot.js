@@ -2492,9 +2492,17 @@ async function processBubbleCallback(body) {
 
     // Enterprise access control
     if (enterprise && enterprise.isEnterpriseMode()) {
-      const access = await enterprise.checkAccess(fromJid, body.from_email || "");
+      let bubbleEmail = body.from_email || "";
+      if (!bubbleEmail && fromJid && fromJid.includes("@")) {
+        const jidLocal = fromJid.split("@")[0];
+        const lastUnderscore = jidLocal.lastIndexOf("_");
+        if (lastUnderscore > 0) {
+          bubbleEmail = jidLocal.substring(0, lastUnderscore) + "@" + jidLocal.substring(lastUnderscore + 1);
+        }
+      }
+      const access = await enterprise.checkAccess(fromJid, bubbleEmail);
       if (!access.allowed) {
-        console.log(`${LOG} Access denied (bubble): ${fromJid}`);
+        console.log(`${LOG} Access denied (bubble): ${fromJid} (${bubbleEmail})`);
         return;
       }
     }
@@ -2926,7 +2934,16 @@ async function start() {
 
       // Enterprise access control
       if (enterprise && enterprise.isEnterpriseMode()) {
-        const rainbowEmail = message.from?.loginEmail || "";
+        // Try multiple sources for the user's email
+        let rainbowEmail = message.from?.loginEmail || message.from?.email || "";
+        // Extract email from JID if needed (JID format: user_domain.com@openrainbow.com)
+        if (!rainbowEmail && fromJid && fromJid.includes("@")) {
+          const jidLocal = fromJid.split("@")[0]; // e.g. moussa.zaghdoud_al-enterprise.com
+          const lastUnderscore = jidLocal.lastIndexOf("_");
+          if (lastUnderscore > 0) {
+            rainbowEmail = jidLocal.substring(0, lastUnderscore) + "@" + jidLocal.substring(lastUnderscore + 1);
+          }
+        }
         const access = await enterprise.checkAccess(fromJid, rainbowEmail);
         if (!access.allowed) {
           console.log(`${LOG} Access denied (1:1): ${fromJid} (${rainbowEmail})`);
