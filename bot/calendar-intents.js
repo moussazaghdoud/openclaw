@@ -191,23 +191,32 @@ async function handleCalendarIntent(userId, intent, originalMessage) {
 
 async function handleTodayEvents(api, token, providerLabel) {
   const events = await api.getTodayEvents(token);
-  if (!events || events._error) return "Sorry, I couldn't access your calendar right now.";
+  if (!events || events._error) return calendarErrorMessage(events, providerLabel);
   if (events.length === 0) return `No meetings scheduled for today (${providerLabel}).`;
   return formatEventList(events, "Today's Schedule", providerLabel);
 }
 
 async function handleTomorrowEvents(api, token, providerLabel) {
   const events = await api.getTomorrowEvents(token);
-  if (!events || events._error) return "Sorry, I couldn't access your calendar right now.";
+  if (!events || events._error) return calendarErrorMessage(events, providerLabel);
   if (events.length === 0) return `No meetings scheduled for tomorrow (${providerLabel}).`;
   return formatEventList(events, "Tomorrow's Schedule", providerLabel);
 }
 
 async function handleWeekEvents(api, token, providerLabel) {
   const events = await api.getWeekEvents(token);
-  if (!events || events._error) return "Sorry, I couldn't access your calendar right now.";
+  if (!events || events._error) return calendarErrorMessage(events, providerLabel);
   if (events.length === 0) return `No meetings scheduled for this week (${providerLabel}).`;
   return formatEventList(events, "This Week's Schedule", providerLabel);
+}
+
+function calendarErrorMessage(events, providerLabel) {
+  if (!events) return "Sorry, I couldn't access your calendar right now.";
+  const status = events.status || "unknown";
+  if (status === 403 || status === 401) {
+    return `Calendar access denied. Your account may not have calendar permissions.\n\nPlease re-link: **jojo disconnect ${providerLabel === "Google Calendar" ? "gmail" : "outlook"}** then **jojo connect ${providerLabel === "Google Calendar" ? "gmail" : "outlook"}** to grant calendar access.`;
+  }
+  return `Sorry, I couldn't access your calendar (error ${status}).`;
 }
 
 // ── Free Slots ──────────────────────────────────────────
@@ -512,10 +521,24 @@ Output ONLY JSON.`;
 // ── Meeting Details ─────────────────────────────────────
 
 async function handleMeetingDetails(api, token, userId, intent, providerLabel) {
-  // Get upcoming events
-  const events = await api.getTodayEvents(token);
-  if (!events || events._error || events.length === 0) {
-    return "No meetings found for today.";
+  // Get upcoming events — check today first, then tomorrow
+  let events = await api.getTodayEvents(token);
+  if (events && events._error) {
+    const status = events.status || "unknown";
+    if (status === 403 || status === 401) {
+      return `Calendar access denied (${status}). You may need to re-link your account: **jojo disconnect gmail** then **jojo connect gmail** to grant calendar permissions.`;
+    }
+    return `Sorry, I couldn't access your calendar (error ${status}). Please try again.`;
+  }
+  let label = "today";
+  if (!events || events.length === 0) {
+    // Try tomorrow
+    events = await api.getTomorrowEvents(token);
+    if (events && events._error) return `Sorry, I couldn't access your calendar right now.`;
+    label = "tomorrow";
+  }
+  if (!events || events.length === 0) {
+    return `No meetings found for today or tomorrow (${providerLabel}).`;
   }
 
   // Find next upcoming meeting (or let AI pick based on instructions)
