@@ -6,6 +6,8 @@ OpenClaw is a standalone project (NOT part of ConnectPlus) that provides an AI c
 
 **Flow:** Rainbow user sends IM → Rainbow bot receives it → bot calls OpenClaw gateway API → OpenClaw forwards to Claude Opus → AI response → bot sends reply back to Rainbow user.
 
+The bot has evolved into a full **Executive AI Assistant** capable of managing emails (Outlook + Gmail), calendars (Outlook + Google), CRM data (Salesforce), document processing (translation, anonymization), and cross-system executive briefings — all accessible exclusively through Rainbow chat.
+
 ## Architecture
 
 Two Railway services deployed from the same GitHub repo (`moussazaghdoud/openclaw`):
@@ -44,6 +46,19 @@ Two Railway services deployed from the same GitHub repo (`moussazaghdoud/opencla
   - `OPENCLAW_SYSTEM_PROMPT` — System prompt for AI
   - `OPENCLAW_WELCOME_MSG` — Welcome message for new users
   - `REDIS_URL` — Redis connection string (from Railway Redis service)
+  - `M365_CLIENT_ID` — Microsoft Entra app client ID (for Outlook email + calendar)
+  - `M365_CLIENT_SECRET` — Microsoft Entra app client secret
+  - `M365_REDIRECT_URI` — OAuth callback URL (`https://bot-production-4410.up.railway.app/auth/microsoft/callback`)
+  - `M365_TENANT_ID` — Azure AD tenant (default: `common`)
+  - `M365_TOKEN_ENCRYPTION_KEY` — 32-byte hex key for AES-256-GCM token encryption (shared across all providers)
+  - `GMAIL_CLIENT_ID` — Google OAuth2 client ID (for Gmail + Google Calendar)
+  - `GMAIL_CLIENT_SECRET` — Google OAuth2 client secret
+  - `GMAIL_REDIRECT_URI` — OAuth callback URL (`https://bot-production-4410.up.railway.app/auth/gmail/callback`)
+  - `SALESFORCE_CLIENT_ID` — Salesforce Connected App client ID
+  - `SALESFORCE_CLIENT_SECRET` — Salesforce Connected App client secret
+  - `SALESFORCE_REDIRECT_URI` — OAuth callback URL (`https://bot-production-4410.up.railway.app/auth/salesforce/callback`)
+  - `SALESFORCE_LOGIN_URL` — Salesforce login URL (default: `https://login.salesforce.com`, use `https://test.salesforce.com` for sandbox)
+  - `PRESIDIO_URL` — Optional Presidio PII anonymization service URL
 
 ## File Structure
 
@@ -53,10 +68,28 @@ openclaw/
 ├── openclaw.json           # Gateway config (auth token, controlUi, chatCompletions)
 ├── _context.md             # This file
 └── bot/
-    ├── Dockerfile          # Bot Docker image (node:22-slim)
-    ├── bot.js              # Main bot code
+    ├── Dockerfile          # Bot Docker image (node:22-slim), uses COPY *.js ./
+    ├── bot.js              # Main bot: Rainbow SDK, Express, intent detection, all handlers
     ├── pii.js              # PII/PPI anonymization module (secure mode)
     ├── package.json        # Dependencies: dotenv, express, rainbow-node-sdk, redis, mammoth, jszip, pdf-parse
+    │
+    │── # Email Integration (Dual Backend)
+    ├── auth.js             # Microsoft Entra OAuth2 (M365 tokens, scopes: Mail + Calendars.ReadWrite)
+    ├── graph.js            # Microsoft Graph API connector (Outlook email operations)
+    ├── gmail-auth.js       # Google OAuth2 (Gmail + Calendar tokens, scopes: gmail.* + calendar.*)
+    ├── gmail-api.js        # Gmail REST API connector (email operations)
+    ├── email-intents.js    # Dual-backend email intent handler (auto-detects Gmail vs Outlook)
+    │
+    │── # Calendar Integration (Dual Backend)
+    ├── calendar-graph.js   # Microsoft Graph API connector (Outlook Calendar operations)
+    ├── calendar-google.js  # Google Calendar REST API connector
+    ├── calendar-intents.js # Dual-backend calendar intent handler (auto-detects Google vs Outlook)
+    │
+    │── # Salesforce CRM Integration
+    ├── salesforce-auth.js  # Salesforce OAuth2 (Connected App tokens)
+    ├── salesforce-api.js   # Salesforce REST API connector (SOQL queries, SOSL search)
+    ├── salesforce-intents.js # CRM intent handler (accounts, contacts, opportunities, briefings)
+    │
     ├── .env                # Local env vars (gitignored)
     ├── .env.example        # Template
     └── config/             # Legacy config files (NOT used — bot reads env vars only)
@@ -82,7 +115,11 @@ Analyzes the user message and returns one of:
 - **`translate_pdf`** — User wants to translate a PDF document
 - **`translate_pptx`** — User wants to translate a PowerPoint presentation
 - **`translate_any`** — Translation requested but no file in memory (checks Redis for any stored file)
+- **`anonymize_pptx/docx/pdf`** — User wants to anonymize a document (redact PII)
 - **`create_file`** — User wants a file created (e.g. "create a report", "generate a CSV")
+- **`email_*`** — Email intents (delegated to `email-intents.js`): summarize_unread, list_recent, from_sender, search, action_needed, briefing, compose_new, draft_reply, send_confirm, archive, mark_read, flag, smart_query
+- **`calendar_*`** — Calendar intents (delegated to `calendar-intents.js`): today, tomorrow, week, free_slots, create, reschedule, cancel, accept, decline, details, smart_query, confirm_create, confirm_cancel
+- **`sf_*`** — Salesforce intents (delegated to `salesforce-intents.js`): search_accounts, account_details, search_contacts, opportunities, activity, briefing, global_search, smart_query
 - **`chat`** — Default: regular AI conversation
 
 #### Intent Confirmation (`describeIntent()`)
@@ -130,6 +167,13 @@ This prevents stale files from being picked up after the user clears chat histor
 2. Sends message to AI with instructions: "Generate ONLY the raw file content, no explanation"
 3. Strips markdown code block wrappers if AI added them
 4. Hosts the content as a downloadable file via Express
+
+#### Document Anonymization Flow
+1. User uploads a PPTX, DOCX, or PDF and asks to anonymize it
+2. Bot extracts text from XML nodes (`<a:t>` for PPTX, `<w:t>` for DOCX) or via pdf-parse
+3. Text is run through `pii.anonymize()` (ALE PPI terms + Presidio personal data detection)
+4. For PPTX/DOCX: rebuilt with anonymized text preserving layout. For PDF: outputs as anonymized DOCX
+5. Custom `replaceTextInXml()` processes regex matches in reverse order for async anonymization
 
 #### chat Flow (default)
 - Normal AI call via `callOpenClaw()`, no file logic
@@ -209,9 +253,95 @@ Activated by sending `juju secure` in chat, deactivated with `juju unsecure`.
 - Mappings stored in Redis per conversation (`pii:mapping:<key>`, 7-day TTL)
 - Secure mode flag stored in Redis per conversation (`pii:secure:<key>`, 7-day TTL)
 
+### Email Integration (`email-intents.js`, `graph.js`, `gmail-api.js`)
+
+Dual-backend email system supporting both Outlook (Microsoft Graph) and Gmail (Google REST API).
+
+#### Architecture
+- **`auth.js`** — M365 OAuth2 (Entra ID), scopes: `Mail.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite`
+- **`gmail-auth.js`** — Google OAuth2, scopes: `gmail.readonly gmail.send gmail.modify gmail.labels calendar.readonly calendar.events`
+- **`graph.js`** — Microsoft Graph API connector (Outlook email operations)
+- **`gmail-api.js`** — Gmail REST API connector (same function signatures as graph.js)
+- **`email-intents.js`** — Unified intent handler with `resolveProvider(userId)` auto-detecting Gmail vs Outlook
+
+#### Provider Resolution
+`resolveProvider(userId)` checks Gmail token first, then M365. Returns `{ provider, token, email, api }` where `api` is either `graph.js` or `gmail-api.js` module.
+
+#### Account Linking
+- `jojo connect gmail` / `jojo connect outlook` — sends OAuth URL to user
+- `jojo disconnect gmail` / `jojo disconnect outlook` — removes tokens from Redis
+- OAuth routes: `/auth/gmail/start`, `/auth/gmail/callback`, `/auth/microsoft/start`, `/auth/microsoft/callback`
+- Tokens stored encrypted in Redis (`gmail:{userId}`, `oauth:{userId}`)
+
+#### Email Capabilities
+- Read: unread emails, recent emails, search, sender-specific, email by ID, thread
+- Write: send new email, reply, forward (all require explicit user confirmation)
+- Manage: mark read/unread, flag/unflag, archive, move to folder, trash
+- AI features: smart query (any email-related question answered via AI with inbox context), compose new (AI drafts from instructions), inbox briefing
+
+#### Safety Rules
+- Emails are NEVER sent without explicit user confirmation ("yes" to confirm draft)
+- Pending drafts stored in Redis with 5-min TTL
+- Email context stored for follow-up commands (archive #3, mark #1 as read)
+
+### Calendar Integration (`calendar-intents.js`, `calendar-graph.js`, `calendar-google.js`)
+
+Dual-backend calendar system supporting both Outlook Calendar (Microsoft Graph) and Google Calendar.
+
+#### Architecture
+- **`calendar-graph.js`** — Microsoft Graph API: `calendarView`, events CRUD, `getSchedule` for free/busy
+- **`calendar-google.js`** — Google Calendar REST API: events list, CRUD, `freeBusy` endpoint
+- **`calendar-intents.js`** — Unified intent handler with same `resolveProvider()` pattern
+
+#### Calendar Capabilities
+- Read: today's/tomorrow's/week's events, event details, find free slots
+- Write: create meeting (AI parses natural language → JSON → confirmation → create), reschedule, cancel
+- RSVP: accept/decline meeting invitations
+- AI features: smart query, meeting preparation briefing (attendees, objective, related context)
+
+#### Meeting Creation Flow
+1. User says "schedule a meeting with john@example.com tomorrow at 2pm about project review"
+2. AI parses into structured JSON: `{ subject, date, startTime, endTime, attendees, location, isOnlineMeeting }`
+3. Bot shows draft summary, asks for confirmation
+4. On "yes": creates event via Graph API or Google Calendar API
+5. Pending creations stored in Redis (`cal_pending:{userId}`, 5-min TTL)
+
+#### Free Slots
+- Uses `getSchedule` (Graph) or `freeBusy` (Google) API with fallback to gap computation from events
+- Business hours filter (8:00–18:00), configurable duration
+- Supports today/tomorrow/week range
+
+### Salesforce CRM Integration (`salesforce-intents.js`, `salesforce-api.js`, `salesforce-auth.js`)
+
+Full Salesforce CRM integration for customer context, pipeline management, and executive briefings.
+
+#### Architecture
+- **`salesforce-auth.js`** — Salesforce OAuth2 (Connected App), token refresh every 90 minutes
+- **`salesforce-api.js`** — Salesforce REST API v59.0 (SOQL queries + SOSL global search)
+- **`salesforce-intents.js`** — CRM intent handler
+
+#### Account Linking
+- `jojo connect salesforce` / `jojo disconnect salesforce`
+- OAuth routes: `/auth/salesforce/start`, `/auth/salesforce/callback`
+- Tokens stored encrypted in Redis (`sf:{userId}`)
+
+#### CRM Capabilities
+- **Accounts:** Search by name, get details (with contacts + opportunities), recent accounts
+- **Contacts:** Search by name/email, list contacts for an account
+- **Opportunities:** Open pipeline, account-specific deals, opportunity details (stage, amount, close date, next step)
+- **Activity:** Recent tasks and events for an account/contact
+- **Global Search:** SOSL cross-object search (accounts + contacts + opportunities)
+- **Customer Meeting Briefing:** AI-powered briefing combining account info, key contacts, active opportunities, recent activity, and suggested talking points
+
+#### Customer Briefing Flow (Example: "Prepare briefing for my meeting with SNCF")
+1. Search Salesforce for account matching "SNCF"
+2. Fetch in parallel: contacts, opportunities, recent activity
+3. Send all data to AI (via OpenClaw → Claude) with executive briefing prompt
+4. AI generates structured briefing: company overview, key contacts, active deals, recent interactions, talking points, risks
+
 ### Admin Dashboard & API
 - **`GET /`** — HTML dashboard with status, stats, bubble list, recent messages, and Pause/Resume/Restart buttons
-- **`GET /api/status`** — JSON status endpoint (programmatic access)
+- **`GET /api/status`** — JSON status endpoint (includes m365, gmail, calendar, salesforce readiness)
 - **`GET /api/intercepted`** — Debug: recent raw S2S message callbacks
 - **`GET /api/last-download`** — Debug: last file download result
 - **`GET /api/file-info/:id`** — Debug: inspect hosted file metadata (filename, mime, size, isBuffer)
@@ -219,6 +349,10 @@ Activated by sending `juju secure` in chat, deactivated with `juju unsecure`.
 - **`POST /admin/pause`** — Pause message processing
 - **`POST /admin/resume`** — Resume message processing
 - **`POST /admin/restart`** — Full SDK restart (cleanup + fresh start)
+- **OAuth routes:**
+  - `GET /auth/microsoft/start?uid=...` → `GET /auth/microsoft/callback` (M365 OAuth)
+  - `GET /auth/gmail/start?uid=...` → `GET /auth/gmail/callback` (Google OAuth)
+  - `GET /auth/salesforce/start?uid=...` → `GET /auth/salesforce/callback` (Salesforce OAuth)
 
 ### S2S Internals (extracted from SDK)
 - `extractSdkInfo()` pulls `s2sConnectionId`, `authToken`, and `rainbowHost` from SDK internals
@@ -239,6 +373,16 @@ Activated by sending `juju secure` in chat, deactivated with `juju unsecure`.
 - **Document buffers:** Raw files stored as base64 for translation, 24h TTL (`docx:<filename>`, `pdf:<filename>`, `pptx:<filename>` keys). Only one file type stored at a time — uploading a new file clears old keys of other types.
 - **PPI terms:** ALE proprietary term list (`ppi:custom_terms` key)
 - **PII secure mode:** Per-conversation flag and mappings (`pii:secure:<key>`, `pii:mapping:<key>`)
+- **M365 OAuth tokens:** `oauth:{userId}` — encrypted, 90-day TTL
+- **M365 OAuth state:** `oauth:state:{stateId}` — CSRF protection, 10-min TTL
+- **Gmail OAuth tokens:** `gmail:{userId}` — encrypted, 90-day TTL
+- **Gmail OAuth state:** `gmail:state:{stateId}` — CSRF protection, 10-min TTL
+- **Gmail link pending:** `gmail:linked_pending:{userId}` — post-auth notification, 1h TTL
+- **Salesforce OAuth tokens:** `sf:{userId}` — encrypted, 90-day TTL
+- **Salesforce OAuth state:** `sf:state:{stateId}` — CSRF protection, 10-min TTL
+- **Email context:** `email_ctx:{userId}` — recent emails for follow-up commands, 30-min TTL
+- **Pending email drafts:** `email_pending:{userId}` — drafts awaiting confirmation, 5-min TTL
+- **Pending calendar actions:** `cal_pending:{userId}` — meeting create/cancel awaiting confirmation, 5-min TTL
 - **Connection:** Via `REDIS_URL` env var (Railway Redis service)
 
 ## Issues Resolved During Development
@@ -278,6 +422,10 @@ Activated by sending `juju secure` in chat, deactivated with `juju unsecure`.
 33. **PPTX not supported for translation:** PowerPoint files had no translation support. Fixed by adding `handlePptxTranslation()` which uses `jszip` to open .pptx, extract text from `<a:t>` tags across all slides, translate, and replace text while preserving slide layout/images/shapes.
 34. **Stale files picked up after history clear:** User cleared chat history but old docx was still in `storedDocxFiles` Map, so `detectIntent` returned the old file instead of the newly uploaded one. Fixed by clearing all stored files of other types when a new file is uploaded (both memory Maps and Redis keys).
 35. **Translation timeout on large documents:** `callOpenClaw()` had a 60s timeout and sent full conversation history with the translation prompt, causing timeouts on large PDFs/PPTXs. Fixed by creating `callTranslation()` with 180s timeout, no conversation history, minimal system prompt, and chunking (40 paragraphs per API call).
+36. **Modules not loading on Railway:** Dockerfile only copied `bot.js` and `pii.js`. New modules (`gmail-auth.js`, `gmail-api.js`, etc.) were missing in container. Fixed by changing Dockerfile COPY to `COPY *.js ./`.
+37. **Google OAuth `redirect_uri_mismatch`:** Redirect URI in Google Console didn't match `GMAIL_REDIRECT_URI` env var. Fixed by aligning both to `https://bot-production-4410.up.railway.app/auth/gmail/callback`.
+38. **Email intent detection too narrow:** Natural language email queries ("is there any email for flight registration") fell through to regular chat. Fixed by adding sender-before-email patterns, smart catch-all `email_smart_query` for any message mentioning "email", and restricting sender regex to prevent false matches.
+39. **Email address truncated in regex:** Period in `.com` matched the regex terminator. Fixed by adding priority regex for full email addresses and replacing `.` terminator with `(?:\s+and\s)` lookahead.
 
 ## Railway Deployment
 
