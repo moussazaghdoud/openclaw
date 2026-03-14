@@ -90,6 +90,13 @@ openclaw/
     ├── salesforce-api.js   # Salesforce REST API connector (SOQL queries, SOSL search)
     ├── salesforce-intents.js # CRM intent handler (accounts, contacts, opportunities, briefings)
     │
+    │── # SharePoint / OneDrive Integration
+    ├── sharepoint-api.js   # Microsoft Graph API connector (document search, download, content extraction)
+    ├── sharepoint-intents.js # Document intent handler (search, summarize, download, sites)
+    │
+    │── # Cross-System Context Aggregation
+    ├── briefing.js         # Executive briefing builder + entity/people/account/topic matching
+    │
     ├── .env                # Local env vars (gitignored)
     ├── .env.example        # Template
     └── config/             # Legacy config files (NOT used — bot reads env vars only)
@@ -338,6 +345,59 @@ Full Salesforce CRM integration for customer context, pipeline management, and e
 2. Fetch in parallel: contacts, opportunities, recent activity
 3. Send all data to AI (via OpenClaw → Claude) with executive briefing prompt
 4. AI generates structured briefing: company overview, key contacts, active deals, recent interactions, talking points, risks
+
+### SharePoint / OneDrive Integration (`sharepoint-intents.js`, `sharepoint-api.js`)
+
+Document discovery, summarization, and content extraction from SharePoint and OneDrive.
+
+#### Architecture
+- **`sharepoint-api.js`** — Microsoft Graph API: search (`/search/query`), recent docs, download, content extraction, site discovery
+- **`sharepoint-intents.js`** — Document intent handler
+- Uses same M365 OAuth token as Outlook (scopes: `Sites.Read.All`, `Files.Read.All`)
+
+#### Capabilities
+- **Search:** Cross-tenant document search via Microsoft Graph Search API
+- **Recent:** User's recently accessed OneDrive documents
+- **Summarize:** Download document → extract text (via existing mammoth/jszip/pdf-parse) → AI summary
+- **Download:** Returns browser-openable link (`webUrl`)
+- **Sites:** Search/list SharePoint sites and document libraries
+- **Content Extraction:** Supports .txt, .csv, .md, .json (direct), .docx (mammoth), .pdf (pdf-parse), .pptx (jszip)
+
+### Cross-System Context Aggregation (`briefing.js`)
+
+Unified executive briefing builder that correlates data across Email, Calendar, Salesforce, and SharePoint.
+
+#### Architecture
+`briefing.js` includes all 5 aggregation components from the spec:
+- **entityResolver** — resolve identities across systems via `matchPerson(userId, nameOrEmail)`
+- **peopleMatcher** — match people across email, calendar, and CRM contacts
+- **accountMatcher** — match companies via email domains + Salesforce accounts via `matchAccount(userId, companyName)`
+- **topicMatcher** — AI-powered topic identification across all connected services
+- **briefingBuilder** — generate unified executive briefings combining all data sources
+
+#### Briefing Types
+- **Daily Briefing** (`briefing_daily`) — "Prepare my morning briefing" / "What needs my attention today?"
+  - Fetches: unread emails + today's meetings + open pipeline
+  - AI generates: schedule, priority emails, action items, pipeline updates, suggested actions
+- **Meeting Briefing** (`briefing_meeting`) — "Prepare for my meeting with SNCF"
+  - Fetches: calendar events + related emails + Salesforce account + contacts + opportunities
+  - AI generates: meeting details, participant context, communication history, business context, preparation suggestions
+- **Customer Briefing** (`briefing_customer`) — "Tell me everything about customer SNCF"
+  - Fetches: emails + week's meetings + Salesforce deep data (account + contacts + opportunities + activity)
+  - AI generates: company overview, key contacts, communication history, upcoming meetings, active deals, suggested actions
+- **Weekly Briefing** (`briefing_weekly`) — "Weekly summary"
+  - Fetches: unread emails + week's meetings + open pipeline
+  - AI generates: week at a glance, priority emails, key meetings, pipeline summary, focus areas
+- **Follow-Up Report** (`briefing_followups`) — "Show my pending follow-ups"
+  - Fetches: recent emails + CRM activity
+  - AI identifies: awaiting reply, action items, pending tasks, overdue items with urgency levels
+
+#### Data Flow
+All briefings follow the same pattern:
+1. Detect which services are connected for the user
+2. Fetch data from all connected services in parallel
+3. Combine into a structured AI prompt
+4. AI generates concise, executive-friendly output
 
 ### Admin Dashboard & API
 - **`GET /`** — HTML dashboard with status, stats, bubble list, recent messages, and Pause/Resume/Restart buttons

@@ -39,6 +39,12 @@ let sfApi;
 try { sfApi = require("./salesforce-api"); console.log("[OpenClawBot] Salesforce API module loaded OK"); } catch (e) { sfApi = null; console.warn("[OpenClawBot] Salesforce API module failed to load:", e.message); }
 let sfIntents;
 try { sfIntents = require("./salesforce-intents"); console.log("[OpenClawBot] Salesforce intents module loaded OK"); } catch (e) { sfIntents = null; console.warn("[OpenClawBot] Salesforce intents module failed to load:", e.message); }
+let spApi;
+try { spApi = require("./sharepoint-api"); console.log("[OpenClawBot] SharePoint API module loaded OK"); } catch (e) { spApi = null; console.warn("[OpenClawBot] SharePoint API module failed to load:", e.message); }
+let spIntents;
+try { spIntents = require("./sharepoint-intents"); console.log("[OpenClawBot] SharePoint intents module loaded OK"); } catch (e) { spIntents = null; console.warn("[OpenClawBot] SharePoint intents module failed to load:", e.message); }
+let briefing;
+try { briefing = require("./briefing"); console.log("[OpenClawBot] Briefing module loaded OK"); } catch (e) { briefing = null; console.warn("[OpenClawBot] Briefing module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -143,6 +149,20 @@ async function initRedis() {
     if (sfIntents && sfAuth && sfApi) {
       sfIntents.init({ salesforceApiMod: sfApi, salesforceAuthMod: sfAuth, callOpenClaw, redis });
       console.log(`${LOG} Salesforce intents initialized`);
+    }
+    if (spIntents && spApi && m365Auth) {
+      spIntents.init({ sharepointApiMod: spApi, m365AuthMod: m365Auth, callOpenClaw, redis, mammoth, JSZip, pdfParse: pdfParse });
+      console.log(`${LOG} SharePoint intents initialized`);
+    }
+    if (briefing) {
+      briefing.init({
+        emailIntents, calendarIntents, sfIntents, spIntents,
+        callOpenClaw, redis,
+        m365Auth, gmailAuth: gmailAuth, sfAuth,
+        m365Graph: m365Graph, gmailApi: gmailApi,
+        calendarGraph, calendarGoogle, sfApi, spApi,
+      });
+      console.log(`${LOG} Briefing module initialized`);
     }
   } catch (err) {
     console.warn(`${LOG} Redis connection failed, falling back to in-memory:`, err.message);
@@ -368,6 +388,28 @@ function describeIntent(intent) {
       return `Searching CRM...`;
     case "sf_smart_query":
       return `Checking CRM data...`;
+    case "sp_search":
+      return `Searching documents...`;
+    case "sp_recent":
+      return `Loading recent documents...`;
+    case "sp_summarize":
+      return `Summarizing document...`;
+    case "sp_download":
+      return `Finding document...`;
+    case "sp_sites":
+      return `Searching SharePoint sites...`;
+    case "sp_smart_query":
+      return `Checking documents...`;
+    case "briefing_daily":
+      return `Preparing your morning briefing...`;
+    case "briefing_meeting":
+      return `Preparing meeting briefing...`;
+    case "briefing_customer":
+      return `Building customer context...`;
+    case "briefing_weekly":
+      return `Preparing weekly overview...`;
+    case "briefing_followups":
+      return `Checking follow-ups...`;
     default:
       return null; // no confirmation needed for regular chat
   }
@@ -466,13 +508,25 @@ function detectIntent(userMessage) {
     if (calIntent) return calIntent;
   }
 
-  // 5. Salesforce CRM commands
+  // 5. Briefing / cross-system commands (check BEFORE Salesforce to catch "prepare briefing for meeting with X")
+  if (briefing) {
+    const brIntent = briefing.detectBriefingIntent(userMessage);
+    if (brIntent) return brIntent;
+  }
+
+  // 6. Salesforce CRM commands
   if (sfIntents) {
     const sfIntent = sfIntents.detectSalesforceIntent(userMessage);
     if (sfIntent) return sfIntent;
   }
 
-  // 6. Default — regular chat
+  // 7. SharePoint / OneDrive document commands
+  if (spIntents) {
+    const spIntent = spIntents.detectSharePointIntent(userMessage);
+    if (spIntent) return spIntent;
+  }
+
+  // 8. Default — regular chat
   return { type: "chat" };
 }
 
@@ -2258,7 +2312,7 @@ app.get("/api/status", (req, res) => {
   for (const [id, b] of bubbleList) {
     bubbles.push({ id, name: b.name, jid: b.jid, members: (b.users || []).length });
   }
-  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, m365: { configured: !!(m365Auth && m365Auth.isConfigured()) }, gmail: { configured: !!(gmailAuth && gmailAuth.isConfigured()) }, calendar: { outlookReady: !!(m365Auth && calendarGraph), googleReady: !!(gmailAuth && calendarGoogle) }, salesforce: { configured: !!(sfAuth && sfAuth.isConfigured()) }, bubbles, lastMessages: debugMessages.slice(-5) });
+  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, m365: { configured: !!(m365Auth && m365Auth.isConfigured()) }, gmail: { configured: !!(gmailAuth && gmailAuth.isConfigured()) }, calendar: { outlookReady: !!(m365Auth && calendarGraph), googleReady: !!(gmailAuth && calendarGoogle) }, salesforce: { configured: !!(sfAuth && sfAuth.isConfigured()) }, sharepoint: { ready: !!(m365Auth && spApi) }, briefing: { ready: !!briefing }, bubbles, lastMessages: debugMessages.slice(-5) });
 });
 
 // Register M365 OAuth routes
@@ -2574,6 +2628,10 @@ async function processBubbleCallback(body) {
       responseText = await calendarIntents.handleCalendarIntent(fromJid, intent, content);
     } else if (intent.type.startsWith("sf_") && sfIntents) {
       responseText = await sfIntents.handleSalesforceIntent(fromJid, intent, content);
+    } else if (intent.type.startsWith("sp_") && spIntents) {
+      responseText = await spIntents.handleSharePointIntent(fromJid, intent, content);
+    } else if (intent.type.startsWith("briefing_") && briefing) {
+      responseText = await briefing.handleBriefingIntent(fromJid, intent, content);
     }
 
     if (!responseText) {
@@ -3340,6 +3398,10 @@ async function start() {
         responseText = await calendarIntents.handleCalendarIntent(fromJid, intent, userMessage);
       } else if (intent.type.startsWith("sf_") && sfIntents) {
         responseText = await sfIntents.handleSalesforceIntent(fromJid, intent, userMessage);
+      } else if (intent.type.startsWith("sp_") && spIntents) {
+        responseText = await spIntents.handleSharePointIntent(fromJid, intent, userMessage);
+      } else if (intent.type.startsWith("briefing_") && briefing) {
+        responseText = await briefing.handleBriefingIntent(fromJid, intent, userMessage);
       }
 
       if (!responseText) {
