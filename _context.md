@@ -127,6 +127,8 @@ Analyzes the user message and returns one of:
 - **`email_*`** — Email intents (delegated to `email-intents.js`): summarize_unread, list_recent, from_sender, search, action_needed, briefing, compose_new, draft_reply, send_confirm, archive, mark_read, flag, smart_query
 - **`calendar_*`** — Calendar intents (delegated to `calendar-intents.js`): today, tomorrow, week, free_slots, create, reschedule, cancel, accept, decline, details, smart_query, confirm_create, confirm_cancel
 - **`sf_*`** — Salesforce intents (delegated to `salesforce-intents.js`): search_accounts, account_details, search_contacts, opportunities, activity, briefing, global_search, smart_query
+- **`sp_*`** — SharePoint intents (delegated to `sharepoint-intents.js`): search, recent, summarize, download, sites, smart_query
+- **`briefing_*`** — Cross-system briefing intents (delegated to `briefing.js`): daily, meeting, customer, weekly, followups
 - **`chat`** — Default: regular AI conversation
 
 #### Intent Confirmation (`describeIntent()`)
@@ -265,7 +267,7 @@ Activated by sending `juju secure` in chat, deactivated with `juju unsecure`.
 Dual-backend email system supporting both Outlook (Microsoft Graph) and Gmail (Google REST API).
 
 #### Architecture
-- **`auth.js`** — M365 OAuth2 (Entra ID), scopes: `Mail.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite`
+- **`auth.js`** — M365 OAuth2 (Entra ID), scopes: `Mail.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite Sites.Read.All Files.Read.All`
 - **`gmail-auth.js`** — Google OAuth2, scopes: `gmail.readonly gmail.send gmail.modify gmail.labels calendar.readonly calendar.events`
 - **`graph.js`** — Microsoft Graph API connector (Outlook email operations)
 - **`gmail-api.js`** — Gmail REST API connector (same function signatures as graph.js)
@@ -401,7 +403,7 @@ All briefings follow the same pattern:
 
 ### Admin Dashboard & API
 - **`GET /`** — HTML dashboard with status, stats, bubble list, recent messages, and Pause/Resume/Restart buttons
-- **`GET /api/status`** — JSON status endpoint (includes m365, gmail, calendar, salesforce readiness)
+- **`GET /api/status`** — JSON status endpoint (includes m365, gmail, calendar, salesforce, sharepoint, briefing readiness)
 - **`GET /api/intercepted`** — Debug: recent raw S2S message callbacks
 - **`GET /api/last-download`** — Debug: last file download result
 - **`GET /api/file-info/:id`** — Debug: inspect hosted file metadata (filename, mime, size, isBuffer)
@@ -486,6 +488,16 @@ All briefings follow the same pattern:
 37. **Google OAuth `redirect_uri_mismatch`:** Redirect URI in Google Console didn't match `GMAIL_REDIRECT_URI` env var. Fixed by aligning both to `https://bot-production-4410.up.railway.app/auth/gmail/callback`.
 38. **Email intent detection too narrow:** Natural language email queries ("is there any email for flight registration") fell through to regular chat. Fixed by adding sender-before-email patterns, smart catch-all `email_smart_query` for any message mentioning "email", and restricting sender regex to prevent false matches.
 39. **Email address truncated in regex:** Period in `.com` matched the regex terminator. Fixed by adding priority regex for full email addresses and replacing `.` terminator with `(?:\s+and\s)` lookahead.
+40. **Calendar "No meetings found" on scope error:** After adding calendar scopes to `gmail-auth.js`, existing Gmail tokens didn't have calendar permissions. The Google Calendar API returned 403 but the handler treated it as "no meetings." Fixed by adding `calendarErrorMessage()` that detects 401/403 and guides the user to re-link their account. Also improved `handleMeetingDetails` to check tomorrow when today is empty and to distinguish API errors from empty results.
+
+## Important: OAuth Scope Expansion
+
+When new API scopes are added to `auth.js` or `gmail-auth.js`, **existing user tokens do NOT automatically gain the new permissions**. Users must re-link their accounts to authorize the expanded scopes:
+
+- `jojo disconnect gmail` → `jojo connect gmail` (for Google Calendar scopes added in Phase 1)
+- `jojo disconnect outlook` → `jojo connect outlook` (for Calendar + SharePoint scopes)
+
+The bot now detects 401/403 errors from calendar/SharePoint APIs and displays a message guiding users to re-link.
 
 ## Railway Deployment
 
