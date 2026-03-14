@@ -59,6 +59,9 @@ Two Railway services deployed from the same GitHub repo (`moussazaghdoud/opencla
   - `SALESFORCE_REDIRECT_URI` — OAuth callback URL (`https://bot-production-4410.up.railway.app/auth/salesforce/callback`)
   - `SALESFORCE_LOGIN_URL` — Salesforce login URL (default: `https://login.salesforce.com`, use `https://test.salesforce.com` for sandbox)
   - `PRESIDIO_URL` — Optional Presidio PII anonymization service URL
+  - `ADMIN_USERNAME` — Enterprise admin portal username (default: `admin`)
+  - `ADMIN_PASSWORD` — Enterprise admin portal password (enables enterprise mode when set)
+  - `JWT_SECRET` — JWT signing secret for admin sessions (auto-generated if not set)
 
 ## File Structure
 
@@ -96,6 +99,9 @@ openclaw/
     │
     │── # Cross-System Context Aggregation
     ├── briefing.js         # Executive briefing builder + entity/people/account/topic matching
+    │
+    │── # Enterprise Deployment Layer
+    ├── enterprise.js       # User registry, magic-link invites, SSO activation, access control, admin portal
     │
     ├── .env                # Local env vars (gitignored)
     ├── .env.example        # Template
@@ -401,9 +407,95 @@ All briefings follow the same pattern:
 3. Combine into a structured AI prompt
 4. AI generates concise, executive-friendly output
 
+### Enterprise Deployment Layer (`enterprise.js`)
+
+Scalable user provisioning and access control system for deploying the AI assistant to hundreds or thousands of users.
+
+#### Architecture
+- **`enterprise.js`** — User registry, magic-link invitations, Microsoft SSO activation, auto-linking of services, access control, admin portal
+- **Backward compatible:** Enterprise mode activates only when `ADMIN_PASSWORD` env var is set. Without it, the bot allows all users (existing behavior).
+- **Data storage:** All enterprise data stored in Redis (no additional database required)
+
+#### 3-Layer Deployment Model
+1. **Tenant-Level Configuration (Admin Once):** Admin sets up Microsoft 365, Salesforce, and Rainbow connections via the admin portal. These apply to all users.
+2. **User Provisioning:** Admin adds users (single or CSV bulk import) through the admin portal. Users start in PENDING status.
+3. **User Activation:** User receives magic link via email, authenticates with Microsoft SSO, system auto-links M365 + Salesforce + Rainbow. User becomes ACTIVE.
+
+#### User Lifecycle States
+- **PENDING** — Created by admin, awaiting activation
+- **ACTIVE** — Activated via SSO, can use the bot
+- **INACTIVE** — Deactivated by admin, bot access revoked
+
+#### Magic Link System
+- Admin creates invite → system generates secure 32-byte random token
+- Token hash stored in Redis (`invite:{hash}`, 48h TTL)
+- Activation URL: `{baseUrl}/api/activate?token={unhashed_token}`
+- On click: validates token → starts Microsoft SSO → activates user → marks invite used
+
+#### SSO Activation Flow
+1. User clicks magic link → validates invite token
+2. Redirects to Microsoft SSO with `login_hint` pre-filled to user's email
+3. Microsoft callback → exchanges code for tokens (Mail, Calendar, SharePoint scopes)
+4. Fetches Microsoft profile → stores encrypted tokens in Redis (same format as `auth.js`)
+5. Auto-links Salesforce contact by email (if tenant Salesforce is configured)
+6. Updates user status to ACTIVE
+
+#### Access Control
+- `checkAccess(jid)` called on every incoming Rainbow message (both 1:1 and bubbles)
+- Only ACTIVE users can interact with the bot
+- Non-enterprise mode (no `ADMIN_PASSWORD`): all users allowed (backward compatible)
+
+#### Admin Portal
+- **URL:** `GET /admin` — self-contained HTML/JS admin interface
+- **Auth:** Username/password login → JWT session token (24h expiry)
+- **Features:**
+  - Dashboard with stats (total users, active, pending, activation rate)
+  - Add single user (first name, last name, email) with auto-invite
+  - Bulk CSV import
+  - User table with status badges, connected services, actions
+  - Invite/resend invite, deactivate/reactivate users
+  - Tenant configuration page
+
+#### Enterprise API Endpoints
+- `POST /api/admin/login` — Admin authentication (returns JWT)
+- `GET /api/admin/users` — List all users
+- `POST /api/admin/users` — Create user
+- `POST /api/admin/users/import` — Bulk CSV import
+- `POST /api/admin/users/:id/invite` — Create and send invitation
+- `PATCH /api/admin/users/:id` — Update user (status, etc.)
+- `DELETE /api/admin/users/:id` — Delete user
+- `GET /api/admin/stats` — Analytics dashboard data
+- `GET /api/admin/audit` — Audit log entries
+- `GET /api/admin/tenant` — Get tenant configuration
+- `PUT /api/admin/tenant` — Update tenant configuration
+- `GET /api/activate?token=xxx` — Magic link handler (starts SSO)
+- `GET /api/activate/callback` — Microsoft SSO callback (completes activation)
+
+#### Invite Email System
+- When admin sends invite, system attempts to send email via Microsoft Graph (using admin's M365 token)
+- Email includes welcome message, bot capabilities explanation, and magic activation link
+- Falls back to URL-only (admin copies and shares manually) if Graph not available
+
+#### Security
+- JWT session tokens for admin API (HS256, configurable expiry)
+- Invite tokens: 32-byte random, SHA-256 hashed before storage
+- OAuth tokens: AES-256-GCM encrypted (same `M365_TOKEN_ENCRYPTION_KEY`)
+- Rate limiting on admin endpoints (100 req/min per IP)
+- Audit logging of all admin actions (user creates, invites, activations, deletions)
+
+#### Redis Keys
+- `user:{id}` — User profile JSON
+- `user:email:{email}` — Email → user ID index
+- `user:rainbow:{jid}` — Rainbow JID → user ID index
+- `tenant:users` — Set of all user IDs
+- `tenant:config` — Encrypted tenant configuration
+- `invite:{hash}` — Invite record (48h TTL)
+- `activate:state:{state}` — SSO activation state (10min TTL)
+- `audit:log` — List of audit log entries (last 1000)
+
 ### Admin Dashboard & API
 - **`GET /`** — HTML dashboard with status, stats, bubble list, recent messages, and Pause/Resume/Restart buttons
-- **`GET /api/status`** — JSON status endpoint (includes m365, gmail, calendar, salesforce, sharepoint, briefing readiness)
+- **`GET /api/status`** — JSON status endpoint (includes m365, gmail, calendar, salesforce, sharepoint, briefing, enterprise readiness)
 - **`GET /api/intercepted`** — Debug: recent raw S2S message callbacks
 - **`GET /api/last-download`** — Debug: last file download result
 - **`GET /api/file-info/:id`** — Debug: inspect hosted file metadata (filename, mime, size, isBuffer)
@@ -445,6 +537,14 @@ All briefings follow the same pattern:
 - **Email context:** `email_ctx:{userId}` — recent emails for follow-up commands, 30-min TTL
 - **Pending email drafts:** `email_pending:{userId}` — drafts awaiting confirmation, 5-min TTL
 - **Pending calendar actions:** `cal_pending:{userId}` — meeting create/cancel awaiting confirmation, 5-min TTL
+- **Enterprise users:** `user:{id}` — user profile JSON (no TTL)
+- **Enterprise email index:** `user:email:{email}` — email → user ID mapping
+- **Enterprise Rainbow index:** `user:rainbow:{jid}` — Rainbow JID → user ID mapping
+- **Enterprise user set:** `tenant:users` — set of all user IDs
+- **Enterprise tenant config:** `tenant:config` — encrypted tenant configuration
+- **Enterprise invites:** `invite:{hash}` — invite record, 48h TTL
+- **Enterprise SSO state:** `activate:state:{state}` — activation SSO state, 10-min TTL
+- **Enterprise audit log:** `audit:log` — list of last 1000 audit entries
 - **Connection:** Via `REDIS_URL` env var (Railway Redis service)
 
 ## Issues Resolved During Development

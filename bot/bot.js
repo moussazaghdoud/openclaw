@@ -45,6 +45,8 @@ let spIntents;
 try { spIntents = require("./sharepoint-intents"); console.log("[OpenClawBot] SharePoint intents module loaded OK"); } catch (e) { spIntents = null; console.warn("[OpenClawBot] SharePoint intents module failed to load:", e.message); }
 let briefing;
 try { briefing = require("./briefing"); console.log("[OpenClawBot] Briefing module loaded OK"); } catch (e) { briefing = null; console.warn("[OpenClawBot] Briefing module failed to load:", e.message); }
+let enterprise;
+try { enterprise = require("./enterprise"); console.log("[OpenClawBot] Enterprise module loaded OK"); } catch (e) { enterprise = null; console.warn("[OpenClawBot] Enterprise module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -163,6 +165,10 @@ async function initRedis() {
         calendarGraph, calendarGoogle, sfApi, spApi,
       });
       console.log(`${LOG} Briefing module initialized`);
+    }
+    if (enterprise) {
+      enterprise.init(redis, { m365Auth, sfAuth });
+      console.log(`${LOG} Enterprise module initialized`);
     }
   } catch (err) {
     console.warn(`${LOG} Redis connection failed, falling back to in-memory:`, err.message);
@@ -2312,7 +2318,7 @@ app.get("/api/status", (req, res) => {
   for (const [id, b] of bubbleList) {
     bubbles.push({ id, name: b.name, jid: b.jid, members: (b.users || []).length });
   }
-  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, m365: { configured: !!(m365Auth && m365Auth.isConfigured()) }, gmail: { configured: !!(gmailAuth && gmailAuth.isConfigured()) }, calendar: { outlookReady: !!(m365Auth && calendarGraph), googleReady: !!(gmailAuth && calendarGoogle) }, salesforce: { configured: !!(sfAuth && sfAuth.isConfigured()) }, sharepoint: { ready: !!(m365Auth && spApi) }, briefing: { ready: !!briefing }, bubbles, lastMessages: debugMessages.slice(-5) });
+  res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, m365: { configured: !!(m365Auth && m365Auth.isConfigured()) }, gmail: { configured: !!(gmailAuth && gmailAuth.isConfigured()) }, calendar: { outlookReady: !!(m365Auth && calendarGraph), googleReady: !!(gmailAuth && calendarGoogle) }, salesforce: { configured: !!(sfAuth && sfAuth.isConfigured()) }, sharepoint: { ready: !!(m365Auth && spApi) }, briefing: { ready: !!briefing }, enterprise: { enabled: !!(enterprise && enterprise.isEnterpriseMode()), loaded: !!enterprise }, bubbles, lastMessages: debugMessages.slice(-5) });
 });
 
 // Register M365 OAuth routes
@@ -2365,6 +2371,35 @@ if (sfAuth && sfAuth.isConfigured()) {
   console.log(`${LOG} Salesforce integration: ENABLED (client_id=${process.env.SALESFORCE_CLIENT_ID?.substring(0, 8)}...)`);
 } else {
   console.log(`${LOG} Salesforce integration: DISABLED (SALESFORCE_CLIENT_ID/SECRET/REDIRECT_URI not set)`);
+}
+
+// Register Enterprise deployment routes
+if (enterprise) {
+  enterprise.registerRoutes(app, {
+    sendInviteEmail: async (user, activateUrl) => {
+      // Try to send via Microsoft Graph using tenant admin token
+      try {
+        const tenantCfg = await enterprise.getTenantConfig();
+        if (!tenantCfg || !tenantCfg.adminRainbowJid) return false;
+        const adminToken = m365Auth ? await m365Auth.getValidToken(tenantCfg.adminRainbowJid) : null;
+        if (!adminToken) return false;
+
+        const graph = require("./graph");
+        const sent = await graph.sendEmail(adminToken, {
+          to: user.email,
+          subject: "Your AI Assistant is Ready",
+          body: `Hello ${user.firstName},\n\nYour AI assistant has been set up and is ready for you.\n\nClick the link below to activate your account (takes about 60 seconds):\n\n${activateUrl}\n\nThis link expires in 48 hours.\n\nOnce activated, open Rainbow and start chatting with the bot!\n\nBest regards,\nAI Assistant Admin`,
+          importance: "high",
+        });
+        if (sent) console.log(`${LOG} Invite email sent to ${user.email}`);
+        return sent;
+      } catch (e) {
+        console.warn(`${LOG} Could not send invite email:`, e.message);
+        return false;
+      }
+    },
+  });
+  console.log(`${LOG} Enterprise portal: ${process.env.ADMIN_PASSWORD ? "ENABLED" : "DISABLED (ADMIN_PASSWORD not set)"}`);
 }
 
 // Start Express immediately so Railway sees the port is bound
@@ -2452,6 +2487,15 @@ async function processBubbleCallback(body) {
       if (processedMsgIds.size > 200) {
         const first = processedMsgIds.values().next().value;
         processedMsgIds.delete(first);
+      }
+    }
+
+    // Enterprise access control
+    if (enterprise && enterprise.isEnterpriseMode()) {
+      const access = await enterprise.checkAccess(fromJid);
+      if (!access.allowed) {
+        console.log(`${LOG} Access denied (bubble): ${fromJid}`);
+        return;
       }
     }
 
@@ -2877,6 +2921,15 @@ async function start() {
         if (processedMsgIds.size > 200) {
           const first = processedMsgIds.values().next().value;
           processedMsgIds.delete(first);
+        }
+      }
+
+      // Enterprise access control
+      if (enterprise && enterprise.isEnterpriseMode()) {
+        const access = await enterprise.checkAccess(fromJid);
+        if (!access.allowed) {
+          console.log(`${LOG} Access denied (1:1): ${fromJid}`);
+          return;
         }
       }
 
