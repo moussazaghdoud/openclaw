@@ -6,7 +6,7 @@ OpenClaw is a standalone project (NOT part of ConnectPlus) that provides an AI c
 
 **Flow:** Rainbow user sends IM → Rainbow bot receives it → bot calls OpenClaw gateway API → OpenClaw forwards to Claude Opus → AI response → bot sends reply back to Rainbow user.
 
-The bot has evolved into a full **Executive AI Assistant** capable of managing emails (Outlook + Gmail), calendars (Outlook + Google), CRM data (Salesforce), document processing (translation, anonymization), and cross-system executive briefings — all accessible exclusively through Rainbow chat.
+The bot has evolved into a full **Executive AI Assistant** capable of managing emails (Outlook + Gmail), calendars (Outlook + Google), CRM data (Salesforce), document processing (translation, anonymization), and cross-system executive briefings — all accessible exclusively through Rainbow chat. It includes an **Enterprise Deployment Layer** with an admin portal, magic-link user provisioning, Microsoft SSO activation, and access control for scaling to hundreds or thousands of users.
 
 ## Architecture
 
@@ -441,8 +441,9 @@ Scalable user provisioning and access control system for deploying the AI assist
 6. Updates user status to ACTIVE
 
 #### Access Control
-- `checkAccess(jid)` called on every incoming Rainbow message (both 1:1 and bubbles)
+- `checkAccess(jid, rainbowEmail)` called on every incoming Rainbow message (both 1:1 and bubbles)
 - Only ACTIVE users can interact with the bot
+- **Auto-link by email:** If a Rainbow JID is unknown but the user's Rainbow login email matches an enterprise user, the JID is automatically linked on first message
 - Non-enterprise mode (no `ADMIN_PASSWORD`): all users allowed (backward compatible)
 
 #### Admin Portal
@@ -589,6 +590,7 @@ Scalable user provisioning and access control system for deploying the AI assist
 38. **Email intent detection too narrow:** Natural language email queries ("is there any email for flight registration") fell through to regular chat. Fixed by adding sender-before-email patterns, smart catch-all `email_smart_query` for any message mentioning "email", and restricting sender regex to prevent false matches.
 39. **Email address truncated in regex:** Period in `.com` matched the regex terminator. Fixed by adding priority regex for full email addresses and replacing `.` terminator with `(?:\s+and\s)` lookahead.
 40. **Calendar "No meetings found" on scope error:** After adding calendar scopes to `gmail-auth.js`, existing Gmail tokens didn't have calendar permissions. The Google Calendar API returned 403 but the handler treated it as "no meetings." Fixed by adding `calendarErrorMessage()` that detects 401/403 and guides the user to re-link their account. Also improved `handleMeetingDetails` to check tomorrow when today is empty and to distinguish API errors from empty results.
+41. **Enterprise access denied after SSO activation:** Users who activated via the magic link/SSO could not chat with the bot because their Rainbow JID was not linked to their enterprise user profile. The `checkAccess()` function looked up by JID, found nothing, and denied access silently. Fixed by adding auto-link by email: `checkAccess(jid, rainbowEmail)` now tries `linkRainbowUser()` when JID is unknown, matching the user's Rainbow login email to their enterprise profile.
 
 ## Important: OAuth Scope Expansion
 
