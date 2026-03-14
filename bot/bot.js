@@ -2501,6 +2501,14 @@ async function processBubbleCallback(body) {
             bubbleEmail = jidLocal.substring(0, lastUnderscore) + "@" + jidLocal.substring(lastUnderscore + 1);
           }
         }
+        // Fallback: look up contact by user ID via SDK
+        const bubbleFromId = body.message?.from || "";
+        if (!bubbleEmail && bubbleFromId && sdk) {
+          try {
+            const contact = await sdk.contacts.getContactById(bubbleFromId);
+            bubbleEmail = contact?.loginEmail || contact?.email || "";
+          } catch (e2) { /* ignore */ }
+        }
         console.log(`${LOG} Enterprise check (bubble): jid=${fromJid} email=${bubbleEmail}`);
         const access = await enterprise.checkAccess(fromJid, bubbleEmail);
         if (!access.allowed) {
@@ -2950,7 +2958,15 @@ async function start() {
               rainbowEmail = jidLocal.substring(0, lastUnderscore) + "@" + jidLocal.substring(lastUnderscore + 1);
             }
           }
-          console.log(`${LOG} Enterprise check: jid=${fromJid} email=${rainbowEmail}`);
+          // Fallback: look up contact by user ID via SDK to get loginEmail
+          if (!rainbowEmail && fromId && sdk) {
+            try {
+              const contact = await sdk.contacts.getContactById(fromId);
+              rainbowEmail = contact?.loginEmail || contact?.email || "";
+              if (rainbowEmail) console.log(`${LOG} Resolved email from SDK contact: ${rainbowEmail}`);
+            } catch (e2) { /* ignore */ }
+          }
+          console.log(`${LOG} Enterprise check: jid=${fromJid} fromId=${fromId} email=${rainbowEmail}`);
           const access = await enterprise.checkAccess(fromJid, rainbowEmail);
           if (!access.allowed) {
             console.log(`${LOG} Access denied (1:1): ${fromJid} (${rainbowEmail})`);
