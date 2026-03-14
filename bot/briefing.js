@@ -179,7 +179,7 @@ Create a structured briefing with these sections (only include sections with dat
 
 Keep it concise, executive-friendly. Use bullet points. Max 600 words.`;
 
-  const response = await callOpenClawFn(aiPrompt, []);
+  const response = await callOpenClawFn(userId, aiPrompt);
   return response || "Sorry, I couldn't generate the briefing.";
 }
 
@@ -256,7 +256,7 @@ Create a structured meeting briefing:
 
 Be concise and actionable. Max 600 words.`;
 
-  const response = await callOpenClawFn(aiPrompt, []);
+  const response = await callOpenClawFn(userId, aiPrompt);
   return response || "Sorry, I couldn't generate the meeting briefing.";
 }
 
@@ -336,7 +336,7 @@ Create a comprehensive customer briefing:
 
 Be concise and executive-friendly. Max 800 words.`;
 
-  const response = await callOpenClawFn(aiPrompt, []);
+  const response = await callOpenClawFn(userId, aiPrompt);
   return response || "Sorry, I couldn't generate the customer briefing.";
 }
 
@@ -383,7 +383,7 @@ Create a weekly overview:
 
 Max 600 words.`;
 
-  const response = await callOpenClawFn(aiPrompt, []);
+  const response = await callOpenClawFn(userId, aiPrompt);
   return response || "Sorry, I couldn't generate the weekly briefing.";
 }
 
@@ -423,7 +423,7 @@ Analyze and identify:
 For each follow-up, indicate urgency (High/Medium/Low).
 Max 500 words.`;
 
-  const response = await callOpenClawFn(aiPrompt, []);
+  const response = await callOpenClawFn(userId, aiPrompt);
   return response || "Sorry, I couldn't generate the follow-up report.";
 }
 

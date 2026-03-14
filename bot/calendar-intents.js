@@ -313,7 +313,7 @@ User request: "${intent.instructions}"
 
 If any field can't be determined, use reasonable defaults (30 min duration, no attendees, etc). Output ONLY the JSON.`;
 
-  const aiResponse = await callOpenClawFn(aiPrompt, []);
+  const aiResponse = await callOpenClawFn(userId, aiPrompt);
   if (!aiResponse) return "Sorry, I couldn't parse the meeting details. Please try again with more specifics.";
 
   let meetingData;
@@ -402,7 +402,7 @@ User request: "${intent.instructions}"
 
 If unclear, pick the best match. Output ONLY JSON.`;
 
-  const aiResponse = await callOpenClawFn(aiPrompt, []);
+  const aiResponse = await callOpenClawFn(userId, aiPrompt);
   let match;
   try {
     const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
@@ -464,7 +464,7 @@ User request: "${intent.instructions}"
 
 Output ONLY JSON.`;
 
-  const aiResponse = await callOpenClawFn(aiPrompt, []);
+  const aiResponse = await callOpenClawFn(userId, aiPrompt);
   let match;
   try {
     const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
@@ -513,7 +513,7 @@ User request: "${intent.instructions}"
 
 Output ONLY JSON.`;
 
-  const aiResponse = await callOpenClawFn(aiPrompt, []);
+  const aiResponse = await callOpenClawFn(userId, aiPrompt);
   let match;
   try {
     const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
@@ -622,7 +622,7 @@ ${events.map((e, i) => `${i}. "${e.subject}" at ${formatTime(e.start)} with ${e.
 User: "${intent.instructions}"
 Output ONLY JSON.`;
 
-    const aiResponse = await callOpenClawFn(aiPrompt, []);
+    const aiResponse = await callOpenClawFn(userId, aiPrompt);
     try {
       const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
       const match = JSON.parse(jsonMatch[0]);
@@ -692,7 +692,7 @@ User question: "${intent.query}"
 
 Provide a concise, helpful answer. Format meeting times clearly.`;
 
-  const response = await callOpenClawFn(aiPrompt, []);
+  const response = await callOpenClawFn(userId, aiPrompt);
   return response || "Sorry, I couldn't process that calendar request.";
 }
 
@@ -748,11 +748,21 @@ function formatEventList(events, title, providerLabel) {
 function formatTime(isoString) {
   if (!isoString) return "??:??";
   const d = new Date(isoString);
-  if (isNaN(d.getTime())) {
-    // Might be a date-only string
-    return isoString;
-  }
-  return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", hour12: false });
+  if (isNaN(d.getTime())) return isoString;
+
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+  const isTomorrow = d.toDateString() === tomorrow.toDateString();
+
+  const time = d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", hour12: false });
+
+  if (isToday) return time;
+  if (isTomorrow) return `tomorrow ${time}`;
+
+  const dayName = d.toLocaleDateString("en-US", { weekday: "long" });
+  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${dayName} ${date}, ${time}`;
 }
 
 module.exports = {

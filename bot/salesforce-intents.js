@@ -362,7 +362,7 @@ Structure your briefing as:
 
 Keep it concise and actionable.`;
 
-  const response = await callOpenClawFn(aiPrompt, []);
+  const response = await callOpenClawFn(userId, aiPrompt);
   return response || `Here's what I found for ${account.name}:\n\n${JSON.stringify(context, null, 2)}`;
 }
 
@@ -432,7 +432,7 @@ User question: "${intent.query}"
 
 Provide a concise, helpful answer.`;
 
-  const response = await callOpenClawFn(aiPrompt, []);
+  const response = await callOpenClawFn(userId, aiPrompt);
   return response || "Sorry, I couldn't process that CRM request.";
 }
 

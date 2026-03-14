@@ -101,7 +101,7 @@ async function handleSharePointIntent(userId, intent, originalMessage) {
       case "sp_recent":
         return await handleRecent(token);
       case "sp_summarize":
-        return await handleSummarize(token, intent);
+        return await handleSummarize(token, userId, intent);
       case "sp_download":
         return await handleDownload(token, userId, intent);
       case "sp_sites":
@@ -163,7 +163,7 @@ async function handleRecent(token) {
 
 // ── Summarize Document ──────────────────────────────────
 
-async function handleSummarize(token, intent) {
+async function handleSummarize(token, userId, intent) {
   // Search for the document
   const docs = await spApiModule.searchDocuments(token, intent.query, 3);
   if (!docs || docs._error || docs.length === 0) {
@@ -231,7 +231,7 @@ Modified: ${formatDate(doc.modifiedAt)} by ${doc.modifiedBy}
 Content:
 ${textContent}`;
 
-  const summary = await callOpenClawFn(aiPrompt, []);
+  const summary = await callOpenClawFn(userId, aiPrompt);
   if (!summary) return `Found "${doc.name}" but couldn't generate a summary.`;
 
   return `**Document Summary: ${doc.name}**\n_(${spApiModule.formatFileSize(doc.size)} | Last modified: ${formatDate(doc.modifiedAt)})_\n\n${summary}`;
@@ -283,7 +283,7 @@ User question: "${intent.query}"
 
 If you need to search for specific documents, tell the user to ask "find documents about <topic>".`;
 
-  const response = await callOpenClawFn(aiPrompt, []);
+  const response = await callOpenClawFn(userId, aiPrompt);
   return response || "Sorry, I couldn't process that document request.";
 }
 
