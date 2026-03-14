@@ -82,9 +82,12 @@ function detectEmailIntent(message) {
   }
 
   // Emails from sender — check BEFORE "recent" to catch "get the last ryanair email"
-  const fromMatch = message.match(/\b(?:email|mail|message)s?\s+(?:from|by|sent by)\s+(.+?)(?:\?|$|\.|and\b)/i)
-    || message.match(/\b(?:show|get|find|search)\b.*\b(?:from|by)\s+(.+?)(?:\?|$|\.|and\b)/i)
-    || message.match(/\b(?:what|any)\b.*\b(?:from)\s+(.+?)(?:\?|$|\.|and\b)/i)
+  // Note: terminators use (?=\s+and\b) lookahead and sentence-end, but NOT "." alone (breaks email addresses)
+  const fromMatch = message.match(/\b(?:email|mail|message)s?\s+(?:from|by|sent by)\s+(\S+@\S+\.\S+)/i)
+    || message.match(/\b(?:email|mail|message)s?\s+(?:from|by|sent by)\s+(.+?)(?:\?|$|(?:\s+and\s))/i)
+    || message.match(/\b(?:show|get|find|search)\b.*\b(?:from|by)\s+(\S+@\S+\.\S+)/i)
+    || message.match(/\b(?:show|get|find|search)\b.*\b(?:from|by)\s+(.+?)(?:\?|$|(?:\s+and\s))/i)
+    || message.match(/\b(?:what|any)\b.*\b(?:from)\s+(.+?)(?:\?|$|(?:\s+and\s))/i)
     // "get/find/show the [last/latest] SENDER email" — e.g. "get the last ryanair email"
     || message.match(/\b(?:get|find|show|open|read)\s+(?:(?:the|my|a)\s+)?(?:(?:last|latest|recent|new|most\s+recent)\s+)?(\w[\w.-]+(?:\s+\w[\w.-]+)?)\s+(?:email|mail|message)\b/i);
   if (fromMatch) {
