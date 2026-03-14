@@ -158,6 +158,11 @@ async function handleCalendarIntent(userId, intent, originalMessage) {
   const providerLabel = provider === "google" ? "Google Calendar" : "Outlook Calendar";
 
   try {
+    // Reset the "next meeting" index for fresh calendar queries
+    if (intent.type !== "calendar_next" && redisClient) {
+      await redisClient.del(`cal_next_idx:${userId}`).catch(() => {});
+    }
+
     switch (intent.type) {
       case "calendar_today":
         return await handleTodayEvents(api, token, providerLabel);
@@ -530,32 +535,43 @@ Output ONLY JSON.`;
 // ── Next Meeting (follow-up) ────────────────────────────
 
 async function handleNextMeeting(api, token, userId, intent, providerLabel) {
-  // Get today's events and find the next one after now
+  // Get today's events sorted by time
   const events = await api.getTodayEvents(token);
-  if (!events || events._error || events.length === 0) {
-    // Fall back to tomorrow
-    const tomorrowEvents = await api.getTomorrowEvents(token);
-    if (!tomorrowEvents || tomorrowEvents._error || tomorrowEvents.length === 0) {
-      return `No more meetings coming up (${providerLabel}).`;
-    }
-    const nextEvent = tomorrowEvents[0];
-    return formatSingleEvent(nextEvent, "Next Meeting (tomorrow)", providerLabel);
+  const allEvents = [];
+  if (events && !events._error) allEvents.push(...events);
+
+  // Also get tomorrow's events as continuation
+  const tomorrowEvents = await api.getTomorrowEvents(token);
+  if (tomorrowEvents && !tomorrowEvents._error) allEvents.push(...tomorrowEvents);
+
+  if (allEvents.length === 0) {
+    return `No meetings coming up (${providerLabel}).`;
   }
 
-  const now = new Date();
-  // Find meetings that haven't started yet, or the next one after the current one
-  const upcoming = events.filter(e => new Date(e.start) > now);
-
-  if (upcoming.length === 0) {
-    // All today's meetings have started — check tomorrow
-    const tomorrowEvents = await api.getTomorrowEvents(token);
-    if (!tomorrowEvents || tomorrowEvents._error || tomorrowEvents.length === 0) {
-      return `No more meetings today or tomorrow (${providerLabel}).`;
-    }
-    return formatSingleEvent(tomorrowEvents[0], "Next Meeting (tomorrow)", providerLabel);
+  // Track which event index was last shown for this user
+  const redisKey = `cal_next_idx:${userId}`;
+  let lastIdx = -1;
+  if (redisClient) {
+    const stored = await redisClient.get(redisKey).catch(() => null);
+    if (stored !== null) lastIdx = parseInt(stored, 10);
   }
 
-  return formatSingleEvent(upcoming[0], "Next Meeting", providerLabel);
+  const nextIdx = lastIdx + 1;
+
+  if (nextIdx >= allEvents.length) {
+    // Reset index for next time
+    if (redisClient) await redisClient.del(redisKey).catch(() => {});
+    return `No more meetings after that (${providerLabel}).`;
+  }
+
+  // Store the index for the next "and after?" follow-up
+  if (redisClient) {
+    await redisClient.set(redisKey, String(nextIdx), { EX: 1800 }).catch(() => {}); // 30min TTL
+  }
+
+  const isTomorrow = events && !events._error && nextIdx >= events.length;
+  const label = isTomorrow ? "Next Meeting (tomorrow)" : "Next Meeting";
+  return formatSingleEvent(allEvents[nextIdx], label, providerLabel);
 }
 
 function formatSingleEvent(event, title, providerLabel) {
@@ -621,6 +637,12 @@ Output ONLY JSON.`;
   }
 
   if (!targetEvent) return "No upcoming meeting found.";
+
+  // Store the index of the shown event so "next" follow-ups work
+  const shownIdx = events.indexOf(targetEvent);
+  if (redisClient && shownIdx >= 0) {
+    await redisClient.set(`cal_next_idx:${userId}`, String(shownIdx), { EX: 1800 }).catch(() => {});
+  }
 
   // Get full details
   const detail = await api.getEventById(token, targetEvent.id);
