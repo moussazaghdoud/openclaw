@@ -398,18 +398,24 @@ async function handleActivationCallback(code, state, baseUrl) {
 
     // Store M365 tokens (same format as auth.js)
     if (m365AuthModule) {
-      // Store tokens in the existing auth.js format so email/calendar handlers work
+      const tokenData = {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        expiresAt: Date.now() + (tokens.expires_in * 1000),
+        scope: tokens.scope,
+        email: msEmail,
+      };
+      const encrypted = encrypt(JSON.stringify(tokenData));
+
+      // Store under JID if known, otherwise store under email for later migration
       const user = await getUser(userId);
       if (user && user.rainbowJid) {
-        const tokenData = {
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
-          expiresAt: Date.now() + (tokens.expires_in * 1000),
-          scope: tokens.scope,
-          email: msEmail,
-        };
-        const encrypted = encrypt(JSON.stringify(tokenData));
         await redisClient.set(`oauth:${user.rainbowJid}`, encrypted, { EX: 90 * 24 * 3600 });
+        console.log(`${LOG} M365 tokens stored under JID: ${user.rainbowJid}`);
+      } else {
+        // JID not known yet — store under email, will be migrated on first message
+        await redisClient.set(`oauth:pending_email:${msEmail.toLowerCase()}`, encrypted, { EX: 90 * 24 * 3600 });
+        console.log(`${LOG} M365 tokens stored pending JID link for: ${msEmail}`);
       }
     }
 
@@ -473,6 +479,16 @@ async function linkRainbowUser(jid, rainbowEmail) {
 
   await updateUser(user.id, { rainbowJid: jid, rainbowId: jid });
   console.log(`${LOG} Rainbow linked: ${rainbowEmail} → ${jid}`);
+
+  // Migrate pending M365 tokens stored during SSO activation
+  const userEmail = user.microsoftEmail || user.email;
+  const pendingKey = `oauth:pending_email:${userEmail.toLowerCase()}`;
+  const pendingTokens = await redisClient.get(pendingKey).catch(() => null);
+  if (pendingTokens) {
+    await redisClient.set(`oauth:${jid}`, pendingTokens, { EX: 90 * 24 * 3600 });
+    await redisClient.del(pendingKey);
+    console.log(`${LOG} M365 tokens migrated from pending to JID: ${jid}`);
+  }
   return user;
 }
 
