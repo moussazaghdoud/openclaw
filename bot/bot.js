@@ -2959,14 +2959,19 @@ async function start() {
             }
           }
           // Fallback: look up contact by user ID via SDK to get loginEmail
-          if (!rainbowEmail && fromId && sdk) {
+          // fromId may be empty in S2S — try raw callback's from_userId
+          const rawCbEnt = msgId ? rawCallbackMap.get(msgId) : null;
+          const resolvedFromId = fromId || rawCbEnt?.from_userId || "";
+          if (!rainbowEmail && resolvedFromId && sdk) {
             try {
-              const contact = await sdk.contacts.getContactById(fromId);
+              const contact = await sdk.contacts.getContactById(resolvedFromId);
               rainbowEmail = contact?.loginEmail || contact?.email || "";
               if (rainbowEmail) console.log(`${LOG} Resolved email from SDK contact: ${rainbowEmail}`);
-            } catch (e2) { /* ignore */ }
+            } catch (e2) {
+              console.log(`${LOG} SDK contact lookup failed for ${resolvedFromId}: ${e2.message}`);
+            }
           }
-          console.log(`${LOG} Enterprise check: jid=${fromJid} fromId=${fromId} email=${rainbowEmail}`);
+          console.log(`${LOG} Enterprise check: jid=${fromJid} fromId=${resolvedFromId} email=${rainbowEmail}`);
           const access = await enterprise.checkAccess(fromJid, rainbowEmail);
           if (!access.allowed) {
             console.log(`${LOG} Access denied (1:1): ${fromJid} (${rainbowEmail})`);
