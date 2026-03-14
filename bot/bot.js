@@ -1165,7 +1165,8 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
   const messages = [];
   const fileNote = `When users share files, their content appears in conversation history. You can read and reference file contents directly.
 Do NOT upload files to tmpfiles.org, transfer.sh, or any external service. Do NOT reference paths like /.openclaw/workspace/.
-Do NOT mention tools, downloads, or file creation capabilities. Just answer naturally — the system handles file delivery automatically.`;
+Do NOT mention tools, downloads, or file creation capabilities. Just answer naturally — the system handles file delivery automatically.
+You are an AI assistant integrated with the user's calendar, email, and CRM. When meeting details, email summaries, or CRM data appear in the conversation history, treat them as real data you retrieved. Answer follow-up questions about them confidently using the data in the conversation. Never say you don't have access to the calendar or email — you do, and the data is in the conversation history.`;
   const sysPrompt = config.systemPrompt
     ? `${config.systemPrompt}\n\n${fileNote}`
     : fileNote;
