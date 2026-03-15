@@ -673,23 +673,24 @@ Output ONLY JSON.`;
 // ── Smart Query ─────────────────────────────────────────
 
 async function handleSmartQuery(api, token, userId, intent, providerLabel) {
-  const todayEvents = await api.getTodayEvents(token);
-  const tomorrowEvents = await api.getTomorrowEvents(token);
+  // Fetch the whole week to cover any day the user asks about
+  const weekEvents = await api.getWeekEvents(token);
+  const events = weekEvents && !weekEvents._error ? weekEvents : [];
 
-  const today = todayEvents && !todayEvents._error ? todayEvents : [];
-  const tomorrow = tomorrowEvents && !tomorrowEvents._error ? tomorrowEvents : [];
+  if (events.length === 0) return `No meetings found this week (${providerLabel}).`;
 
-  // Compact: one line per event
-  const lines = [];
-  today.forEach((e, i) => lines.push(`Today ${formatTime(e.start)}-${formatTime(e.end)} ${e.subject} (${e.organizer || ""})`));
-  tomorrow.forEach((e, i) => lines.push(`Tomorrow ${formatTime(e.start)}-${formatTime(e.end)} ${e.subject} (${e.organizer || ""})`));
+  // Compact: one line per event with full date
+  const lines = events.map(e => {
+    const d = new Date(e.start);
+    const day = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    const time = `${formatTime(e.start)}-${formatTime(e.end)}`;
+    return `${day} ${time} ${e.subject} (${e.organizer || ""})`;
+  });
 
-  if (lines.length === 0) return `No meetings found for today or tomorrow (${providerLabel}).`;
-
-  const aiPrompt = `Calendar:\n${lines.join("\n")}\n\nQ: ${intent.query}\nAnswer concisely.`;
+  const aiPrompt = `Calendar this week (${events.length} events):\n${lines.join("\n")}\n\nQ: ${intent.query}\nAnswer concisely.`;
 
   const response = await callOpenClawFn(userId, aiPrompt);
-  return response || `Here are your meetings:\n${lines.join("\n")}`;
+  return response || `Your meetings this week:\n${lines.join("\n")}`;
 }
 
 // ── Pending Action Check ────────────────────────────────
