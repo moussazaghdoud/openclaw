@@ -1270,11 +1270,48 @@ You are an AI assistant integrated with the user's calendar, email, and CRM. Whe
  * Standalone AI call — no conversation history, just system + user prompt.
  * Used by intent modules for AI-powered features (parsing, summarizing, smart queries).
  */
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
+const SONNET_MODEL = "claude-sonnet-4-20250514";
+
 async function callAIStandalone(userIdOrPrompt, promptOrUndefined) {
   // Supports both callAIStandalone(prompt) and callAIStandalone(userId, prompt)
   const userPrompt = promptOrUndefined !== undefined ? promptOrUndefined : userIdOrPrompt;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000); // 30s hard timeout
+  const timeout = setTimeout(() => controller.abort(), 20000); // 20s hard timeout
+
+  // Call Anthropic API directly with Sonnet (fast model) — bypass OpenClaw
+  if (ANTHROPIC_API_KEY) {
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: SONNET_MODEL,
+          system: "Be concise.",
+          messages: [{ role: "user", content: userPrompt }],
+          max_tokens: 1000,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!response.ok) {
+        console.error(`${LOG} Anthropic API ${response.status}`);
+        return null;
+      }
+      const data = await response.json();
+      return data.content?.[0]?.text || null;
+    } catch (e) {
+      clearTimeout(timeout);
+      console.error(`${LOG} callAIStandalone error:`, e.message);
+      return null;
+    }
+  }
+
+  // Fallback: use OpenClaw if no direct API key
   try {
     const response = await fetch(`${config.endpoint}/v1/chat/completions`, {
       method: "POST",
