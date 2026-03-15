@@ -1274,7 +1274,7 @@ async function callAIStandalone(userIdOrPrompt, promptOrUndefined) {
   // Supports both callAIStandalone(prompt) and callAIStandalone(userId, prompt)
   const userPrompt = promptOrUndefined !== undefined ? promptOrUndefined : userIdOrPrompt;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120000); // 2 min timeout
+  const timeout = setTimeout(() => controller.abort(), 30000); // 30s hard timeout
   try {
     const response = await fetch(`${config.endpoint}/v1/chat/completions`, {
       method: "POST",
@@ -1282,10 +1282,10 @@ async function callAIStandalone(userIdOrPrompt, promptOrUndefined) {
       body: JSON.stringify({
         model: `openclaw:${config.agentId}`,
         messages: [
-          { role: "system", content: "You are a concise executive AI assistant. Answer directly." },
+          { role: "system", content: "Be concise." },
           { role: "user", content: userPrompt },
         ],
-        max_tokens: config.maxTokens,
+        max_tokens: 1000,
         stream: false,
       }),
       signal: controller.signal,

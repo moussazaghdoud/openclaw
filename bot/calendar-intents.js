@@ -673,27 +673,23 @@ Output ONLY JSON.`;
 // ── Smart Query ─────────────────────────────────────────
 
 async function handleSmartQuery(api, token, userId, intent, providerLabel) {
-  // Get today's and tomorrow's events for context
   const todayEvents = await api.getTodayEvents(token);
   const tomorrowEvents = await api.getTomorrowEvents(token);
 
-  const calendarData = {
-    today: todayEvents && !todayEvents._error ? todayEvents : [],
-    tomorrow: tomorrowEvents && !tomorrowEvents._error ? tomorrowEvents : [],
-  };
+  const today = todayEvents && !todayEvents._error ? todayEvents : [];
+  const tomorrow = tomorrowEvents && !tomorrowEvents._error ? tomorrowEvents : [];
 
-  const aiPrompt = `You are an executive AI assistant. The user asked a calendar-related question. Answer it using the calendar data below.
+  // Compact: one line per event
+  const lines = [];
+  today.forEach((e, i) => lines.push(`Today ${formatTime(e.start)}-${formatTime(e.end)} ${e.subject} (${e.organizer || ""})`));
+  tomorrow.forEach((e, i) => lines.push(`Tomorrow ${formatTime(e.start)}-${formatTime(e.end)} ${e.subject} (${e.organizer || ""})`));
 
-Calendar data (${providerLabel}):
-Today's meetings: ${JSON.stringify(calendarData.today)}
-Tomorrow's meetings: ${JSON.stringify(calendarData.tomorrow)}
+  if (lines.length === 0) return `No meetings found for today or tomorrow (${providerLabel}).`;
 
-User question: "${intent.query}"
-
-Provide a concise, helpful answer. Format meeting times clearly.`;
+  const aiPrompt = `Calendar:\n${lines.join("\n")}\n\nQ: ${intent.query}\nAnswer concisely.`;
 
   const response = await callOpenClawFn(userId, aiPrompt);
-  return response || "Sorry, I couldn't process that calendar request.";
+  return response || `Here are your meetings:\n${lines.join("\n")}`;
 }
 
 // ── Pending Action Check ────────────────────────────────
