@@ -56,26 +56,19 @@ async function getEmailsFromSender(token, senderName, top = 10) {
   const cleanName = senderName.replace(/"/g, '\\"');
   const select = "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId";
 
-  // Try exact from: search first
-  const params1 = new URLSearchParams({ $search: `"from:${cleanName}"`, $top: String(top), $select: select });
-  const results = await fetchEmails(token, `/me/messages?${params1}`);
+  // Broad search — finds name in from, subject, body
+  const params = new URLSearchParams({ $search: `"${cleanName}"`, $top: String(top), $select: select });
+  const results = await fetchEmails(token, `/me/messages?${params}`);
 
-  if (results && !results._error && results.length > 0) return results;
+  if (!results || results._error || results.length === 0) return results || [];
 
-  // Fallback: broader search (matches name anywhere — from, subject, body)
-  const params2 = new URLSearchParams({ $search: `"${cleanName}"`, $top: String(top), $select: select });
-  const broader = await fetchEmails(token, `/me/messages?${params2}`);
+  // Filter to emails where sender contains the search term
+  const filtered = results.filter(e =>
+    (e.from || "").toLowerCase().includes(cleanName.toLowerCase()) ||
+    (e.fromEmail || "").toLowerCase().includes(cleanName.toLowerCase())
+  );
 
-  if (broader && !broader._error && broader.length > 0) {
-    // Filter to emails where sender name contains the search term
-    const filtered = broader.filter(e =>
-      (e.from || "").toLowerCase().includes(cleanName.toLowerCase()) ||
-      (e.fromEmail || "").toLowerCase().includes(cleanName.toLowerCase())
-    );
-    return filtered.length > 0 ? filtered : broader;
-  }
-
-  return results; // return original (empty) result
+  return filtered.length > 0 ? filtered : results;
 }
 
 /**
