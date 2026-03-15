@@ -188,34 +188,39 @@ async function initRedis() {
         m365Auth,
         graph: m365Graph,
         agent: agent || null,
-        sendMessage: async (userId, text) => {
-          // Try SDK first
+        sendMessage: async (userJid, text) => {
+          console.log(`${LOG} Proactive send to ${userJid}: ${text.substring(0, 80)}`);
+          // Try SDK: find contact by JID, open conversation, send
           try {
-            const contact = await sdk.contacts.getContactById(userId);
+            const contact = await sdk.contacts.getContactByJid(userJid);
             if (contact) {
               const conv = await sdk.conversations.openConversationForContact(contact);
-              if (conv) { await sdk.im.sendMessageToConversation(conv, text); return; }
+              if (conv) {
+                await sdk.im.sendMessageToConversation(conv, text);
+                console.log(`${LOG} Proactive send OK via SDK`);
+                return;
+              }
             }
-          } catch {}
-          // Fallback: S2S REST
+          } catch (e) { console.warn(`${LOG} SDK proactive send failed:`, e.message); }
+          // Fallback: S2S REST — use existing conversation if we have one
           if (s2sConnectionId && authToken) {
             const host = rainbowHost || "openrainbow.com";
             try {
-              const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations`, {
-                method: "POST",
-                headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ conversation: { peerId: userId } }),
-              });
-              const convData = await convResp.json();
-              const convId = convData?.data?.id || convData?.id;
+              // Find existing conversation for this JID
+              const convId = conversationByJid?.get(userJid);
               if (convId) {
                 await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
                   method: "POST",
                   headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
                   body: JSON.stringify({ message: { body: text, lang: "en" } }),
                 });
+                console.log(`${LOG} Proactive send OK via REST (conv ${convId})`);
+                return;
               }
-            } catch (e) { console.warn(`${LOG} Proactive send failed:`, e.message); }
+              // No existing conversation — try to create one
+              // Need the Rainbow userId, not JID — extract from rawCallbackMap or SDK
+              console.warn(`${LOG} No existing conversation for ${userJid} — cannot send proactive message`);
+            } catch (e) { console.warn(`${LOG} REST proactive send failed:`, e.message); }
           }
         },
       });
@@ -2107,6 +2112,7 @@ const debugCallbacks = [];
 
 // Map message IDs to raw callback data (so onmessagereceived can detect is_group)
 const rawCallbackMap = new Map();
+const conversationByJid = new Map(); // JID → conversation_id for proactive messaging
 // Map conversation_id to bubble JID (built from callbacks)
 const convIdToBubbleJid = new Map();
 // Map conversation_id to most recent file attachment (so follow-up messages can access it)
@@ -3275,6 +3281,11 @@ async function start() {
       // For bubble messages: always store in history, but only reply when triggered
       // Use rawConversationId as history key so all participants share context
       const historyKey = (isBubble && rawConversationId) ? `bubble:${rawConversationId}` : fromJid;
+
+      // Track JID → conversation_id for proactive messaging (email webhooks)
+      if (!isBubble && fromJid && rawConversationId) {
+        conversationByJid.set(fromJid, rawConversationId);
+      }
 
       // "sleep" command: force bot back to sleep (clear active conversation)
       if (isBubble && contentLower.trim() === "sleep") {
