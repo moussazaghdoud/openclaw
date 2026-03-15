@@ -512,70 +512,26 @@ function detectIntent(userMessage) {
  * Returns an intent object like { type: "calendar_today" } or { type: "chat" }.
  */
 async function detectIntentAI(userMessage) {
-  const services = [];
-  if (emailIntents) services.push("email");
-  if (calendarIntents) services.push("calendar");
-  if (briefing) services.push("briefing");
-  if (sfIntents) services.push("salesforce");
-  if (spIntents) services.push("sharepoint");
+  const available = [
+    emailIntents ? "email" : "",
+    calendarIntents ? "calendar" : "",
+    briefing ? "briefing" : "",
+    sfIntents ? "salesforce" : "",
+    spIntents ? "sharepoint" : "",
+  ].filter(Boolean).join(",");
 
-  if (services.length === 0) return { type: "chat" };
+  if (!available) return { type: "chat" };
 
-  const prompt = `Classify this user message into ONE intent. Return ONLY a JSON object.
-
-Available intents:
-${services.includes("email") ? `- email_summarize_unread: summarize unread emails
-- email_list_recent: show recent/last emails. Include "count" (1 for singular "last email", number if specified, 10 for plural)
-- email_from_sender: emails from a specific person. Include "sender" name/email, "count" (1 for singular, number if specified, omit for default), and "instructions" if the user wants analysis (e.g. "most critical", "about the project", "urgent ones")
-- email_search: search emails. Include "query"
-- email_draft_reply: draft a reply. Include "target" (email number if mentioned), "instructions"
-- email_compose_new: write/send new email. Include "to" and "instructions"
-- email_send_confirm: user confirms sending (says "yes", "send it", "confirm")
-- email_archive: archive email(s). Include "target" if specified
-- email_mark_read: mark as read
-- email_flag: flag/star email. Include "target" if specified
-- email_action_needed: urgent/action-required emails
-- email_briefing: email digest/briefing
-- email_smart_query: any other email question. Include "query"` : ""}
-${services.includes("calendar") ? `- calendar_today: today's meetings/schedule
-- calendar_tomorrow: tomorrow's meetings
-- calendar_week: this week's schedule
-- calendar_next: follow-up asking for the NEXT meeting after one just shown ("and after?", "next one?", "then?")
-- calendar_details: details about a specific meeting ("next meeting", "my 2pm call"). Include "instructions"
-- calendar_free_slots: find available time. Include "duration" (minutes, default 30), "day" (today/tomorrow/week)
-- calendar_create: schedule/create a meeting. Include "instructions"
-- calendar_reschedule: move/postpone a meeting. Include "instructions"
-- calendar_cancel: cancel a meeting. Include "instructions"
-- calendar_accept: accept invitation. Include "instructions"
-- calendar_decline: decline invitation. Include "instructions"
-- calendar_smart_query: any other calendar question. Include "query"` : ""}
-${services.includes("briefing") ? `- briefing_daily: morning/daily briefing
-- briefing_meeting: prepare for a meeting. Include "query" (person/company)
-- briefing_customer: info about a customer. Include "query"
-- briefing_weekly: weekly summary
-- briefing_followups: pending follow-ups/action items` : ""}
-${services.includes("salesforce") ? `- sf_search_accounts: search companies/accounts. Include "query"
-- sf_account_details: account details. Include "query"
-- sf_search_contacts: search contacts. Include "query"
-- sf_opportunities: sales pipeline/deals. Include "accountQuery" if filtered
-- sf_activity: CRM activity. Include "accountQuery" if filtered
-- sf_briefing: customer meeting briefing. Include "query"
-- sf_global_search: search across CRM. Include "query"
-- sf_smart_query: other CRM question. Include "query"` : ""}
-${services.includes("sharepoint") ? `- sp_search: search documents. Include "query"
-- sp_recent: recent documents
-- sp_summarize: summarize a document. Include "query"
-- sp_download: download a document. Include "query"
-- sp_sites: SharePoint sites. Include "query" if searching
-- sp_smart_query: other document question. Include "query"` : ""}
-- chat: general conversation, not related to any service above
-
-User message: "${userMessage}"
-
-Return ONLY valid JSON like {"type":"calendar_today"} or {"type":"email_from_sender","sender":"John"} or {"type":"chat"}`;
+  const prompt = `What does this user want? Services: ${available}. Reply ONLY JSON.
+Rules: type starts with service prefix (email_,calendar_,sf_,sp_,briefing_) or "chat". Include sender/query/count/instructions as needed.
+Examples: {"type":"email_from_sender","sender":"John","count":1,"instructions":"most urgent"} {"type":"calendar_today"} {"type":"calendar_next"} {"type":"chat"}
+Message: "${userMessage}"`;
 
   try {
-    const response = await callAIStandalone(prompt);
+    const response = await Promise.race([
+      callAIStandalone(prompt),
+      new Promise(resolve => setTimeout(() => resolve(null), 15000)), // 15s max
+    ]);
     if (!response) return { type: "chat" };
 
     const jsonMatch = response.match(/\{[\s\S]*\}/);
