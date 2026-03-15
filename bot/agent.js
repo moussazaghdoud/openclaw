@@ -15,6 +15,9 @@
 
 const LOG = "[Agent]";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
+
+// Debug trace — last agent run details accessible via /api/agent-debug
+let lastRunTrace = { timestamp: null, userId: null, message: null, loops: [], tools: [], finalResponse: null, error: null };
 const SONNET = "claude-sonnet-4-20250514";
 const OPUS = "claude-opus-4-20250514";
 const MAX_LOOPS = 6;
@@ -478,6 +481,10 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
 
   console.log(`${LOG} Tools: ${tools.map(t => t.name).join(", ")} (${tools.length} total)`);
   console.log(`${LOG} Message: "${userMessage.substring(0, 100)}"`);
+
+  // Reset trace
+  lastRunTrace = { timestamp: new Date().toISOString(), userId, message: userMessage.substring(0, 200), loops: [], tools: [], finalResponse: null, error: null, model };
+
   let currentMessages = [...messages];
 
   for (let loop = 0; loop < MAX_LOOPS; loop++) {
@@ -524,6 +531,8 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
         const finalText = textBlocks.map(b => b.text).join("\n");
         if (loop === 0) console.warn(`${LOG} WARNING: Agent responded without calling ANY tools! Response: ${finalText.substring(0, 200)}`);
         console.log(`${LOG} Done in ${loop + 1} loop(s), ${finalText.length} chars (${Date.now() - startTime}ms)`);
+        lastRunTrace.finalResponse = finalText.substring(0, 500);
+        lastRunTrace.loops.push({ loop: loop + 1, action: "final_response" });
 
         // Save working memory
         await saveWorkingMemory(userId, memory);
@@ -532,7 +541,10 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
       }
 
       // Execute tools
-      console.log(`${LOG} Loop ${loop + 1}: ${toolUseBlocks.map(b => b.name).join(", ")}`);
+      const toolNames = toolUseBlocks.map(b => b.name);
+      console.log(`${LOG} Loop ${loop + 1}: ${toolNames.join(", ")}`);
+      lastRunTrace.loops.push({ loop: loop + 1, tools: toolNames });
+      lastRunTrace.tools.push(...toolNames);
 
       // Add assistant response (with tool calls)
       currentMessages.push({ role: "assistant", content: data.content });
@@ -591,10 +603,13 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
   return null;
 }
 
+function getLastRunTrace() { return lastRunTrace; }
+
 module.exports = {
   init,
   isAvailable,
   run,
   getWorkingMemory,
   saveWorkingMemory,
+  getLastRunTrace,
 };

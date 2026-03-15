@@ -2414,6 +2414,15 @@ app.get("/api/status", (req, res) => {
   res.json({ status: botPaused ? "paused" : "running", uptime: Math.floor((Date.now() - stats.startedAt) / 1000), stats, s2sConnectionId: s2sConnectionId || null, m365: { configured: !!(m365Auth && m365Auth.isConfigured()) }, gmail: { configured: !!(gmailAuth && gmailAuth.isConfigured()) }, calendar: { outlookReady: !!(m365Auth && calendarGraph), googleReady: !!(gmailAuth && calendarGoogle) }, salesforce: { configured: !!(sfAuth && sfAuth.isConfigured()) }, sharepoint: { ready: !!(m365Auth && spApi) }, briefing: { ready: !!briefing }, enterprise: { enabled: !!(enterprise && enterprise.isEnterpriseMode()), loaded: !!enterprise }, bubbles, lastMessages: debugMessages.slice(-5) });
 });
 
+// Agent debug endpoint
+app.get("/api/agent-debug", (req, res) => {
+  if (agent && agent.getLastRunTrace) {
+    res.json(agent.getLastRunTrace());
+  } else {
+    res.json({ error: "Agent not available" });
+  }
+});
+
 // Register M365 OAuth routes
 if (m365Auth && m365Auth.isConfigured()) {
   m365Auth.registerRoutes(app, async (result) => {
