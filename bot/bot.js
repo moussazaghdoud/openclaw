@@ -503,7 +503,6 @@ function detectIntent(userMessage) {
   }
 
   // 3. Smart keyword routing — route to the right service, let AI handle intelligence within
-  const msg = userMessage.toLowerCase();
 
   // Email
   if (emailIntents && /\b(email|mail|inbox|unread|outlook|sender|draft|reply|forward|archive|flag)\b/i.test(userMessage)) {
