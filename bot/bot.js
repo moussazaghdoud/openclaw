@@ -1299,7 +1299,8 @@ async function callAIStandalone(userIdOrPrompt, promptOrUndefined) {
       });
       clearTimeout(timeout);
       if (!response.ok) {
-        console.error(`${LOG} Anthropic API ${response.status}`);
+        const errBody = await response.text().catch(() => "");
+        console.error(`${LOG} Anthropic API ${response.status}: ${errBody.substring(0, 200)}`);
         return null;
       }
       const data = await response.json();
@@ -3617,15 +3618,30 @@ async function start() {
       } else if (intent.type === "create_file") {
         responseText = await handleCreateFile(historyKey, userMessage, intent.format);
       } else if (intent.type.startsWith("email_") && emailIntents) {
-        responseText = await emailIntents.handleEmailIntent(fromJid, intent, userMessage);
+        responseText = await Promise.race([
+          emailIntents.handleEmailIntent(fromJid, intent, userMessage),
+          new Promise(r => setTimeout(() => r("Sorry, the email request timed out. Please try again."), 25000)),
+        ]);
       } else if (intent.type.startsWith("calendar_") && calendarIntents) {
-        responseText = await calendarIntents.handleCalendarIntent(fromJid, intent, userMessage);
+        responseText = await Promise.race([
+          calendarIntents.handleCalendarIntent(fromJid, intent, userMessage),
+          new Promise(r => setTimeout(() => r("Sorry, the calendar request timed out. Please try again."), 25000)),
+        ]);
       } else if (intent.type.startsWith("sf_") && sfIntents) {
-        responseText = await sfIntents.handleSalesforceIntent(fromJid, intent, userMessage);
+        responseText = await Promise.race([
+          sfIntents.handleSalesforceIntent(fromJid, intent, userMessage),
+          new Promise(r => setTimeout(() => r("Sorry, the CRM request timed out. Please try again."), 25000)),
+        ]);
       } else if (intent.type.startsWith("sp_") && spIntents) {
-        responseText = await spIntents.handleSharePointIntent(fromJid, intent, userMessage);
+        responseText = await Promise.race([
+          spIntents.handleSharePointIntent(fromJid, intent, userMessage),
+          new Promise(r => setTimeout(() => r("Sorry, the document request timed out. Please try again."), 25000)),
+        ]);
       } else if (intent.type.startsWith("briefing_") && briefing) {
-        responseText = await briefing.handleBriefingIntent(fromJid, intent, userMessage);
+        responseText = await Promise.race([
+          briefing.handleBriefingIntent(fromJid, intent, userMessage),
+          new Promise(r => setTimeout(() => r("Sorry, the briefing request timed out. Please try again."), 25000)),
+        ]);
       }
 
       if (!responseText) {
