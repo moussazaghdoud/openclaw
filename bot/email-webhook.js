@@ -266,7 +266,7 @@ async function createSubscription(userId, token) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(subscriptionPayload),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!resp.ok) {
@@ -323,7 +323,7 @@ async function renewSubscription(userId, token, subscriptionId) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ expirationDateTime }),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!resp.ok) {
@@ -391,7 +391,7 @@ async function deleteSubscription(userId, token, subscriptionId) {
       headers: {
         Authorization: `Bearer ${token}`,
       },
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(30000),
     });
 
     if (resp.ok || resp.status === 204 || resp.status === 404) {
