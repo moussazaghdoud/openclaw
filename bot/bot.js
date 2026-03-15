@@ -502,9 +502,36 @@ function detectIntent(userMessage) {
     }
   }
 
-  // 3. AI-powered intent classification for all service intents
-  // Returns null synchronously — caller must use detectIntentAI() for async classification
-  return null; // Signal to use async AI classification
+  // 3. Smart keyword routing — route to the right service, let AI handle intelligence within
+  const msg = userMessage.toLowerCase();
+
+  // Email
+  if (emailIntents && /\b(email|mail|inbox|unread|outlook|sender|draft|reply|forward|archive|flag)\b/i.test(userMessage)) {
+    return { type: "email_smart_query", query: userMessage };
+  }
+
+  // Calendar
+  if (calendarIntents) {
+    if (/\b(meeting|calendar|schedule|agenda|appointment|free.?slot|busy|event)\b/i.test(userMessage))
+      return { type: "calendar_smart_query", query: userMessage };
+    if (/^(and\s+)?(after|next|then)\b.*\??$/i.test(msg) || /\bnext\s+(one|meeting)\b/i.test(msg))
+      return { type: "calendar_next", instructions: userMessage };
+  }
+
+  // Briefing
+  if (briefing && /\b(briefing|brief me|prepare.*meeting|morning.?report|weekly.?summary|follow.?up|action.?item)\b/i.test(userMessage))
+    return { type: "briefing_daily", query: userMessage };
+
+  // Salesforce
+  if (sfIntents && /\b(salesforce|crm|pipeline|opportunity|account|deal|lead)\b/i.test(userMessage))
+    return { type: "sf_smart_query", query: userMessage };
+
+  // SharePoint
+  if (spIntents && /\b(sharepoint|onedrive|document|file.*share|shared.*file)\b/i.test(userMessage))
+    return { type: "sp_smart_query", query: userMessage };
+
+  // Default — regular chat
+  return { type: "chat" };
 }
 
 /**
@@ -2713,7 +2740,7 @@ async function processBubbleCallback(body) {
 
     // Intent-driven processing (same as main handler)
     let intent = detectIntent(content);
-    if (!intent) intent = await detectIntentAI(content);
+    if (!intent) intent = { type: "chat" };
     console.log(`${LOG} [BUBBLE-INTERCEPT] Intent: ${intent.type}`);
 
     // Send short confirmation before starting the task
@@ -3524,7 +3551,7 @@ async function start() {
 
       // ── Intent-driven processing: bot decides, AI generates content ──
       let intent = detectIntent(content);
-      if (!intent) intent = await detectIntentAI(content);
+      if (!intent) intent = { type: "chat" };
       console.log(`${LOG} Intent: ${intent.type} for ${fromName}`);
 
       // Send short confirmation before starting the task
