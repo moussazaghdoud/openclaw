@@ -466,20 +466,42 @@ ${emailData}`;
  * Handles any email-related question that didn't match a specific pattern.
  */
 async function handleSmartQuery(userId, token, api, provider, userQuestion) {
-  // Fetch 30 recent emails — compact metadata only
-  const emails = await api.getRecentEmails(token, 30);
+  // Detect if user is asking about a specific person — search by sender
+  const senderMatch = userQuestion.match(/\b(?:from|de)\s+([A-Z][a-zà-ÿ]+(?:\s+[A-Z][a-zà-ÿ]+)?)/i)
+    || userQuestion.match(/\b([A-Z][a-zà-ÿ]+(?:\s+[A-Z][a-zà-ÿ]+)?)\b.*\b(?:email|mail|sent|wrote)\b/i);
+
+  let emails;
+  let searchLabel = "recent";
+
+  if (senderMatch) {
+    // Search by sender name first
+    const senderName = senderMatch[1].trim();
+    emails = await api.getEmailsFromSender(token, senderName, 20);
+    searchLabel = `from "${senderName}"`;
+    // If sender search fails or returns 0, fall back to recent
+    if (!emails || emails._error || emails.length === 0) {
+      emails = null;
+    }
+  }
+
+  // Fallback: fetch recent emails
+  if (!emails) {
+    emails = await api.getRecentEmails(token, 30);
+    searchLabel = "recent";
+  }
+
   if (!emails || emails._error) return handleApiError(emails, provider);
-  if (emails.length === 0) return "Your inbox is empty.";
+  if (emails.length === 0) return "No emails found.";
 
   await storeEmailContext(userId, emails.slice(0, 15), provider);
 
-  // Ultra-compact: ~40 chars per email = ~1200 chars for 30 emails
+  // Ultra-compact format
   const lines = emails.map((e, i) => {
     const date = e.receivedAt ? new Date(e.receivedAt).toLocaleDateString("en", { month: "short", day: "numeric" }) : "";
     return `${i + 1}. ${date} ${e.from} — ${e.subject.substring(0, 50)}`;
   }).join("\n");
 
-  const prompt = `Inbox (${emails.length} emails):\n${lines}\n\nQ: ${userQuestion}\nAnswer concisely. Use email numbers.`;
+  const prompt = `${emails.length} ${searchLabel} emails:\n${lines}\n\nQ: ${userQuestion}\nAnswer concisely. Use email numbers.`;
 
   try {
     const result = await Promise.race([
@@ -489,7 +511,7 @@ async function handleSmartQuery(userId, token, api, provider, userQuestion) {
     if (result?.content) return `📧 ${result.content}`;
   } catch (e) { /* fallback */ }
 
-  return `📧 Recent emails:\n\n${formatEmailList(emails.slice(0, 10))}`;
+  return `📧 ${emails.length} ${searchLabel} emails:\n\n${formatEmailList(emails.slice(0, 10))}`;
 }
 
 async function handleComposeNew(userId, token, api, provider, to, instructions) {
