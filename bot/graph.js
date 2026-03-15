@@ -53,22 +53,50 @@ async function searchEmails(token, query, top = 20) {
  * Search emails from a specific sender.
  */
 async function getEmailsFromSender(token, senderName, top = 10) {
-  const cleanName = senderName.replace(/"/g, '\\"');
+  const cleanName = senderName.replace(/"/g, '\\"').replace(/'/g, "''");
   const select = "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId";
 
-  // Broad search — finds name in from, subject, body
-  const params = new URLSearchParams({ $search: `"${cleanName}"`, $top: String(top), $select: select });
-  const results = await fetchEmails(token, `/me/messages?${params}`);
+  // Strategy 1: If it looks like an email address, filter by exact address
+  if (senderName.includes("@")) {
+    const params = new URLSearchParams({
+      $filter: `from/emailAddress/address eq '${cleanName}'`,
+      $orderby: "receivedDateTime desc",
+      $top: String(top),
+      $select: select,
+    });
+    const results = await fetchEmails(token, `/me/messages?${params}`);
+    if (results && !results._error && results.length > 0) return results;
+  }
 
-  if (!results || results._error || results.length === 0) return results || [];
+  // Strategy 2: Search by name, then get the email address, then filter by address
+  const searchParams = new URLSearchParams({ $search: `"${cleanName}"`, $top: "50", $select: select });
+  const searchResults = await fetchEmails(token, `/me/messages?${searchParams}`);
 
-  // Filter to emails where sender contains the search term
-  const filtered = results.filter(e =>
-    (e.from || "").toLowerCase().includes(cleanName.toLowerCase()) ||
-    (e.fromEmail || "").toLowerCase().includes(cleanName.toLowerCase())
+  if (!searchResults || searchResults._error || searchResults.length === 0) return searchResults || [];
+
+  // Find emails where sender matches
+  const senderLower = cleanName.toLowerCase();
+  const fromSender = searchResults.filter(e =>
+    (e.from || "").toLowerCase().includes(senderLower) ||
+    (e.fromEmail || "").toLowerCase().includes(senderLower)
   );
 
-  return filtered.length > 0 ? filtered : results;
+  // If we found a matching sender, get their email address and do an exact filter
+  if (fromSender.length > 0 && fromSender[0].fromEmail) {
+    const exactEmail = fromSender[0].fromEmail;
+    const filterParams = new URLSearchParams({
+      $filter: `from/emailAddress/address eq '${exactEmail.replace(/'/g, "''")}'`,
+      $orderby: "receivedDateTime desc",
+      $top: String(top),
+      $select: select,
+    });
+    const exactResults = await fetchEmails(token, `/me/messages?${filterParams}`);
+    if (exactResults && !exactResults._error && exactResults.length > 0) return exactResults;
+    // Fall back to search results if filter fails
+    return fromSender;
+  }
+
+  return fromSender.length > 0 ? fromSender : searchResults;
 }
 
 /**
