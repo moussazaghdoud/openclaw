@@ -3693,8 +3693,8 @@ async function start() {
 
       // Force agent for email/calendar when available — bypass detectIntent result
       const useAgent = agent && agent.isAvailable() && (
-        /\b(emails?|mails?|inbox|unread|outlook|sender|draft|reply|forward|archive|flag)\b/i.test(content) ||
-        /\b(meetings?|calendar|schedule|agenda|appointments?|events?)\b/i.test(content) ||
+        /\b(emails?|mails?|inbox|unread|outlook|sender|draft|reply|forward|archive|flag|sent|received|wrote)\b/i.test(content) ||
+        /\b(meetings?|calendar|schedule|agenda|appointments?|events?|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|this\s+week|next\s+week|free\s+slots?|busy|available)\b/i.test(content) ||
         /^(and\s+)?(after|next|then)\b/i.test(content)
       );
 
