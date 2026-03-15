@@ -363,6 +363,47 @@ async function executeTranslateDocument(args) {
 // Returns: { type: "chat" | "translate_docx" | "create_file", ...metadata }
 
 /**
+ * Convert markdown text to styled HTML for Rainbow rich messages.
+ * Returns { body: plainText, content: htmlText } for S2S message payload.
+ */
+function formatForRainbow(text) {
+  if (!text) return { body: "", content: "" };
+
+  let html = text
+    // Escape HTML entities first
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    // Bold: **text** → <b style="color:#1a73e8">text</b> (blue for emphasis)
+    .replace(/\*\*([^*]+)\*\*/g, '<b style="color:#1a73e8">$1</b>')
+    // Italic: *text* → <i>text</i>
+    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<i>$1</i>")
+    // Numbered lists: 1. text → styled line
+    .replace(/^(\d+)\.\s+(.+)$/gm, '<div style="margin:2px 0;padding-left:8px"><b style="color:#e8710a">$1.</b> $2</div>')
+    // Bullet lists: - text → styled line
+    .replace(/^[-•]\s+(.+)$/gm, '<div style="margin:2px 0;padding-left:8px">• $1</div>')
+    // Headers-like lines (lines ending with :) → bold colored
+    .replace(/^([A-Z][^:\n]{3,50}):$/gm, '<div style="color:#5f6368;font-weight:bold;margin-top:6px">$1:</div>')
+    // Line breaks
+    .replace(/\n/g, "<br>");
+
+  // Wrap in a styled container
+  html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;line-height:1.5">${html}</div>`;
+
+  return { body: text, content: html };
+}
+
+/**
+ * Build Rainbow S2S message payload with both plain text and HTML.
+ */
+function buildMessage(text) {
+  const { body, content } = formatForRainbow(text);
+  const msg = { body, lang: "en" };
+  if (content) msg.content = content;
+  return { message: msg };
+}
+
+/**
  * Generate a short reformulation of the user's intent for immediate feedback.
  */
 function describeIntent(intent) {
@@ -3846,7 +3887,7 @@ async function start() {
               const resp = await fetch(msgUrl, {
                 method: "POST",
                 headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ message: { body: responseText, lang: "en" } }),
+                body: JSON.stringify(buildMessage(responseText)),
               });
               if (resp.ok) {
                 sent = true;
@@ -3863,9 +3904,7 @@ async function start() {
           // Method 2: Use conversation.dbId via sdk.s2s.sendMessageInConversation
           if (!sent && conversation?.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
             try {
-              await sdk.s2s.sendMessageInConversation(conversation.dbId, {
-                message: { body: responseText, lang: "en" },
-              });
+              await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText));
               sent = true;
               console.log(`${LOG} Sent via sdk.s2s.sendMessageInConversation dbId=${conversation.dbId}`);
             } catch (err) {
@@ -3887,11 +3926,9 @@ async function start() {
             console.error(`${LOG} All bubble reply methods failed`);
           }
         } else {
-          // 1:1 reply via S2S or IM
+          // 1:1 reply via S2S or IM — with HTML formatting
           if (conversation.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
-            await sdk.s2s.sendMessageInConversation(conversation.dbId, {
-              message: { body: responseText, lang: "en" },
-            });
+            await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText));
           } else {
             await sdk.im.sendMessageToConversation(conversation, responseText);
           }
