@@ -673,8 +673,11 @@ Output ONLY JSON.`;
 // ── Smart Query ─────────────────────────────────────────
 
 async function handleSmartQuery(api, token, userId, intent, providerLabel) {
-  // Fetch the whole week to cover any day the user asks about
-  const weekEvents = await api.getWeekEvents(token);
+  // Fetch 2 weeks (current + next) to cover any day the user asks about
+  const now = new Date();
+  const start = new Date(now); start.setHours(0, 0, 0, 0);
+  const end = new Date(now); end.setDate(end.getDate() + 14); end.setHours(23, 59, 59, 999);
+  const weekEvents = await api.getEventsInRange(token, start.toISOString(), end.toISOString());
   const events = weekEvents && !weekEvents._error ? weekEvents : [];
 
   if (events.length === 0) return `No meetings found this week (${providerLabel}).`;
