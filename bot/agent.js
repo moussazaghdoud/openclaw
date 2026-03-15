@@ -481,9 +481,11 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
   // Raw history caused Claude to answer from stale/tainted data instead of calling tools.
   const messages = [{ role: "user", content: userMessage }];
 
-  // Select model — Sonnet for reasoning, Opus for writing
-  const model = selectModel(userMessage);
-  console.log(`${LOG} Starting agent loop (model: ${model === OPUS ? "OPUS" : "SONNET"}, memory: ${memoryContext ? "yes" : "empty"})`);
+  // Always use Sonnet for the agent loop (fast reasoning + tool calling)
+  // Opus is too slow for multi-step loops — if high-quality writing is needed,
+  // Sonnet will produce good enough output for chat
+  const model = SONNET;
+  console.log(`${LOG} Starting agent loop (model: SONNET, memory: ${memoryContext ? "yes" : "empty"})`);
 
   console.log(`${LOG} Tools: ${tools.map(t => t.name).join(", ")} (${tools.length} total)`);
   console.log(`${LOG} Message: "${userMessage.substring(0, 100)}"`);
