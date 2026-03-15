@@ -2427,6 +2427,19 @@ app.get("/api/agent-status", (req, res) => {
   });
 });
 
+// Agent test — actually runs the agent with a test message
+app.get("/api/agent-test", async (req, res) => {
+  if (!agent || !agent.isAvailable()) return res.json({ error: "Agent not available" });
+  const msg = req.query.q || "hello";
+  const userId = req.query.uid || "test";
+  try {
+    const result = await agent.run(userId, msg, []);
+    res.json({ result, trace: agent.getLastRunTrace() });
+  } catch (e) {
+    res.json({ error: e.message, trace: agent.getLastRunTrace() });
+  }
+});
+
 // Agent debug endpoint
 app.get("/api/agent-debug", (req, res) => {
   if (agent && agent.getLastRunTrace) {
@@ -3622,13 +3635,21 @@ async function start() {
         /^(and\s+)?(after|next|then)\b/i.test(content)
       );
 
+      console.log(`${LOG} useAgent=${useAgent}, content="${(content||"").substring(0,50)}", agentLoaded=${!!agent}, agentAvail=${agent?agent.isAvailable():false}`);
+
       if (useAgent) {
         console.log(`${LOG} >>> AGENT FORCED for: "${content.substring(0, 80)}"`);
-        const history = await getHistory(historyKey);
-        responseText = await Promise.race([
-          agent.run(fromJid, content, history),
-          new Promise(r => setTimeout(() => r("Sorry, the request timed out. Please try again."), 35000)),
-        ]);
+        try {
+          const history = await getHistory(historyKey);
+          responseText = await Promise.race([
+            agent.run(fromJid, content, history),
+            new Promise(r => setTimeout(() => r("Sorry, the request timed out. Please try again."), 35000)),
+          ]);
+          console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
+        } catch (agentErr) {
+          console.error(`${LOG} Agent crashed:`, agentErr.message);
+          responseText = null;
+        }
       } else if (intent.type === "translate_docx") {
         responseText = await handleDocxTranslation(historyKey, userMessage, intent.language, intent.docxKey);
       } else if (intent.type === "translate_pdf") {
