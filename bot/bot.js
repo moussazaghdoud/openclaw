@@ -1292,7 +1292,7 @@ async function callAIStandalone(userIdOrPrompt, promptOrUndefined) {
   // Supports both callAIStandalone(prompt) and callAIStandalone(userId, prompt)
   const userPrompt = promptOrUndefined !== undefined ? promptOrUndefined : userIdOrPrompt;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000);
+  const timeout = setTimeout(() => controller.abort(), 120000); // 2 min timeout
   try {
     const response = await fetch(`${config.endpoint}/v1/chat/completions`, {
       method: "POST",
