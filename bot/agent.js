@@ -418,8 +418,11 @@ async function run(userId, userMessage, conversationHistory = []) {
 
   const startTime = Date.now();
 
-  // Load working memory
-  const memory = await getWorkingMemory(userId);
+  // Load working memory (clear stale data older than this session)
+  let memory = await getWorkingMemory(userId);
+  // Clear lastEmails/lastEvents — force agent to always fetch fresh
+  delete memory.lastEmails;
+  delete memory.lastEvents;
   const memoryContext = memoryToContext(memory);
 
   const today = new Date().toLocaleDateString("en-US", {
@@ -473,6 +476,8 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
   const model = selectModel(userMessage);
   console.log(`${LOG} Starting agent loop (model: ${model === OPUS ? "OPUS" : "SONNET"}, memory: ${memoryContext ? "yes" : "empty"})`);
 
+  console.log(`${LOG} Tools: ${tools.map(t => t.name).join(", ")} (${tools.length} total)`);
+  console.log(`${LOG} Message: "${userMessage.substring(0, 100)}"`);
   let currentMessages = [...messages];
 
   for (let loop = 0; loop < MAX_LOOPS; loop++) {
@@ -517,6 +522,7 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
       // No tool calls — agent is done
       if (toolUseBlocks.length === 0) {
         const finalText = textBlocks.map(b => b.text).join("\n");
+        if (loop === 0) console.warn(`${LOG} WARNING: Agent responded without calling ANY tools! Response: ${finalText.substring(0, 200)}`);
         console.log(`${LOG} Done in ${loop + 1} loop(s), ${finalText.length} chars (${Date.now() - startTime}ms)`);
 
         // Save working memory
