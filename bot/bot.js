@@ -3615,9 +3615,15 @@ async function start() {
 
       let responseText = null;
 
-      if (intent.type === "agent" && agent) {
-        // Agent gets raw user message (never anonymized) and clean history
-        console.log(`${LOG} >>> CALLING AGENT.RUN for: "${content.substring(0, 80)}"`);
+      // Force agent for email/calendar when available — bypass detectIntent result
+      const useAgent = agent && agent.isAvailable() && (
+        /\b(email|mail|inbox|unread|outlook|sender|draft|reply|forward|archive|flag)\b/i.test(content) ||
+        /\b(meeting|calendar|schedule|agenda|appointment|event)\b/i.test(content) ||
+        /^(and\s+)?(after|next|then)\b/i.test(content)
+      );
+
+      if (useAgent) {
+        console.log(`${LOG} >>> AGENT FORCED for: "${content.substring(0, 80)}"`);
         const history = await getHistory(historyKey);
         responseText = await Promise.race([
           agent.run(fromJid, content, history),
