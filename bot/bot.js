@@ -2810,7 +2810,7 @@ async function processBubbleCallback(body) {
       const history = await getHistory(fromJid);
       responseText = await Promise.race([
         agent.run(fromJid, content, history),
-        new Promise(r => setTimeout(() => r("Sorry, the request timed out. Please try again."), 35000)),
+        new Promise(r => setTimeout(() => r("Sorry, the request timed out. Please try again."), 120000)),
       ]);
     } else if (intent.type === "translate_docx") {
       responseText = await handleDocxTranslation(fromJid, content, intent.language, intent.docxKey);
@@ -3655,7 +3655,7 @@ async function start() {
           const history = await getHistory(historyKey);
           responseText = await Promise.race([
             agent.run(fromJid, content, history),
-            new Promise(r => setTimeout(() => r("Sorry, the request timed out. Please try again."), 35000)),
+            new Promise(r => setTimeout(() => r("Sorry, the request timed out. Please try again."), 120000)),
           ]);
           console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
         } catch (agentErr) {

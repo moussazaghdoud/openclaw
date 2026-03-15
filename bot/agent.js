@@ -20,9 +20,9 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 let lastRunTrace = { timestamp: null, userId: null, message: null, loops: [], tools: [], finalResponse: null, error: null };
 const SONNET = "claude-sonnet-4-20250514";
 const OPUS = "claude-opus-4-20250514";
-const MAX_LOOPS = 6;
-const LOOP_TIMEOUT_MS = 25000;
-const TOTAL_TIMEOUT_MS = 60000;
+const MAX_LOOPS = 8;
+const LOOP_TIMEOUT_MS = 30000;
+const TOTAL_TIMEOUT_MS = 120000;
 
 let graphModule = null;
 let calendarGraphModule = null;
