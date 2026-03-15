@@ -47,6 +47,8 @@ let briefing;
 try { briefing = require("./briefing"); console.log("[OpenClawBot] Briefing module loaded OK"); } catch (e) { briefing = null; console.warn("[OpenClawBot] Briefing module failed to load:", e.message); }
 let enterprise;
 try { enterprise = require("./enterprise"); console.log("[OpenClawBot] Enterprise module loaded OK"); } catch (e) { enterprise = null; console.warn("[OpenClawBot] Enterprise module failed to load:", e.message); }
+let agent;
+try { agent = require("./agent"); console.log("[OpenClawBot] Agent module loaded OK"); } catch (e) { agent = null; console.warn("[OpenClawBot] Agent module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -169,6 +171,14 @@ async function initRedis() {
     if (enterprise) {
       enterprise.init(redis, { m365Auth, sfAuth });
       console.log(`${LOG} Enterprise module initialized`);
+    }
+    if (agent) {
+      agent.init({
+        graph: m365Graph, calendarGraph, m365Auth,
+        gmailAuth, gmailApi: gmailApi, calendarGoogle,
+        redis,
+      });
+      console.log(`${LOG} Agent module initialized (available: ${agent.isAvailable()})`);
     }
   } catch (err) {
     console.warn(`${LOG} Redis connection failed, falling back to in-memory:`, err.message);
@@ -502,18 +512,23 @@ function detectIntent(userMessage) {
     }
   }
 
-  // 3. Smart keyword routing — route to the right service, let AI handle intelligence within
+  // 3. AI Agent — handles email and calendar with tool calling (agentic loop)
+  if (agent && agent.isAvailable()) {
+    if (/\b(email|mail|inbox|unread|outlook|sender|draft|reply|forward|archive|flag)\b/i.test(userMessage))
+      return { type: "agent", query: userMessage };
+    if (/\b(meeting|calendar|schedule|agenda|appointment|free.?slot|busy|event)\b/i.test(userMessage))
+      return { type: "agent", query: userMessage };
+    if (/^(and\s+)?(after|next|then)\b.*\??$/i.test(msg) || /\bnext\s+(one|meeting)\b/i.test(msg))
+      return { type: "agent", query: userMessage };
+  }
 
-  // Email
+  // Fallback: old handlers if agent not available
   if (emailIntents && /\b(email|mail|inbox|unread|outlook|sender|draft|reply|forward|archive|flag)\b/i.test(userMessage)) {
     return { type: "email_smart_query", query: userMessage };
   }
-
-  // Calendar
   if (calendarIntents) {
     if (/\b(meeting|calendar|schedule|agenda|appointment|free.?slot|busy|event)\b/i.test(userMessage))
       return { type: "calendar_smart_query", query: userMessage };
-    // Follow-up questions about calendar ("and after that?", "next one?")
     if (/^(and\s+)?(after|next|then)\b.*\??$/i.test(msg) || /\bnext\s+(one|meeting)\b/i.test(msg))
       return { type: "calendar_smart_query", query: userMessage };
   }
@@ -2789,7 +2804,13 @@ async function processBubbleCallback(body) {
 
     let responseText = null;
 
-    if (intent.type === "translate_docx") {
+    if (intent.type === "agent" && agent) {
+      const history = await getHistory(fromJid);
+      responseText = await Promise.race([
+        agent.run(fromJid, content, history),
+        new Promise(r => setTimeout(() => r("Sorry, the request timed out. Please try again."), 35000)),
+      ]);
+    } else if (intent.type === "translate_docx") {
       responseText = await handleDocxTranslation(fromJid, content, intent.language, intent.docxKey);
     } else if (intent.type === "translate_pdf") {
       responseText = await handlePdfTranslation(fromJid, content, intent.language, intent.fileKey);
@@ -3606,7 +3627,13 @@ async function start() {
 
       let responseText = null;
 
-      if (intent.type === "translate_docx") {
+      if (intent.type === "agent" && agent) {
+        const history = await getHistory(historyKey);
+        responseText = await Promise.race([
+          agent.run(fromJid, userMessage, history),
+          new Promise(r => setTimeout(() => r("Sorry, the request timed out. Please try again."), 35000)),
+        ]);
+      } else if (intent.type === "translate_docx") {
         responseText = await handleDocxTranslation(historyKey, userMessage, intent.language, intent.docxKey);
       } else if (intent.type === "translate_pdf") {
         responseText = await handlePdfTranslation(historyKey, userMessage, intent.language, intent.fileKey);
