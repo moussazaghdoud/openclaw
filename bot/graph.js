@@ -53,9 +53,10 @@ async function searchEmails(token, query, top = 20) {
  * Search emails from a specific sender.
  */
 async function getEmailsFromSender(token, senderName, top = 10) {
+  // Use $search for sender lookup — $filter with contains() on nested from/ fields returns 400
+  const cleanName = senderName.replace(/"/g, '\\"');
   const params = new URLSearchParams({
-    $filter: `contains(from/emailAddress/name,'${senderName.replace(/'/g, "''")}') or contains(from/emailAddress/address,'${senderName.replace(/'/g, "''")}')`,
-    $orderby: "receivedDateTime desc",
+    $search: `"from:${cleanName}"`,
     $top: String(top),
     $select: "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId",
   });
