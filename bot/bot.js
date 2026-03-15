@@ -398,9 +398,8 @@ function formatForRainbow(text) {
  */
 function buildMessage(text) {
   const { body, content } = formatForRainbow(text);
-  const msg = { body, lang: "en" };
-  if (content) msg.content = content;
-  return { message: msg };
+  // Rainbow S2S supports "body" (plain text) + "content" (HTML) + "contentType" for rich messages
+  return { message: { body, content, contentType: "text/html", lang: "en" } };
 }
 
 /**
