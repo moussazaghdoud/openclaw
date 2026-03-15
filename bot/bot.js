@@ -513,8 +513,9 @@ function detectIntent(userMessage) {
   if (calendarIntents) {
     if (/\b(meeting|calendar|schedule|agenda|appointment|free.?slot|busy|event)\b/i.test(userMessage))
       return { type: "calendar_smart_query", query: userMessage };
+    // Follow-up questions about calendar ("and after that?", "next one?")
     if (/^(and\s+)?(after|next|then)\b.*\??$/i.test(msg) || /\bnext\s+(one|meeting)\b/i.test(msg))
-      return { type: "calendar_next", instructions: userMessage };
+      return { type: "calendar_smart_query", query: userMessage };
   }
 
   // Briefing
