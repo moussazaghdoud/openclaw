@@ -190,21 +190,36 @@ async function processNotification(notification) {
  * Returns a short summary string, or null if unavailable.
  */
 async function generateBriefSummary(email) {
-  if (!agentModule || !agentModule.isAvailable()) return null;
+  // Use direct Anthropic API (callAIStandalone) — no tools needed, just summarize
+  const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
+  if (!ANTHROPIC_API_KEY) return null;
 
   const preview = (email.preview || email.body || "").substring(0, 500);
   if (!preview.trim()) return null;
 
   try {
-    const summary = await agentModule.run(
-      "__system_email_summary__",
-      `Summarize this email in one short sentence (max 100 chars). Just the summary, no preamble.\n\nFrom: ${email.from}\nSubject: ${email.subject}\nPreview: ${preview}`,
-      [],
-      null
-    );
-    if (summary && summary.length < 200) {
-      return `Summary: ${summary.trim()}`;
-    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        system: "Summarize in one short sentence. No preamble.",
+        messages: [{ role: "user", content: `From: ${email.from}\nSubject: ${email.subject}\n\n${preview}` }],
+        max_tokens: 100,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const summary = data.content?.[0]?.text;
+    if (summary && summary.length < 200) return `Summary: ${summary.trim()}`;
   } catch {
     // Silently fail — summary is optional
   }
