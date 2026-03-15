@@ -526,7 +526,7 @@ async function detectIntentAI(userMessage) {
 Available intents:
 ${services.includes("email") ? `- email_summarize_unread: summarize unread emails
 - email_list_recent: show recent/last emails. Include "count" (1 for singular "last email", number if specified, 10 for plural)
-- email_from_sender: emails from a specific person. Include "sender" name/email and "count" (1 for singular "last/latest email from X", number if specified, omit for default)
+- email_from_sender: emails from a specific person. Include "sender" name/email, "count" (1 for singular, number if specified, omit for default), and "instructions" if the user wants analysis (e.g. "most critical", "about the project", "urgent ones")
 - email_search: search emails. Include "query"
 - email_draft_reply: draft a reply. Include "target" (email number if mentioned), "instructions"
 - email_compose_new: write/send new email. Include "to" and "instructions"
