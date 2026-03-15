@@ -3653,10 +3653,19 @@ async function start() {
         console.log(`${LOG} >>> AGENT FORCED for: "${content.substring(0, 80)}"`);
         try {
           const history = await getHistory(historyKey);
-          responseText = await Promise.race([
-            agent.run(fromJid, content, history),
-            new Promise(r => setTimeout(() => r("Sorry, the request timed out. Please try again."), 120000)),
-          ]);
+          // Progress callback: send status updates to user while agent works
+          const sendProgress = async (msg) => {
+            const convId = rawConversationId || conversationId;
+            if (convId && s2sConnectionId && authToken) {
+              const host = rainbowHost || "openrainbow.com";
+              await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ message: { body: msg, lang: "en" } }),
+              }).catch(() => {});
+            }
+          };
+          responseText = await agent.run(fromJid, content, history, sendProgress);
           console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
         } catch (agentErr) {
           console.error(`${LOG} Agent crashed:`, agentErr.message);

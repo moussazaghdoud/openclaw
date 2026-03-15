@@ -413,7 +413,7 @@ function selectModel(userMessage) {
   return needsOpus ? OPUS : SONNET;
 }
 
-async function run(userId, userMessage, conversationHistory = []) {
+async function run(userId, userMessage, conversationHistory = [], onProgress = null) {
   if (!ANTHROPIC_API_KEY) {
     lastRunTrace = { ...lastRunTrace, timestamp: new Date().toISOString(), error: "No ANTHROPIC_API_KEY" };
     return null;
@@ -552,6 +552,25 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
       console.log(`${LOG} Loop ${loop + 1}: ${toolNames.join(", ")}`);
       lastRunTrace.loops.push({ loop: loop + 1, tools: toolNames });
       lastRunTrace.tools.push(...toolNames);
+
+      // Send progress update to user
+      if (onProgress) {
+        const progressMap = {
+          search_emails: "Searching emails...",
+          get_recent_emails: "Checking inbox...",
+          read_email: "Reading email...",
+          read_thread: "Reading conversation thread...",
+          get_sender_details: "Looking up sender...",
+          search_calendar: "Checking calendar...",
+          read_event: "Reading meeting details...",
+          send_email: "Sending email...",
+          update_memory: null, // silent
+        };
+        const updates = toolNames.map(n => progressMap[n]).filter(Boolean);
+        if (updates.length > 0) {
+          try { await onProgress(updates.join(" ")); } catch {}
+        }
+      }
 
       // Add assistant response (with tool calls)
       currentMessages.push({ role: "assistant", content: data.content });
