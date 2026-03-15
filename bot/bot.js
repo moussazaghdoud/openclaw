@@ -515,9 +515,12 @@ function detectIntent(userMessage) {
   }
 
   // 3. AI Agent — handles email and calendar with tool calling (agentic loop)
+  console.log(`${LOG} Agent check: loaded=${!!agent}, available=${agent ? agent.isAvailable() : 'N/A'}`);
   if (agent && agent.isAvailable()) {
-    if (/\b(email|mail|inbox|unread|outlook|sender|draft|reply|forward|archive|flag)\b/i.test(userMessage))
+    if (/\b(email|mail|inbox|unread|outlook|sender|draft|reply|forward|archive|flag)\b/i.test(userMessage)) {
+      console.log(`${LOG} → Agent intent (email)`);
       return { type: "agent", query: userMessage };
+    }
     if (/\b(meeting|calendar|schedule|agenda|appointment|free.?slot|busy|event)\b/i.test(userMessage))
       return { type: "agent", query: userMessage };
     if (/^(and\s+)?(after|next|then)\b.*\??$/i.test(msg) || /\bnext\s+(one|meeting)\b/i.test(msg))
@@ -3604,9 +3607,8 @@ async function start() {
 
       if (intent.type === "agent" && agent) {
         // Agent gets raw user message (never anonymized) and clean history
-        // PII secure mode does NOT apply to agent — it handles real data via tools
+        console.log(`${LOG} >>> CALLING AGENT.RUN for: "${content.substring(0, 80)}"`);
         const history = await getHistory(historyKey);
-        // Use original content, not userMessage which may have file context appended
         responseText = await Promise.race([
           agent.run(fromJid, content, history),
           new Promise(r => setTimeout(() => r("Sorry, the request timed out. Please try again."), 35000)),
