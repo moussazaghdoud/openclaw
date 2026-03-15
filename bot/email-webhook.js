@@ -138,8 +138,12 @@ async function processNotification(notification) {
 
   console.log(`${LOG} New email for user ${userId}: ${emailId}`);
 
-  // Fetch the email details via Graph API
-  const tokenResult = await m365AuthModule.getValidToken(userId);
+  // Fetch the email details via Graph API (retry once after 2s if token not ready)
+  let tokenResult = await m365AuthModule.getValidToken(userId);
+  if (!tokenResult) {
+    await new Promise(r => setTimeout(r, 2000));
+    tokenResult = await m365AuthModule.getValidToken(userId);
+  }
   if (!tokenResult) {
     console.warn(`${LOG} Cannot get token for user ${userId} — skipping notification`);
     return;
