@@ -467,8 +467,8 @@ ${emailData}`;
  */
 async function handleSmartQuery(userId, token, api, provider, userQuestion) {
   // Detect if user is asking about a specific person — search by sender
-  const senderMatch = userQuestion.match(/\b(?:from|de)\s+([A-Z][a-zà-ÿ]+(?:\s+[A-Z][a-zà-ÿ]+)?)/i)
-    || userQuestion.match(/\b([A-Z][a-zà-ÿ]+(?:\s+[A-Z][a-zà-ÿ]+)?)\b.*\b(?:email|mail|sent|wrote)\b/i);
+  const senderMatch = userQuestion.match(/\b(?:from|fro|de)\s+(\w[\w\sà-ÿ-]*\w)/i)
+    || userQuestion.match(/\b([\wà-ÿ]+(?:\s+[\wà-ÿ]+)?)\b.*\b(?:email|mail|sent|wrote)\b/i);
 
   let emails;
   let searchLabel = "recent";
@@ -476,7 +476,7 @@ async function handleSmartQuery(userId, token, api, provider, userQuestion) {
   if (senderMatch) {
     // Search by sender name first
     const senderName = senderMatch[1].trim();
-    emails = await api.getEmailsFromSender(token, senderName, 20);
+    emails = await api.getEmailsFromSender(token, senderName, 50);
     searchLabel = `from "${senderName}"`;
     // If sender search fails or returns 0, fall back to recent
     if (!emails || emails._error || emails.length === 0) {
