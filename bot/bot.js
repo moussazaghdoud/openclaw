@@ -49,6 +49,8 @@ let enterprise;
 try { enterprise = require("./enterprise"); console.log("[OpenClawBot] Enterprise module loaded OK"); } catch (e) { enterprise = null; console.warn("[OpenClawBot] Enterprise module failed to load:", e.message); }
 let agent;
 try { agent = require("./agent"); console.log("[OpenClawBot] Agent module loaded OK"); } catch (e) { agent = null; console.warn("[OpenClawBot] Agent module failed to load:", e.message); }
+let emailWebhook;
+try { emailWebhook = require("./email-webhook"); console.log("[OpenClawBot] Email webhook module loaded OK"); } catch (e) { emailWebhook = null; console.warn("[OpenClawBot] Email webhook module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -179,6 +181,45 @@ async function initRedis() {
         redis,
       });
       console.log(`${LOG} Agent module initialized (available: ${agent.isAvailable()})`);
+    }
+    if (emailWebhook && m365Auth && m365Graph) {
+      emailWebhook.init(app, {
+        redis,
+        m365Auth,
+        graph: m365Graph,
+        agent: agent || null,
+        sendMessage: async (userId, text) => {
+          // Try SDK first
+          try {
+            const contact = await sdk.contacts.getContactById(userId);
+            if (contact) {
+              const conv = await sdk.conversations.openConversationForContact(contact);
+              if (conv) { await sdk.im.sendMessageToConversation(conv, text); return; }
+            }
+          } catch {}
+          // Fallback: S2S REST
+          if (s2sConnectionId && authToken) {
+            const host = rainbowHost || "openrainbow.com";
+            try {
+              const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ conversation: { peerId: userId } }),
+              });
+              const convData = await convResp.json();
+              const convId = convData?.data?.id || convData?.id;
+              if (convId) {
+                await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+                  method: "POST",
+                  headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({ message: { body: text, lang: "en" } }),
+                });
+              }
+            } catch (e) { console.warn(`${LOG} Proactive send failed:`, e.message); }
+          }
+        },
+      });
+      console.log(`${LOG} Email webhook module initialized`);
     }
   } catch (err) {
     console.warn(`${LOG} Redis connection failed, falling back to in-memory:`, err.message);
@@ -2464,6 +2505,15 @@ if (m365Auth && m365Auth.isConfigured()) {
         email: result.email,
         linkedAt: Date.now(),
       }), { EX: 3600 }).catch(() => {});
+    }
+    // Auto-subscribe to email notifications
+    if (emailWebhook) {
+      const tokenResult = await m365Auth.getValidToken(result.rainbowUserId);
+      if (tokenResult) {
+        emailWebhook.onAccountLinked(result.rainbowUserId, tokenResult.token).catch(err => {
+          console.warn(`${LOG} Email webhook auto-subscribe failed:`, err.message);
+        });
+      }
     }
   });
   console.log(`${LOG} M365 integration: ENABLED (client_id=${process.env.M365_CLIENT_ID?.substring(0, 8)}...)`);
