@@ -462,10 +462,13 @@ Response style:
 ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryContext}\n` : ""}`;
 
   // Build messages from conversation history + new message
+  // Filter out PII-anonymized entries (contain PERSON_1, PRODUCT_N placeholders)
   const messages = [];
   const recentHistory = (conversationHistory || []).slice(-10);
   for (const h of recentHistory) {
     if (h.role === "user" || h.role === "assistant") {
+      // Skip PII-tainted entries
+      if (/\bPERSON_\d+\b|\bPRODUCT_\d+\b/.test(h.content)) continue;
       messages.push({ role: h.role, content: h.content });
     }
   }

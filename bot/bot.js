@@ -3593,9 +3593,12 @@ async function start() {
       let responseText = null;
 
       if (intent.type === "agent" && agent) {
+        // Agent gets raw user message (never anonymized) and clean history
+        // PII secure mode does NOT apply to agent — it handles real data via tools
         const history = await getHistory(historyKey);
+        // Use original content, not userMessage which may have file context appended
         responseText = await Promise.race([
-          agent.run(fromJid, userMessage, history),
+          agent.run(fromJid, content, history),
           new Promise(r => setTimeout(() => r("Sorry, the request timed out. Please try again."), 35000)),
         ]);
       } else if (intent.type === "translate_docx") {
