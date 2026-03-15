@@ -102,10 +102,12 @@ function detectEmailIntent(message) {
     }
   }
 
-  // Show recent emails
+  // Show recent emails — detect singular ("last email") vs plural ("last emails", "last 5 emails")
   if (/\b(show|list|display|get)\b.*\b(recent|latest|last)\b.*\b(email|mail)/i.test(message)
     || /\b(recent|latest|last)\b.*\b(email|mail)/i.test(message)) {
-    return { type: "email_list_recent" };
+    const countMatch = message.match(/\b(last|recent|latest)\s+(\d+)\s+(email|mail)/i);
+    const count = countMatch ? parseInt(countMatch[2], 10) : (/\b(last|latest)\s+(email|mail)\b/i.test(message) && !/emails|mails/i.test(message) ? 1 : 10);
+    return { type: "email_list_recent", count };
   }
 
   // Search emails
@@ -248,7 +250,7 @@ async function handleEmailIntent(userId, intent, userMessage) {
     case "email_summarize_unread":
       return handleSummarizeUnread(userId, token, api, provider);
     case "email_list_recent":
-      return handleListRecent(userId, token, api, provider);
+      return handleListRecent(userId, token, api, provider, intent.count || 10);
     case "email_from_sender":
       return handleFromSender(userId, token, api, provider, intent.sender, intent.instructions);
     case "email_search":
@@ -308,13 +310,17 @@ ${emailData}`;
   return `📬 ${emails.length} unread emails (${providerLabel(provider)}):\n\n${result.content}\n\nReply with a number (1-${emails.length}) for details.`;
 }
 
-async function handleListRecent(userId, token, api, provider) {
-  const emails = await api.getRecentEmails(token, 10);
+async function handleListRecent(userId, token, api, provider, count = 10) {
+  const emails = await api.getRecentEmails(token, count);
   if (!emails || emails._error) return handleApiError(emails, provider);
   if (emails.length === 0) return "No recent emails found.";
 
   await storeEmailContext(userId, emails, provider);
-  return `📧 Recent emails (${providerLabel(provider)}):\n\n${formatEmailList(emails)}\n\nReply with a number for details.`;
+  if (count === 1 && emails.length >= 1) {
+    const e = emails[0];
+    return `📧 Last email (${providerLabel(provider)}):\n\nFrom: ${e.from}\nSubject: ${e.subject}\nDate: ${e.receivedAt || e.date || ""}\n\n${e.preview || ""}`;
+  }
+  return `📧 ${emails.length} recent emails (${providerLabel(provider)}):\n\n${formatEmailList(emails)}\n\nReply with a number for details.`;
 }
 
 async function handleFromSender(userId, token, api, provider, sender, instructions) {
