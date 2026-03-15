@@ -457,6 +457,12 @@ Entity resolution strategy:
 - Use the full name/email for subsequent searches
 - Resolve "he", "she", "him", "them" from conversation history and working memory
 
+Date handling:
+- NEVER calculate dates yourself — you are bad at date arithmetic
+- ALWAYS read dates from the tool results (events have ISO timestamps like "2026-03-18T08:30:00")
+- When reporting dates, use the EXACT date from the data, not your own calculation
+- If user says "next Wednesday", search calendar with "two_weeks" period, then find Wednesday events from the results
+
 Cross-reference strategy:
 - If user asks "do I have a meeting with him?", resolve "him" from memory, then search calendar for that person
 - If user asks "prepare me for the discussion", combine email context + calendar context
