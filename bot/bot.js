@@ -128,7 +128,7 @@ async function initRedis() {
           m365AuthModule: hasM365 ? m365Auth : null,
           gmailApiModule: hasGmail ? gmailApi : null,
           gmailAuthModule: hasGmail ? gmailAuth : null,
-          callOpenClaw: callAIStandalone, pii, redis,
+          callOpenClaw: async (...args) => { const r = await callAIStandalone(...args); return r ? { content: r } : null; }, pii, redis,
         });
         console.log(`${LOG} Email intents initialized (M365: ${hasM365 ? "YES" : "NO"}, Gmail: ${hasGmail ? "YES" : "NO"})`);
       }
