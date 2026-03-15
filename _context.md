@@ -2,11 +2,17 @@
 
 ## Overview
 
-OpenClaw is a standalone project (NOT part of ConnectPlus) that provides an AI chatbot on Rainbow (ALE's UCaaS platform) powered by Claude Opus via the OpenClaw AI gateway.
+OpenClaw is a standalone project (NOT part of ConnectPlus) that provides an AI agent on Rainbow (ALE's UCaaS platform) powered by Claude via the Anthropic API and OpenClaw gateway.
 
-**Flow:** Rainbow user sends IM → Rainbow bot receives it → bot calls OpenClaw gateway API → OpenClaw forwards to Claude Opus → AI response → bot sends reply back to Rainbow user.
+**Architecture:** The system uses a **dual-model strategy**:
+- **Claude Sonnet** (direct Anthropic API) — AI agent with tool calling for email and calendar tasks. Uses an agentic loop: interpret intent → call tools → inspect results → learn → iterate → answer.
+- **Claude Opus** (via OpenClaw gateway) — high-quality conversational responses for general chat and cross-service correlation.
 
-The bot has evolved into a full **Executive AI Assistant** capable of managing emails (Outlook + Gmail), calendars (Outlook + Google), CRM data (Salesforce), document processing (translation, anonymization), and cross-system executive briefings — all accessible exclusively through Rainbow chat. It includes an **Enterprise Deployment Layer** with an admin portal, magic-link user provisioning, Microsoft SSO activation, and access control for scaling to hundreds or thousands of users.
+**Flow (Agent):** Rainbow user asks about email/calendar → bot routes to agent → agent calls Anthropic API with tools → agent searches emails, reads content, checks calendar → agent responds with real data.
+
+**Flow (Chat):** Rainbow user asks general question → bot calls OpenClaw → OpenClaw forwards to Claude Opus → response.
+
+The bot is a full **Executive AI Agent** capable of managing emails (Outlook + Gmail), calendars (Outlook + Google), CRM data (Salesforce), document processing (translation, anonymization), and cross-system executive briefings — all accessible exclusively through Rainbow chat. It includes an **Enterprise Deployment Layer** with an admin portal, magic-link user provisioning, Microsoft SSO activation, and access control for scaling to hundreds or thousands of users.
 
 ## Architecture
 
@@ -59,6 +65,7 @@ Two Railway services deployed from the same GitHub repo (`moussazaghdoud/opencla
   - `SALESFORCE_REDIRECT_URI` — OAuth callback URL (`https://bot-production-4410.up.railway.app/auth/salesforce/callback`)
   - `SALESFORCE_LOGIN_URL` — Salesforce login URL (default: `https://login.salesforce.com`, use `https://test.salesforce.com` for sandbox)
   - `PRESIDIO_URL` — Optional Presidio PII anonymization service URL
+  - `ANTHROPIC_API_KEY` — Claude API key for direct Anthropic API calls (agent uses Sonnet for tool calling)
   - `ADMIN_USERNAME` — Enterprise admin portal username (default: `admin`)
   - `ADMIN_PASSWORD` — Enterprise admin portal password (enables enterprise mode when set)
   - `JWT_SECRET` — JWT signing secret for admin sessions (auto-generated if not set)
@@ -100,6 +107,10 @@ openclaw/
     │── # Cross-System Context Aggregation
     ├── briefing.js         # Executive briefing builder + entity/people/account/topic matching
     │
+    │── # AI Agent (Agentic Loop with Tool Calling)
+    ├── agent.js            # AI agent: Anthropic API, tool calling, working memory, entity resolution
+    ├── AGENT_ARCHITECTURE.md # Full architecture documentation (diagnosis, design, testing plan)
+    │
     │── # Enterprise Deployment Layer
     ├── enterprise.js       # User registry, magic-link invites, SSO activation, access control, admin portal
     │
@@ -118,27 +129,74 @@ openclaw/
 - **Express:** Started immediately on `PORT` for Railway health check; wrapped via `Object.create(app)` so SDK doesn't call `listen()` again
 - **Services enabled:** bubbles, s2s, im, contacts, conversations, presence, fileServer, fileStorage
 
-### Intent-Driven Architecture (Bot Decides, AI Generates Content)
+### AI Agent Architecture (`agent.js`)
 
-The bot uses **intent detection** to decide what to do. The AI is a pure text engine — it never decides whether to create files, call tools, or generate download links. This ensures 100% reliable file creation.
+The bot uses a **real AI agent** for email and calendar tasks. The agent uses Claude Sonnet via the Anthropic API with native tool calling — it decides what tools to call, inspects results, learns from them, and iterates until the user's question is answered.
+
+#### Dual-Model Strategy
+- **Sonnet** (direct Anthropic API) — all agent reasoning, tool calling, search, analysis, summarization. Fast (~1-2s per call).
+- **Opus** (via OpenClaw gateway) — regular conversation, cross-service correlation. Higher quality but slower (~5-7s per call).
+
+#### Agent Routing
+Messages containing email/calendar keywords are routed directly to the agent in the message handler (bypasses `detectIntent()`). The check is a simple keyword match (`emails?`, `meetings?`, `calendar`, `inbox`, etc.) — the agent handles all intelligence.
+
+#### Agentic Loop (agent.js)
+1. User message + tools sent to Claude Sonnet
+2. Claude decides which tools to call (e.g. `search_emails("Jack")`)
+3. Bot executes tools, returns results to Claude
+4. Claude inspects results, extracts facts (e.g. "Jack = CHEN Jack Lixin")
+5. Claude calls `update_memory` to store resolved entities
+6. Claude decides next action (refine search, read email, check calendar)
+7. Repeat until intent satisfied (max 8 loops, 120s total)
+8. Claude produces final answer
+
+#### Tools Available
+- **`search_emails`** — search by keyword (sender name, subject, topic)
+- **`get_recent_emails`** — fetch N most recent emails
+- **`read_email`** — read full email content by ID
+- **`read_thread`** — read full email thread by conversation ID
+- **`send_email`** — send email (requires explicit user confirmation)
+- **`get_sender_details`** — look up sender info from email address
+- **`search_calendar`** — get events for today/tomorrow/week/two_weeks
+- **`read_event`** — get full event details by ID
+- **`update_memory`** — store resolved entity in working memory
+
+#### Working Memory (Redis-backed)
+- **Key:** `agent:memory:{userId}`, 1h TTL
+- **Stores:** resolvedEntities (e.g. "Jack" = "CHEN Jack Lixin"), lastEmails, lastEvents, currentTarget, topics
+- **Loaded** at start of each agent run, **saved** after completion
+- Enables cross-turn context: "he" → resolved from memory
+
+#### Entity Resolution
+The agent resolves partial names, pronouns, and informal references:
+- "Jack" → searches → finds "CHEN Jack Lixin" → stores via `update_memory`
+- "he" / "him" → resolved from working memory or conversation history
+- "the railway customer" → resolved from CRM context
+
+#### Progress Updates
+While the agent works through tool-calling loops, it sends real-time progress messages to Rainbow: "Searching emails...", "Reading email...", "Checking calendar..." — so the user sees what's happening instead of staring at a typing indicator.
+
+#### Debug Endpoints
+- **`GET /api/agent-status`** — agent availability, API key status
+- **`GET /api/agent-debug`** — last run trace (tools called, loops, errors, final response)
+- **`GET /api/agent-test?q=...&uid=...`** — test agent directly without Rainbow
+
+#### Fallback
+When `ANTHROPIC_API_KEY` is not set, the agent is unavailable and the bot falls back to the old intent handlers (`email-intents.js`, `calendar-intents.js`) which use OpenClaw for AI calls.
+
+### Document Processing (Bot Decides, AI Generates Content)
+
+For document operations (translate, anonymize, create file), the bot uses **regex-based intent detection** (`detectIntent()`) because these depend on stored file state that the AI can't access. The AI is a pure text engine for these tasks.
 
 #### Intent Detection (`detectIntent()`)
-Analyzes the user message and returns one of:
-- **`translate_docx`** — User wants to translate a Word document (e.g. "translate to French")
-- **`translate_pdf`** — User wants to translate a PDF document
-- **`translate_pptx`** — User wants to translate a PowerPoint presentation
-- **`translate_any`** — Translation requested but no file in memory (checks Redis for any stored file)
-- **`anonymize_pptx/docx/pdf`** — User wants to anonymize a document (redact PII)
-- **`create_file`** — User wants a file created (e.g. "create a report", "generate a CSV")
-- **`email_*`** — Email intents (delegated to `email-intents.js`): summarize_unread, list_recent, from_sender, search, action_needed, briefing, compose_new, draft_reply, send_confirm, archive, mark_read, flag, smart_query
-- **`calendar_*`** — Calendar intents (delegated to `calendar-intents.js`): today, tomorrow, week, free_slots, create, reschedule, cancel, accept, decline, details, smart_query, confirm_create, confirm_cancel
-- **`sf_*`** — Salesforce intents (delegated to `salesforce-intents.js`): search_accounts, account_details, search_contacts, opportunities, activity, briefing, global_search, smart_query
-- **`sp_*`** — SharePoint intents (delegated to `sharepoint-intents.js`): search, recent, summarize, download, sites, smart_query
-- **`briefing_*`** — Cross-system briefing intents (delegated to `briefing.js`): daily, meeting, customer, weekly, followups
-- **`chat`** — Default: regular AI conversation
+Analyzes the user message for document operations:
+- **`translate_docx/pdf/pptx/any`** — Translation with stored file
+- **`anonymize_docx/pdf/pptx/any`** — PII redaction
+- **`create_file`** — File creation (html, csv, json, etc.)
+- Other intents (email, calendar) are handled by the agent, not detectIntent
 
 #### Intent Confirmation (`describeIntent()`)
-Before starting any task, the bot sends a short reformulation of the user's request as immediate feedback (e.g. "Translating Word document to French..."). This confirms the bot understood the order before the actual work begins.
+Before starting any task, the bot sends a short confirmation (e.g. "Translating Word document to French...", "Thinking...").
 
 #### translate_docx Flow
 1. Bot extracts text paragraphs from the stored .docx XML (skipping image/drawing elements)
@@ -546,6 +604,7 @@ Scalable user provisioning and access control system for deploying the AI assist
 - **Enterprise invites:** `invite:{hash}` — invite record, 48h TTL
 - **Enterprise SSO state:** `activate:state:{state}` — activation SSO state, 10-min TTL
 - **Enterprise audit log:** `audit:log` — list of last 1000 audit entries
+- **Agent working memory:** `agent:memory:{userId}` — resolved entities, last emails/events, 1h TTL
 - **Connection:** Via `REDIS_URL` env var (Railway Redis service)
 
 ## Issues Resolved During Development
@@ -591,6 +650,12 @@ Scalable user provisioning and access control system for deploying the AI assist
 39. **Email address truncated in regex:** Period in `.com` matched the regex terminator. Fixed by adding priority regex for full email addresses and replacing `.` terminator with `(?:\s+and\s)` lookahead.
 40. **Calendar "No meetings found" on scope error:** After adding calendar scopes to `gmail-auth.js`, existing Gmail tokens didn't have calendar permissions. The Google Calendar API returned 403 but the handler treated it as "no meetings." Fixed by adding `calendarErrorMessage()` that detects 401/403 and guides the user to re-link their account. Also improved `handleMeetingDetails` to check tomorrow when today is empty and to distinguish API errors from empty results.
 41. **Enterprise access denied after SSO activation:** Users who activated via the magic link/SSO could not chat with the bot because their Rainbow JID was not linked to their enterprise user profile. The `checkAccess()` function looked up by JID, found nothing, and denied access silently. Fixed by adding auto-link by email: `checkAccess(jid, rainbowEmail)` now tries `linkRainbowUser()` when JID is unknown, matching the user's Rainbow login email to their enterprise profile.
+42. **Regex-based intent detection replaced with AI agent:** The old system used hundreds of regex patterns to detect email/calendar intents, which broke on typos, partial names, plural forms ("emails" didn't match `\bemail\b`), and natural language variations. Replaced with a real AI agent (`agent.js`) using Anthropic API with native tool calling. The agent reasons about the question, calls tools iteratively, resolves entities ("Jack" → "CHEN Jack Lixin"), and produces intelligent answers.
+43. **callOpenClawFn wrong argument order:** All intent modules called `callOpenClawFn(aiPrompt, [])` instead of `callOpenClawFn(userId, aiPrompt)`, breaking every AI-powered feature (smart queries, meeting creation, briefings). Fixed by correcting argument order and later replacing with `callAIStandalone` (direct Anthropic API).
+44. **OpenClaw Opus latency:** Every AI call through OpenClaw gateway took 5-7s (Claude Opus). Agent tasks requiring 6+ tool-calling loops would timeout. Fixed by using Claude Sonnet via direct Anthropic API for all agent work (~1-2s per call). OpenClaw/Opus kept for regular conversation quality.
+45. **Graph API sender search unreliable:** Microsoft Graph `$search "from:Jack"` missed emails due to indexing limitations. Fixed with a two-step approach: broad `$search` to find one email → extract exact sender email address → `$filter` by exact address to find all emails.
+46. **PII secure mode contaminated agent:** When PII secure mode was ON, names in conversation history were replaced with "PERSON_1" placeholders. The agent read this tainted history and repeated the placeholders. Fixed by filtering PII-tainted history entries and instructing the agent to ignore PERSON_N artifacts.
+47. **Agent routing plural mismatch:** The keyword regex `\bemail\b` didn't match "emails" (no word boundary between 'l' and 's'). All email queries bypassed the agent and went to the old handler. Fixed with `\bemails?\b`.
 
 ## Important: OAuth Scope Expansion
 
