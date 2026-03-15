@@ -252,7 +252,7 @@ async function handleEmailIntent(userId, intent, userMessage) {
     case "email_list_recent":
       return handleListRecent(userId, token, api, provider, intent.count || 10);
     case "email_from_sender":
-      return handleFromSender(userId, token, api, provider, intent.sender, intent.instructions);
+      return handleFromSender(userId, token, api, provider, intent.sender, intent.instructions, intent.count);
     case "email_search":
       return handleSearch(userId, token, api, provider, intent.query);
     case "email_detail_number":
@@ -323,12 +323,19 @@ async function handleListRecent(userId, token, api, provider, count = 10) {
   return `📧 ${emails.length} recent emails (${providerLabel(provider)}):\n\n${formatEmailList(emails)}\n\nReply with a number for details.`;
 }
 
-async function handleFromSender(userId, token, api, provider, sender, instructions) {
-  const emails = await api.getEmailsFromSender(token, sender, 10);
+async function handleFromSender(userId, token, api, provider, sender, instructions, count) {
+  const fetchCount = count || 10;
+  const emails = await api.getEmailsFromSender(token, sender, fetchCount);
   if (!emails || emails._error) return handleApiError(emails, provider);
   if (emails.length === 0) return `No emails found from "${sender}".`;
 
   await storeEmailContext(userId, emails, provider);
+
+  // Single email requested — show full details
+  if (fetchCount === 1 && emails.length >= 1) {
+    const e = emails[0];
+    return `📧 Last email from ${sender} (${providerLabel(provider)}):\n\nFrom: ${e.from}\nSubject: ${e.subject}\nDate: ${e.receivedAt || ""}\n\n${e.preview || ""}`;
+  }
 
   // If there's an additional instruction (e.g. "and give me the registration link"),
   // auto-open the first email and ask AI to process the instruction
