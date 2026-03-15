@@ -434,11 +434,24 @@ async function run(userId, userMessage, conversationHistory = [], onProgress = n
   delete memory.lastEvents;
   const memoryContext = memoryToContext(memory);
 
-  const today = new Date().toLocaleDateString("en-US", {
+  const now = new Date();
+  const today = now.toLocaleDateString("en-US", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
   });
 
+  // Build a date reference table so Claude never needs to calculate dates
+  const dateRef = [];
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(now);
+    d.setDate(d.getDate() + i);
+    const label = i === 0 ? "TODAY" : i === 1 ? "TOMORROW" : "";
+    dateRef.push(`${d.toLocaleDateString("en-US", { weekday: "long" })} = ${d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}${label ? ` (${label})` : ""}`);
+  }
+
   const systemPrompt = `You are an executive AI assistant with access to email and calendar tools. Today is ${today}.
+
+DATE REFERENCE (use these, NEVER calculate dates yourself):
+${dateRef.join("\n")}
 
 YOU ARE AN AI AGENT, NOT A SEARCH ENGINE.
 
