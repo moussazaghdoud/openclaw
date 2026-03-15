@@ -426,6 +426,8 @@ function describeIntent(intent) {
       return `Preparing weekly overview...`;
     case "briefing_followups":
       return `Checking follow-ups...`;
+    case "agent":
+      return `Thinking...`;
     default:
       return null; // no confirmation needed for regular chat
   }
@@ -549,46 +551,9 @@ function detectIntent(userMessage) {
   return { type: "chat" };
 }
 
-/**
- * AI-powered intent classifier — replaces regex-based detection for service intents.
- * Returns an intent object like { type: "calendar_today" } or { type: "chat" }.
- */
-async function detectIntentAI(userMessage) {
-  const available = [
-    emailIntents ? "email" : "",
-    calendarIntents ? "calendar" : "",
-    briefing ? "briefing" : "",
-    sfIntents ? "salesforce" : "",
-    spIntents ? "sharepoint" : "",
-  ].filter(Boolean).join(",");
-
-  if (!available) return { type: "chat" };
-
-  const prompt = `What does this user want? Services: ${available}. Reply ONLY JSON.
-Rules: type starts with service prefix (email_,calendar_,sf_,sp_,briefing_) or "chat". Include sender/query/count/instructions as needed.
-Examples: {"type":"email_from_sender","sender":"John","count":1,"instructions":"most urgent"} {"type":"calendar_today"} {"type":"calendar_next"} {"type":"chat"}
-Message: "${userMessage}"`;
-
-  try {
-    const response = await Promise.race([
-      callAIStandalone(prompt),
-      new Promise(resolve => setTimeout(() => resolve(null), 15000)), // 15s max
-    ]);
-    if (!response) return { type: "chat" };
-
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return { type: "chat" };
-
-    const intent = JSON.parse(jsonMatch[0]);
-    if (!intent.type) return { type: "chat" };
-
-    console.log(`${LOG} AI intent: ${JSON.stringify(intent)}`);
-    return intent;
-  } catch (e) {
-    console.error(`${LOG} AI intent classification failed:`, e.message);
-    return { type: "chat" };
-  }
-}
+// NOTE: detectIntentAI was removed — the agent module (agent.js) now handles
+// all email/calendar queries via Anthropic API with tool calling.
+// The regex-based detectIntent() routes to type "agent" when agent.isAvailable().
 
 // ── Intent Handlers ──────────────────────────────────────
 
