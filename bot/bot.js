@@ -3199,8 +3199,9 @@ async function start() {
 
       // "juju secure" / "juju unsecure" — toggle PII secure mode (intercept before LLM)
       console.log(`${LOG} CMD check: pii=${!!pii}, contentLower="${contentLower.trim()}", match=${contentLower.trim() === "juju secure" || contentLower.trim() === "juju unsecure"}`);
-      if (pii && (contentLower.trim() === "juju secure" || contentLower.trim() === "juju unsecure")) {
-        const enabling = contentLower.trim() === "juju secure";
+      const secCmd = contentLower.trim();
+      if (pii && (secCmd === "juju secure" || secCmd === "juju unsecure" || secCmd === "jojo secure" || secCmd === "jojo unsecure")) {
+        const enabling = secCmd === "juju secure" || secCmd === "jojo secure";
         await pii.setSecureMode(historyKey, enabling);
         const confirmMsg = enabling
           ? "🔒 **Secure mode ON** — PII will be anonymized before reaching the AI. Send \"juju unsecure\" to turn it off."

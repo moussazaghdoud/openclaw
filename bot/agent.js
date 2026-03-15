@@ -463,20 +463,11 @@ Response style:
 
 ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryContext}\n` : ""}`;
 
-  // Build messages from conversation history + new message
-  // Filter out PII-anonymized entries and keep only clean history
-  const messages = [];
-  const recentHistory = (conversationHistory || []).slice(-6);
-  for (const h of recentHistory) {
-    if (h.role === "user" || h.role === "assistant") {
-      // Skip PII-tainted entries (PERSON_N, PRODUCT_N, [PRODUCT_N])
-      if (/\bPERSON_\d+\b|\bPRODUCT_\d+\b|\[PRODUCT_\d+\]/.test(h.content)) continue;
-      // Skip very long entries (tool dumps from old handlers)
-      if (h.content.length > 2000) continue;
-      messages.push({ role: h.role, content: h.content.substring(0, 500) });
-    }
-  }
-  messages.push({ role: "user", content: userMessage });
+  // Build messages — ONLY the current user message
+  // The agent must ALWAYS use tools for data. Conversation history is provided
+  // via working memory (resolved entities, last emails/events) not as raw messages.
+  // Raw history caused Claude to answer from stale/tainted data instead of calling tools.
+  const messages = [{ role: "user", content: userMessage }];
 
   // Select model — Sonnet for reasoning, Opus for writing
   const model = selectModel(userMessage);
