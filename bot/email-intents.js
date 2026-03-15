@@ -263,7 +263,7 @@ async function handleEmailIntent(userId, intent, userMessage) {
   }
 
   // ALL read/query intents → AI agent: fetch emails, let AI answer the question
-  return handleSmartQuery(userId, token, api, provider, originalMessage || intent.query || intent.type);
+  return handleSmartQuery(userId, token, api, provider, userMessage || intent.query || intent.type);
 }
 
 // ── Individual Handlers ──────────────────────────────────
