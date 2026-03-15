@@ -397,9 +397,8 @@ function formatForRainbow(text) {
  * Build Rainbow S2S message payload with both plain text and HTML.
  */
 function buildMessage(text) {
-  const { body, content } = formatForRainbow(text);
-  // Rainbow S2S supports "body" (plain text) + "content" (HTML) + "contentType" for rich messages
-  return { message: { body, content, contentType: "text/html", lang: "en" } };
+  // Rainbow S2S: just use body with markdown — HTML not reliably supported
+  return { message: { body: text, lang: "en" } };
 }
 
 /**
