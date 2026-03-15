@@ -414,10 +414,16 @@ function selectModel(userMessage) {
 }
 
 async function run(userId, userMessage, conversationHistory = []) {
-  if (!ANTHROPIC_API_KEY) return null;
+  if (!ANTHROPIC_API_KEY) {
+    lastRunTrace = { ...lastRunTrace, timestamp: new Date().toISOString(), error: "No ANTHROPIC_API_KEY" };
+    return null;
+  }
 
   const tools = getTools();
-  if (tools.length === 0) return null;
+  if (tools.length === 0) {
+    lastRunTrace = { ...lastRunTrace, timestamp: new Date().toISOString(), error: "No tools available" };
+    return null;
+  }
 
   const startTime = Date.now();
 
@@ -519,6 +525,7 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
       if (!response.ok) {
         const errBody = await response.text().catch(() => "");
         console.error(`${LOG} Anthropic API ${response.status}: ${errBody.substring(0, 300)}`);
+        lastRunTrace.error = `API ${response.status}: ${errBody.substring(0, 200)}`;
         return null;
       }
 
@@ -588,8 +595,10 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
       clearTimeout(timeout);
       if (e.name === "AbortError") {
         console.warn(`${LOG} Loop ${loop + 1} timed out (${LOOP_TIMEOUT_MS}ms)`);
+        lastRunTrace.error = `Loop ${loop + 1} timed out`;
       } else {
         console.error(`${LOG} Loop ${loop + 1} error:`, e.message);
+        lastRunTrace.error = `Loop ${loop + 1}: ${e.message}`;
       }
       break;
     }
