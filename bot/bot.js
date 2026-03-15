@@ -2440,13 +2440,15 @@ app.get("/api/agent-test", async (req, res) => {
   }
 });
 
+// Last message debug — shows what the handler saw
+let lastMessageDebug = {};
+
 // Agent debug endpoint
 app.get("/api/agent-debug", (req, res) => {
-  if (agent && agent.getLastRunTrace) {
-    res.json(agent.getLastRunTrace());
-  } else {
-    res.json({ error: "Agent not available" });
-  }
+  res.json({
+    agentTrace: agent ? agent.getLastRunTrace() : null,
+    lastMessage: lastMessageDebug,
+  });
 });
 
 // Register M365 OAuth routes
@@ -3635,6 +3637,16 @@ async function start() {
         /^(and\s+)?(after|next|then)\b/i.test(content)
       );
 
+      lastMessageDebug = {
+        content: (content || "").substring(0, 200),
+        useAgent,
+        agentLoaded: !!agent,
+        agentAvailable: agent ? agent.isAvailable() : false,
+        intentType: intent?.type,
+        isBubble,
+        fromJid,
+        timestamp: new Date().toISOString(),
+      };
       console.log(`${LOG} useAgent=${useAgent}, content="${(content||"").substring(0,50)}", agentLoaded=${!!agent}, agentAvail=${agent?agent.isAvailable():false}`);
 
       if (useAgent) {
