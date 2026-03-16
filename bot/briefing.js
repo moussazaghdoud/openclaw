@@ -123,7 +123,7 @@ async function handleBriefingIntent(userId, intent, originalMessage) {
 async function buildDailyBriefing(userId) {
   const connected = await getConnectedServices(userId);
   if (connected.length === 0) {
-    return "You haven't connected any services yet. Use **jojo connect gmail**, **jojo connect outlook**, or **jojo connect salesforce** to get started.";
+    return "You haven't connected any services yet. Use **juju connect gmail**, **juju connect outlook**, or **juju connect salesforce** to get started.";
   }
 
   // Gather data from all connected services in parallel

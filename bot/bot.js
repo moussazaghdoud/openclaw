@@ -2786,7 +2786,7 @@ async function processBubbleCallback(body) {
     }
 
     // "jojo connect/disconnect email/outlook/gmail/salesforce" — account linking
-    const emailConnectMatch = contentLower.trim().match(/^jojo\s+(connect|disconnect)\s+(email|outlook|gmail|salesforce)$/i);
+    const emailConnectMatch = contentLower.trim().match(/^juju\s+(connect|disconnect)\s+(email|outlook|gmail|salesforce)$/i);
     if (emailConnectMatch) {
       const isConnect = emailConnectMatch[1].toLowerCase() === "connect";
       const target = emailConnectMatch[2].toLowerCase(); // email, outlook, or gmail
@@ -2812,7 +2812,7 @@ async function processBubbleCallback(body) {
           const already = await gmailAuth.isLinked(fromJid);
           if (already) {
             const email = await gmailAuth.getLinkedEmail(fromJid);
-            await sendReply(`Your Gmail is already connected (${email}). Send "jojo disconnect gmail" first to reconnect.`);
+            await sendReply(`Your Gmail is already connected (${email}). Send "juju disconnect gmail" first to reconnect.`);
           } else {
             const authUrl = await gmailAuth.getAuthUrl(fromJid, { conversationId: body.conversation_id, roomJid, isBubble: true });
             await sendReply(`Click this link to connect your Gmail:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
@@ -2820,7 +2820,7 @@ async function processBubbleCallback(body) {
         } else {
           const linked = await gmailAuth.isLinked(fromJid);
           if (!linked) {
-            await sendReply(`Your Gmail is not connected. Send "jojo connect gmail" to link it.`);
+            await sendReply(`Your Gmail is not connected. Send "juju connect gmail" to link it.`);
           } else {
             await gmailAuth.unlinkAccount(fromJid);
             await sendReply(`Gmail disconnected. Your tokens have been deleted.`);
@@ -2832,7 +2832,7 @@ async function processBubbleCallback(body) {
           const already = await m365Auth.isLinked(fromJid);
           if (already) {
             const email = await m365Auth.getLinkedEmail(fromJid);
-            await sendReply(`Your Outlook is already connected (${email}). Send "jojo disconnect outlook" first to reconnect.`);
+            await sendReply(`Your Outlook is already connected (${email}). Send "juju disconnect outlook" first to reconnect.`);
           } else {
             const authUrl = await m365Auth.getAuthUrl(fromJid, { conversationId: body.conversation_id, roomJid, isBubble: true });
             await sendReply(`Click this link to connect your Outlook:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
@@ -2840,7 +2840,7 @@ async function processBubbleCallback(body) {
         } else {
           const linked = await m365Auth.isLinked(fromJid);
           if (!linked) {
-            await sendReply(`Your Outlook is not connected. Send "jojo connect outlook" to link it.`);
+            await sendReply(`Your Outlook is not connected. Send "juju connect outlook" to link it.`);
           } else {
             await m365Auth.unlinkAccount(fromJid);
             await sendReply(`Outlook disconnected. Your tokens have been deleted.`);
@@ -2852,7 +2852,7 @@ async function processBubbleCallback(body) {
           const already = await sfAuth.isLinked(fromJid);
           if (already) {
             const email = await sfAuth.getLinkedEmail(fromJid);
-            await sendReply(`Your Salesforce is already connected (${email}). Send "jojo disconnect salesforce" first to reconnect.`);
+            await sendReply(`Your Salesforce is already connected (${email}). Send "juju disconnect salesforce" first to reconnect.`);
           } else {
             const authUrl = await sfAuth.getAuthUrl(fromJid, { conversationId: body.conversation_id, roomJid, isBubble: true });
             await sendReply(`Click this link to connect your Salesforce:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
@@ -2860,7 +2860,7 @@ async function processBubbleCallback(body) {
         } else {
           const linked = await sfAuth.isLinked(fromJid);
           if (!linked) {
-            await sendReply(`Your Salesforce is not connected. Send "jojo connect salesforce" to link it.`);
+            await sendReply(`Your Salesforce is not connected. Send "juju connect salesforce" to link it.`);
           } else {
             await sfAuth.unlinkAccount(fromJid);
             await sendReply(`Salesforce disconnected. Your tokens have been deleted.`);
@@ -3377,7 +3377,7 @@ async function start() {
       }
 
       // "jojo connect/disconnect email/outlook/gmail/salesforce" — account linking
-      const emailConnectMatch2 = contentLower.trim().match(/^jojo\s+(connect|disconnect)\s+(email|outlook|gmail|salesforce)$/i);
+      const emailConnectMatch2 = contentLower.trim().match(/^juju\s+(connect|disconnect)\s+(email|outlook|gmail|salesforce)$/i);
       if (emailConnectMatch2) {
         const isConnect = emailConnectMatch2[1].toLowerCase() === "connect";
         const target = emailConnectMatch2[2].toLowerCase();
@@ -3414,7 +3414,7 @@ async function start() {
             const already = await gmailAuth.isLinked(fromJid);
             if (already) {
               const email = await gmailAuth.getLinkedEmail(fromJid);
-              await sendReply(`Your Gmail is already connected (${email}). Send "jojo disconnect gmail" first to reconnect.`);
+              await sendReply(`Your Gmail is already connected (${email}). Send "juju disconnect gmail" first to reconnect.`);
             } else {
               const authUrl = await gmailAuth.getAuthUrl(fromJid, { conversationId: rawConversationId || conversationId, isBubble });
               await sendReply(`Click this link to connect your Gmail:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
@@ -3422,7 +3422,7 @@ async function start() {
           } else {
             const linked = await gmailAuth.isLinked(fromJid);
             if (!linked) {
-              await sendReply(`Your Gmail is not connected. Send "jojo connect gmail" to link it.`);
+              await sendReply(`Your Gmail is not connected. Send "juju connect gmail" to link it.`);
             } else {
               await gmailAuth.unlinkAccount(fromJid);
               await sendReply(`Gmail disconnected. Your tokens have been deleted.`);
@@ -3434,7 +3434,7 @@ async function start() {
             const already = await m365Auth.isLinked(fromJid);
             if (already) {
               const email = await m365Auth.getLinkedEmail(fromJid);
-              await sendReply(`Your Outlook is already connected (${email}). Send "jojo disconnect outlook" first to reconnect.`);
+              await sendReply(`Your Outlook is already connected (${email}). Send "juju disconnect outlook" first to reconnect.`);
             } else {
               const authUrl = await m365Auth.getAuthUrl(fromJid, { conversationId: rawConversationId || conversationId, isBubble });
               await sendReply(`Click this link to connect your Outlook:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
@@ -3442,7 +3442,7 @@ async function start() {
           } else {
             const linked = await m365Auth.isLinked(fromJid);
             if (!linked) {
-              await sendReply(`Your Outlook is not connected. Send "jojo connect outlook" to link it.`);
+              await sendReply(`Your Outlook is not connected. Send "juju connect outlook" to link it.`);
             } else {
               await m365Auth.unlinkAccount(fromJid);
               await sendReply(`Outlook disconnected. Your tokens have been deleted.`);
@@ -3454,7 +3454,7 @@ async function start() {
             const already = await sfAuth.isLinked(fromJid);
             if (already) {
               const email = await sfAuth.getLinkedEmail(fromJid);
-              await sendReply(`Your Salesforce is already connected (${email}). Send "jojo disconnect salesforce" first to reconnect.`);
+              await sendReply(`Your Salesforce is already connected (${email}). Send "juju disconnect salesforce" first to reconnect.`);
             } else {
               const authUrl = await sfAuth.getAuthUrl(fromJid, { conversationId: rawConversationId || conversationId, isBubble });
               await sendReply(`Click this link to connect your Salesforce:\n\n${authUrl}\n\n(Link expires in 10 minutes)`);
@@ -3462,7 +3462,7 @@ async function start() {
           } else {
             const linked = await sfAuth.isLinked(fromJid);
             if (!linked) {
-              await sendReply(`Your Salesforce is not connected. Send "jojo connect salesforce" to link it.`);
+              await sendReply(`Your Salesforce is not connected. Send "juju connect salesforce" to link it.`);
             } else {
               await sfAuth.unlinkAccount(fromJid);
               await sendReply(`Salesforce disconnected. Your tokens have been deleted.`);

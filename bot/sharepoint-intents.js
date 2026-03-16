@@ -84,12 +84,12 @@ function detectSharePointIntent(message) {
 
 async function handleSharePointIntent(userId, intent, originalMessage) {
   if (!m365AuthModule) {
-    return "SharePoint requires a Microsoft 365 connection. Use **jojo connect outlook** to link your account.";
+    return "SharePoint requires a Microsoft 365 connection. Use **juju connect outlook** to link your account.";
   }
 
   const tokenResult = await m365AuthModule.getValidToken(userId);
   if (!tokenResult) {
-    return "You haven't connected Microsoft 365 yet. Use **jojo connect outlook** to link your account.";
+    return "You haven't connected Microsoft 365 yet. Use **juju connect outlook** to link your account.";
   }
 
   const { token } = tokenResult;

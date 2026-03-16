@@ -151,7 +151,7 @@ function detectCalendarIntent(message) {
 async function handleCalendarIntent(userId, intent, originalMessage) {
   const resolved = await resolveProvider(userId);
   if (!resolved) {
-    return "You haven't connected a calendar yet. Use **jojo connect outlook** or **jojo connect gmail** to link your account.";
+    return "You haven't connected a calendar yet. Use **juju connect outlook** or **juju connect gmail** to link your account.";
   }
 
   const { provider, token, email, api } = resolved;
@@ -228,7 +228,7 @@ function calendarErrorMessage(events, providerLabel) {
   if (!events) return "Sorry, I couldn't access your calendar right now.";
   const status = events.status || "unknown";
   if (status === 403 || status === 401) {
-    return `Calendar access denied. Your account may not have calendar permissions.\n\nPlease re-link: **jojo disconnect ${providerLabel === "Google Calendar" ? "gmail" : "outlook"}** then **jojo connect ${providerLabel === "Google Calendar" ? "gmail" : "outlook"}** to grant calendar access.`;
+    return `Calendar access denied. Your account may not have calendar permissions.\n\nPlease re-link: **juju disconnect ${providerLabel === "Google Calendar" ? "gmail" : "outlook"}** then **juju connect ${providerLabel === "Google Calendar" ? "gmail" : "outlook"}** to grant calendar access.`;
   }
   return `Sorry, I couldn't access your calendar (error ${status}).`;
 }
@@ -595,7 +595,7 @@ async function handleMeetingDetails(api, token, userId, intent, providerLabel) {
   if (events && events._error) {
     const status = events.status || "unknown";
     if (status === 403 || status === 401) {
-      return `Calendar access denied (${status}). You may need to re-link your account: **jojo disconnect gmail** then **jojo connect gmail** to grant calendar permissions.`;
+      return `Calendar access denied (${status}). You may need to re-link your account: **juju disconnect gmail** then **juju connect gmail** to grant calendar permissions.`;
     }
     return `Sorry, I couldn't access your calendar (error ${status}). Please try again.`;
   }

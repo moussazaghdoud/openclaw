@@ -99,7 +99,7 @@ function detectSalesforceIntent(message) {
 async function handleSalesforceIntent(userId, intent, originalMessage) {
   const resolved = await resolveProvider(userId);
   if (!resolved) {
-    return "You haven't connected Salesforce yet. Use **jojo connect salesforce** to link your account.";
+    return "You haven't connected Salesforce yet. Use **juju connect salesforce** to link your account.";
   }
 
   const { token, instanceUrl } = resolved;

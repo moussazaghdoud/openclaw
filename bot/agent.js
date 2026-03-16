@@ -261,7 +261,7 @@ async function executeTool(toolName, input, userId, memory) {
       // ── Email Tools ──────────────────────────────────
       case "search_emails": {
         const ep = await resolveEmailProvider(userId);
-        if (!ep) return { error: "No email account connected. Ask user to send 'jojo connect outlook'." };
+        if (!ep) return { error: "No email account connected. Ask user to send 'juju connect outlook'." };
         const results = await ep.api.getEmailsFromSender(ep.token, input.query, Math.min(input.max_results || 20, 50));
         if (!results || results._error) return { error: `Search failed: ${results?.status || "unknown"}` };
         return { count: results.length, emails: results.map(e => ({
@@ -340,7 +340,7 @@ async function executeTool(toolName, input, userId, memory) {
       // ── Calendar Tools ───────────────────────────────
       case "search_calendar": {
         const cp = await resolveCalendarProvider(userId);
-        if (!cp) return { error: "No calendar connected. Ask user to send 'jojo connect outlook'." };
+        if (!cp) return { error: "No calendar connected. Ask user to send 'juju connect outlook'." };
         let events;
         switch (input.period) {
           case "today": events = await cp.api.getTodayEvents(cp.token); break;

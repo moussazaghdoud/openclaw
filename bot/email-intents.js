@@ -238,8 +238,8 @@ async function handleEmailIntent(userId, intent, userMessage) {
   if (!resolved) {
     // Build connect instructions based on available providers
     const options = [];
-    if (gmailAuth && gmailAuth.isConfigured()) options.push('"jojo connect gmail"');
-    if (m365Auth && m365Auth.isConfigured()) options.push('"jojo connect outlook"');
+    if (gmailAuth && gmailAuth.isConfigured()) options.push('"juju connect gmail"');
+    if (m365Auth && m365Auth.isConfigured()) options.push('"juju connect outlook"');
     if (options.length === 0) return "Email integration is not configured. Please contact your administrator.";
     return `No email account connected. Send ${options.join(" or ")} to link your account.`;
   }
