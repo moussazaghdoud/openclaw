@@ -155,6 +155,14 @@ async function processNotification(notification) {
     return;
   }
 
+  // Skip emails sent by the account owner (no need to notify about own emails)
+  const ownerEmail = tokenResult.email || "";
+  const senderEmail = email.fromEmail || "";
+  if (ownerEmail && senderEmail && ownerEmail.toLowerCase() === senderEmail.toLowerCase()) {
+    console.log(`${LOG} Skipping own email from ${senderEmail} for user ${userId}`);
+    return;
+  }
+
   // Build the notification message
   const sender = email.from || "Unknown";
   const subject = email.subject || "(no subject)";
