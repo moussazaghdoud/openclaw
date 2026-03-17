@@ -195,32 +195,10 @@ async function initRedis() {
           // For urgent messages, prefer REST with explicit urgency field — SDK may not pass it in S2S mode
           // Try all known urgency formats to maximize compatibility
           const msgPayload = { body: text, lang: "en" };
-          if (isUrgent) {
-            msgPayload.urgency = urgency;
-            msgPayload.headers = [{ name: "Urgency", value: urgency }];
-          }
+          // Rainbow S2S rejects unknown urgency values — do NOT set urgency on REST payload
+          // Urgency is only supported via SDK sendMessageToConversation parameter
 
-          // Try REST first for urgent messages (more control over payload)
-          if (isUrgent && s2sConnectionId && authToken) {
-            const convId = conversationByJid?.get(userJid);
-            if (convId) {
-              try {
-                const host = rainbowHost || "openrainbow.com";
-                const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
-                  method: "POST",
-                  headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                  body: JSON.stringify({ message: msgPayload }),
-                });
-                if (resp.ok) {
-                  console.log(`${LOG} Urgent proactive send OK via REST (conv ${convId})`);
-                  return;
-                }
-                console.warn(`${LOG} REST urgent send failed: ${resp.status}`);
-              } catch (e) { console.warn(`${LOG} REST urgent send error:`, e.message); }
-            }
-          }
-
-          // SDK path
+          // SDK path first — only SDK supports urgency parameter properly
           try {
             const contact = await sdk.contacts.getContactByJid(userJid);
             if (contact) {
