@@ -3327,27 +3327,37 @@ async function start() {
             console.warn(`${LOG} S2S file confirmation failed:`, e.message);
           }
         }
-        // Method 2: SDK sendMessageToConversation
-        if (!confirmSent && conversation) {
+        // Method 2: SDK — find contact and send via conversation
+        if (!confirmSent) {
           try {
-            await sdk.im.sendMessageToConversation(conversation, confirmMsg);
-            confirmSent = true;
-            console.log(`${LOG} File confirm SDK: OK`);
+            // Try by JID first, then by user ID from raw callback
+            const rawFromId = rawCb?.from_userId || "";
+            let contact = null;
+            if (fromJid) try { contact = await sdk.contacts.getContactByJid(fromJid); } catch {}
+            if (!contact && rawFromId) try { contact = await sdk.contacts.getContactById(rawFromId); } catch {}
+            if (contact) {
+              const fileConv = await sdk.conversations.openConversationForContact(contact);
+              if (fileConv) {
+                await sdk.im.sendMessageToConversation(fileConv, confirmMsg);
+                confirmSent = true;
+                console.log(`${LOG} File confirm SDK contact: OK`);
+              }
+            }
           } catch (e) {
             console.warn(`${LOG} SDK file confirmation failed:`, e.message);
           }
         }
-        // Method 3: SDK s2s.sendMessageInConversation with dbId
+        // Method 3: SDK s2s with conversation dbId
         if (!confirmSent && conversation?.dbId && sdk.s2s) {
           try {
             await sdk.s2s.sendMessageInConversation(conversation.dbId, { message: { body: confirmMsg, lang: "en" } });
             confirmSent = true;
-            console.log(`${LOG} File confirm S2S SDK: OK`);
+            console.log(`${LOG} File confirm S2S dbId: OK`);
           } catch (e) {
             console.warn(`${LOG} S2S SDK file confirmation failed:`, e.message);
           }
         }
-        if (!confirmSent) console.warn(`${LOG} Could not send file confirmation to ${fromJid} (convId=${confirmConvId})`);
+        if (!confirmSent) console.warn(`${LOG} Could not send file confirmation to ${fromJid} (convId=${confirmConvId}, rawFrom=${rawCb?.from_userId})`);
 
         // File received — just acknowledge, don't call AI until user asks
         console.log(`${LOG} File stored in history for ${fHistoryKey}, awaiting user question`);
