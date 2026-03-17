@@ -2121,23 +2121,42 @@ async function processFileFromCallback(msg, convId, fromUserId, isGroup) {
   await addMessage(historyKey, "user", `[${fromName} shared a file]\n${fileContext}`);
 
   // Send confirmation
+  const fileSize = fileInfo.filesize ? ` (${Math.round(fileInfo.filesize / 1024)}KB)` : "";
   const confirmMsg = downloaded
-    ? `📎 Got it — **${fileInfo.filename}** received and ready. You can ask me about it.`
+    ? `📎 **${fileInfo.filename}**${fileSize} received and ready.\n\nYou can now ask me to:\n- Translate it\n- Summarize it\n- Anonymize it\n- Or ask any question about its content`
     : `📎 I see **${fileInfo.filename}** was shared, but I couldn't download it. Try pasting the content directly.`;
 
+  let sent = false;
   if (convId && s2sConnectionId && authToken) {
     try {
       const host = rainbowHost || "openrainbow.com";
-      await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+      const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
         method: "POST",
         headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
         body: JSON.stringify({ message: { body: confirmMsg, lang: "en" } }),
       });
-      console.log(`${LOG} File confirmation sent to conv ${convId}`);
+      sent = resp.ok;
+      if (sent) console.log(`${LOG} File confirmation sent to conv ${convId}`);
+      else console.warn(`${LOG} File confirmation REST failed: ${resp.status}`);
     } catch (e) {
-      console.warn(`${LOG} Failed to send file confirmation:`, e.message);
+      console.warn(`${LOG} File confirmation REST error:`, e.message);
     }
   }
+  // SDK fallback
+  if (!sent && sdk) {
+    try {
+      const contact = await sdk.contacts.getContactByJid(fromUserId);
+      if (contact) {
+        const conv = await sdk.conversations.openConversationForContact(contact);
+        if (conv) {
+          await sdk.im.sendMessageToConversation(conv, confirmMsg);
+          sent = true;
+          console.log(`${LOG} File confirmation sent via SDK`);
+        }
+      }
+    } catch (e) { console.warn(`${LOG} File confirmation SDK failed:`, e.message); }
+  }
+  if (!sent) console.warn(`${LOG} Could not send file confirmation for ${fileInfo.filename}`);
 }
 
 // ── Create Express app for S2S callbacks ────────────────
