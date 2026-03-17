@@ -191,7 +191,9 @@ async function initRedis() {
         sendMessage: async (userJid, text, urgency = "std") => {
           console.log(`${LOG} Proactive send to ${userJid} (urgency=${urgency}): ${text.substring(0, 80)}`);
           const msgPayload = { body: text, lang: "en" };
-          if (urgency && urgency !== "std") msgPayload.urgency = urgency;
+          if (urgency && urgency !== "std") {
+            msgPayload.headers = [{ name: "Urgency", value: urgency }];
+          }
           // Try SDK with full signature: sendMessageToConversation(conversation, message, lang, content, subject, urgency)
           try {
             const contact = await sdk.contacts.getContactByJid(userJid);
