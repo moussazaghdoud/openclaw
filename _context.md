@@ -42,7 +42,7 @@ Two Railway services deployed from the same GitHub repo (`moussazaghdoud/opencla
 - **Base image:** `node:22-slim`
 - **What it does:** Rainbow S2S bot that receives IMs and routes to agent (Sonnet) or OpenClaw (Opus)
 - **Railway env vars:**
-  - `RAINBOW_BOT_LOGIN` — Bot Rainbow account email (`ale-corp-chat@al-enterprise.com`)
+  - `RAINBOW_BOT_LOGIN` — Bot Rainbow account email (configurable; change this to switch the bot account)
   - `RAINBOW_BOT_PASSWORD` — Bot account password
   - `RAINBOW_APP_ID` — Rainbow application ID (registered on openrainbow.com)
   - `RAINBOW_APP_SECRET` — Rainbow application secret
@@ -55,6 +55,7 @@ Two Railway services deployed from the same GitHub repo (`moussazaghdoud/opencla
   - `OPENCLAW_WELCOME_MSG` — Welcome message for new users
   - `REDIS_URL` — Redis connection string (from Railway Redis service)
   - `ANTHROPIC_API_KEY` — Claude API key for direct Anthropic API calls (agent uses Sonnet for tool calling)
+  - `TAVILY_API_KEY` — Tavily API key for web search tool (agent web_search)
   - `M365_CLIENT_ID` — Microsoft Entra app client ID (for Outlook email + calendar)
   - `M365_CLIENT_SECRET` — Microsoft Entra app client secret
   - `M365_REDIRECT_URI` — OAuth callback URL (`https://bot-production-4410.up.railway.app/auth/microsoft/callback`)
@@ -141,8 +142,9 @@ The bot has **three routing paths**, evaluated in priority order in the message 
 1. **Pending action handlers** — "yes"/"no" responses to confirm/cancel pending email drafts or calendar actions. Checked first via Redis (`pending:{jid}`, `cal_pending:{jid}`).
 
 2. **Agent path (email/calendar)** — When `agent.isAvailable()` is true (requires `ANTHROPIC_API_KEY` + at least one email/calendar module loaded), messages matching email or calendar keywords are routed directly to `agent.run()`. The keyword check is a regex:
-   - Email: `emails?|mails?|inbox|unread|outlook|sender|draft|reply|forward|archive|flag`
-   - Calendar: `meetings?|calendar|schedule|agenda|appointments?|events?`
+   - Email: `emails?|mails?|inbox|unread|outlook|sender|draft|reply|forward|archive|flag|sent|received|wrote`
+   - Calendar: `meetings?|calendar|schedule|agenda|appointments?|events?|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|this week|next week|free slots?|busy|available`
+   - Web search: `search|google|look up|news|stock|weather|price`
    - Follow-up: `^(and\s+)?(after|next|then)\b`
    - This check runs in the main S2S message handler (bypasses `detectIntent()`) for the most reliable routing.
 
@@ -170,7 +172,7 @@ The bot uses a **real AI agent** for email and calendar tasks. The agent uses Cl
 
 #### Agentic Loop (`agent.run()`)
 1. Load working memory from Redis
-2. Build system prompt with today's date, entity resolution strategy, and memory context
+2. Build system prompt with today's date, a 14-day date reference table (maps day names to exact dates to prevent date calculation errors), entity resolution strategy, and memory context
 3. Send user message + tools to Claude Sonnet via `POST https://api.anthropic.com/v1/messages`
 4. Claude decides which tools to call (e.g. `search_emails("Jack")`)
 5. Bot executes tools, returns results to Claude
@@ -186,7 +188,7 @@ The agent auto-detects the user's email and calendar provider:
 - `resolveEmailProvider(userId)` — checks Gmail first, then M365. Returns `{ api, token }`.
 - `resolveCalendarProvider(userId)` — same pattern for calendar.
 
-#### Tools (9 total)
+#### Tools (10 total)
 - **`search_emails`** — search by keyword (sender name, subject, topic). Max 50 results.
 - **`get_recent_emails`** — fetch N most recent emails. Max 50.
 - **`read_email`** — read full email content by ID. Auto-marks as read.
@@ -195,6 +197,7 @@ The agent auto-detects the user's email and calendar provider:
 - **`get_sender_details`** — look up sender info from email address (recent subjects, last contact date).
 - **`search_calendar`** — get events for today/tomorrow/week/two_weeks.
 - **`read_event`** — get full event details by ID (body, attendees with response status, online meeting URL).
+- **`web_search`** — search the web using Tavily API. For real-time info: news, stock prices, weather, general knowledge. Returns top results with titles, URLs, and content snippets.
 - **`update_memory`** — store resolved entity in working memory (person, company, topic, email_ref, event_ref).
 
 #### Working Memory (Redis-backed)
@@ -236,8 +239,9 @@ Provides proactive email notifications via Microsoft Graph change notifications.
 2. Bot looks up user by `subscriptionId` in Redis
 3. Verifies `clientState` to prevent spoofed notifications
 4. Fetches email details via Graph API using user's M365 token
-5. Optionally generates a one-sentence AI summary via Sonnet (10s timeout)
-6. Sends proactive Rainbow message to user: "New email from {sender}: {subject}\nSummary: {summary}"
+5. **Skips own emails:** If the sender email matches the account owner's email, the notification is silently dropped (prevents self-notification when the user sends an email)
+6. Optionally generates a one-sentence AI summary via Sonnet (10s timeout)
+7. Sends proactive Rainbow message to user: "New email from {sender}: {subject}\nSummary: {summary}"
 
 #### Proactive Messaging
 `sendRainbowMessage(userJid, text)` is injected from `bot.js`. It tries:
@@ -341,7 +345,7 @@ This prevents stale files from being picked up after the user clears chat histor
 
 #### Bubble (Group) Messages
 - **Detection:** Uses `is_group` flag from raw S2S callback (stored in `rawCallbackMap` keyed by message ID). The SDK's `fromBubbleJid`/`fromBubbleId` fields are NOT populated in S2S mode.
-- **Bot trigger keyword:** `jojo` (also responds to bot's display name, `@ai`, `bot:`, `bot :`)
+- **Bot trigger keyword:** `juju` (also responds to bot's display name, `@ai`, `bot:`, `bot :`)
 - **Silent listening:** All bubble messages are stored in conversation history for context, but bot only replies when triggered
 - **Active conversation mode:** After bot replies in a bubble, follow-up messages within 5 minutes are evaluated by AI intent to decide if they're directed at the bot (no trigger needed)
 - **Reply method (3-tier fallback):**
@@ -423,8 +427,8 @@ Dual-backend email system supporting both Outlook (Microsoft Graph) and Gmail (G
 `resolveProvider(userId)` checks Gmail token first, then M365. Returns `{ provider, token, email, api }` where `api` is either `graph.js` or `gmail-api.js` module.
 
 #### Account Linking
-- `jojo connect gmail` / `jojo connect outlook` — sends OAuth URL to user
-- `jojo disconnect gmail` / `jojo disconnect outlook` — removes tokens from Redis
+- `juju connect gmail` / `juju connect outlook` — sends OAuth URL to user
+- `juju disconnect gmail` / `juju disconnect outlook` — removes tokens from Redis
 - OAuth routes: `/auth/gmail/start`, `/auth/gmail/callback`, `/auth/microsoft/start`, `/auth/microsoft/callback`
 - Tokens stored encrypted in Redis (`gmail:{userId}`, `oauth:{userId}`)
 
@@ -476,7 +480,7 @@ Full Salesforce CRM integration for customer context, pipeline management, and e
 - **`salesforce-intents.js`** — CRM intent handler
 
 #### Account Linking
-- `jojo connect salesforce` / `jojo disconnect salesforce`
+- `juju connect salesforce` / `juju disconnect salesforce`
 - OAuth routes: `/auth/salesforce/start`, `/auth/salesforce/callback`
 - Tokens stored encrypted in Redis (`sf:{userId}`)
 
@@ -746,13 +750,17 @@ All Redis keys used by the system:
 45. **Graph API sender search unreliable:** Microsoft Graph `$search "from:Jack"` missed emails due to indexing limitations. Fixed with a two-step approach: broad `$search` to find one email → extract exact sender email address → `$filter` by exact address to find all emails.
 46. **PII secure mode contaminated agent:** When PII secure mode was ON, names in conversation history were replaced with "PERSON_1" placeholders. The agent read this tainted history and repeated the placeholders. Fixed by filtering PII-tainted history entries and instructing the agent to ignore PERSON_N artifacts.
 47. **Agent routing plural mismatch:** The keyword regex `\bemail\b` didn't match "emails" (no word boundary between 'l' and 's'). All email queries bypassed the agent and went to the old handler. Fixed with `\bemails?\b`.
+48. **Commands renamed from jojo to juju:** All bot commands (`connect`, `disconnect`, `secure`, `unsecure`) changed prefix from `jojo` to `juju` across all modules. Bubble trigger keyword also changed to `juju`.
+49. **Web search added via Tavily API:** New `web_search` tool in `agent.js` using Tavily Search API. Enables the agent to answer real-time questions (news, stock prices, weather, general knowledge). Agent routing keywords expanded to include search/news/stock/weather/price triggers. Requires `TAVILY_API_KEY` env var.
+50. **Email webhook skips own emails:** Webhook notification processing now checks if the sender email matches the account owner's email and silently drops the notification, preventing self-notification when the user sends an email.
+51. **Date calculation errors:** Claude incorrectly said "Wednesday is March 19" when it was actually March 18. LLMs cannot reliably compute dates from a single "today is" anchor. Fixed by injecting a 14-day date reference table into the agent system prompt, mapping each day name to its exact date (e.g., "Wednesday → 2026-03-18").
 
 ## Important: OAuth Scope Expansion
 
 When new API scopes are added to `auth.js` or `gmail-auth.js`, **existing user tokens do NOT automatically gain the new permissions**. Users must re-link their accounts to authorize the expanded scopes:
 
-- `jojo disconnect gmail` → `jojo connect gmail` (for Google Calendar scopes added in Phase 1)
-- `jojo disconnect outlook` → `jojo connect outlook` (for Calendar + SharePoint scopes)
+- `juju disconnect gmail` → `juju connect gmail` (for Google Calendar scopes added in Phase 1)
+- `juju disconnect outlook` → `juju connect outlook` (for Calendar + SharePoint scopes)
 
 The bot now detects 401/403 errors from calendar/SharePoint APIs and displays a message guiding users to re-link.
 
