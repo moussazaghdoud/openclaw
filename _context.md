@@ -188,7 +188,7 @@ The agent auto-detects the user's email and calendar provider:
 - `resolveEmailProvider(userId)` — checks Gmail first, then M365. Returns `{ api, token }`.
 - `resolveCalendarProvider(userId)` — same pattern for calendar.
 
-#### Tools (10 total)
+#### Tools (12 total)
 - **`search_emails`** — search by keyword (sender name, subject, topic). Max 50 results.
 - **`get_recent_emails`** — fetch N most recent emails. Max 50.
 - **`read_email`** — read full email content by ID. Auto-marks as read.
@@ -198,6 +198,7 @@ The agent auto-detects the user's email and calendar provider:
 - **`search_calendar`** — get events for today/tomorrow/week/two_weeks.
 - **`read_event`** — get full event details by ID (body, attendees with response status, online meeting URL).
 - **`web_search`** — search the web using Tavily API. For real-time info: news, stock prices, weather, general knowledge. Returns top results with titles, URLs, and content snippets.
+- **`set_email_rule`** — manage email notification rules (add/remove/list). Rules set urgency level when incoming emails match a keyword (sender or subject). E.g. "if I get an email from Yann, mark as urgent".
 - **`update_memory`** — store resolved entity in working memory (person, company, topic, email_ref, event_ref).
 
 #### Working Memory (Redis-backed)
@@ -263,12 +264,28 @@ Provides proactive email notifications via Microsoft Graph change notifications.
 - **Recovery:** If renewal fails, attempts to re-create the subscription from scratch
 - Uses `getAllSubscriptionUserIds()` with Redis SCAN to find all active subscriptions
 
+#### Notification Rules (Urgency)
+Users can set rules via chat (e.g. "if I get an email from Yann, mark it as urgent"):
+- Rules stored in Redis (`email_rules:{userId}`) — array of `{ keyword, urgency, createdAt }`
+- When a webhook notification matches a rule keyword (sender name/email or subject), urgency is set to "high"
+- High-urgency notifications are prefixed with `🔴 URGENT —` and sent with `urgency: "high"` in the Rainbow message payload
+- Managed via the `set_email_rule` agent tool (add/remove/list)
+- Own emails (sender = account owner) are silently skipped
+
+#### File Upload Acknowledgement
+When a user uploads a file in 1:1 chat:
+- Bot downloads and processes the file (DOCX, PDF, PPTX, text files)
+- Sends confirmation: `📎 filename.docx (45KB) received and ready` with list of available actions (translate, summarize, anonymize, ask questions)
+- File content stored in conversation history for follow-up questions
+- Send fallback: S2S REST first, SDK if REST fails
+
 #### Redis Keys
 - `email_webhook:{userId}` — subscription data JSON (subscriptionId, clientState, resource, expirationDateTime, createdAt). TTL = subscription lifetime + 1 hour buffer.
 - `email_webhook_sub:{subscriptionId}` — reverse lookup, maps subscriptionId → userId. Same TTL.
+- `email_rules:{userId}` — notification rules array (no TTL — persistent)
 
 #### Exports
-`init(app, deps)`, `createSubscription()`, `renewSubscription()`, `deleteSubscription()`, `onAccountLinked()`, `stop()`
+`init(app, deps)`, `createSubscription()`, `renewSubscription()`, `deleteSubscription()`, `onAccountLinked()`, `addNotificationRule()`, `removeNotificationRule()`, `listNotificationRules()`, `stop()`
 
 ### Document Processing (Bot Decides, AI Generates Content)
 
@@ -754,6 +771,8 @@ All Redis keys used by the system:
 49. **Web search added via Tavily API:** New `web_search` tool in `agent.js` using Tavily Search API. Enables the agent to answer real-time questions (news, stock prices, weather, general knowledge). Agent routing keywords expanded to include search/news/stock/weather/price triggers. Requires `TAVILY_API_KEY` env var.
 50. **Email webhook skips own emails:** Webhook notification processing now checks if the sender email matches the account owner's email and silently drops the notification, preventing self-notification when the user sends an email.
 51. **Date calculation errors:** Claude incorrectly said "Wednesday is March 19" when it was actually March 18. LLMs cannot reliably compute dates from a single "today is" anchor. Fixed by injecting a 14-day date reference table into the agent system prompt, mapping each day name to its exact date (e.g., "Wednesday → 2026-03-18").
+52. **Email notification rules with urgency:** Added user-defined rules for email notification priority. Users can say "if I get an email from Yann, mark it as urgent" via the `set_email_rule` agent tool. Rules stored in Redis, matched against incoming webhook notifications (sender or subject). High-urgency messages prefixed with `🔴 URGENT`.
+53. **File upload acknowledgement improved:** File upload confirmation now shows filename with size and lists available actions (translate, summarize, anonymize, ask questions). Added SDK fallback if S2S REST confirmation fails.
 
 ## Important: OAuth Scope Expansion
 
