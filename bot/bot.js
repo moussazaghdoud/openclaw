@@ -190,17 +190,43 @@ async function initRedis() {
         agent: agent || null,
         sendMessage: async (userJid, text, urgency = "std") => {
           console.log(`${LOG} Proactive send to ${userJid} (urgency=${urgency}): ${text.substring(0, 80)}`);
+          const isUrgent = urgency && urgency !== "std";
+
+          // For urgent messages, prefer REST with explicit urgency field — SDK may not pass it in S2S mode
+          // Try all known urgency formats to maximize compatibility
           const msgPayload = { body: text, lang: "en" };
-          if (urgency && urgency !== "std") {
+          if (isUrgent) {
+            msgPayload.urgency = urgency;
             msgPayload.headers = [{ name: "Urgency", value: urgency }];
           }
-          // Try SDK with full signature: sendMessageToConversation(conversation, message, lang, content, subject, urgency)
+
+          // Try REST first for urgent messages (more control over payload)
+          if (isUrgent && s2sConnectionId && authToken) {
+            const convId = conversationByJid?.get(userJid);
+            if (convId) {
+              try {
+                const host = rainbowHost || "openrainbow.com";
+                const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+                  method: "POST",
+                  headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({ message: msgPayload }),
+                });
+                if (resp.ok) {
+                  console.log(`${LOG} Urgent proactive send OK via REST (conv ${convId})`);
+                  return;
+                }
+                console.warn(`${LOG} REST urgent send failed: ${resp.status}`);
+              } catch (e) { console.warn(`${LOG} REST urgent send error:`, e.message); }
+            }
+          }
+
+          // SDK path
           try {
             const contact = await sdk.contacts.getContactByJid(userJid);
             if (contact) {
               const conv = await sdk.conversations.openConversationForContact(contact);
               if (conv) {
-                const urg = (urgency && urgency !== "std") ? urgency : null;
+                const urg = isUrgent ? urgency : null;
                 await sdk.im.sendMessageToConversation(conv, text, "en", null, null, urg);
                 console.log(`${LOG} Proactive send OK via SDK (urgency=${urg})`);
                 return;
