@@ -3276,8 +3276,14 @@ async function start() {
         // Mark as processed so callback handler doesn't double-process
         const fileKey = `${msgId}:${fileInfo.url}`;
         processedFileIds.add(fileKey);
-        console.log(`${LOG} File detected (SDK event): ${fileInfo.filename} (${fileInfo.mime})`);
-        const downloaded = await downloadFile(fileInfo);
+        console.log(`${LOG} File detected (SDK event): ${fileInfo.filename} (${fileInfo.mime}, ${fileInfo.filesize} bytes)`);
+        let downloaded = null;
+        try {
+          downloaded = await Promise.race([
+            downloadFile(fileInfo),
+            new Promise(r => setTimeout(() => r(null), 30000)), // 30s download timeout
+          ]);
+        } catch (e) { console.warn(`${LOG} File download failed:`, e.message); }
         fileContext = await describeFileForAI(fileInfo, downloaded);
         console.log(`${LOG} File context: ${fileContext.substring(0, 200)}`);
 
@@ -3296,14 +3302,17 @@ async function start() {
         await addMessage(fHistoryKey, "user", `[${fromName} shared a file]\n${fileContext}`);
 
         // Send confirmation to user
-        const fileSize = fileInfo.size ? ` (${Math.round(fileInfo.size / 1024)}KB)` : "";
+        const fileSize = fileInfo.filesize ? ` (${Math.round(fileInfo.filesize / 1024)}KB)` : "";
         const confirmMsg = downloaded
           ? `📎 **${fileInfo.filename}**${fileSize} received and ready.\n\nYou can now ask me to:\n- Translate it\n- Summarize it\n- Anonymize it\n- Or ask any question about its content`
           : `📎 I see **${fileInfo.filename}** was shared, but I couldn't download it. Try sending a text file (.txt, .csv, .json) or paste the content directly.`;
 
-        // Send confirmation via S2S REST + SDK fallback
+        // Send confirmation via S2S REST + SDK fallback + direct REST
         const confirmConvId = rawCb?.conversation_id || conversationId;
         let confirmSent = false;
+        console.log(`${LOG} Sending file confirmation: confirmConvId=${confirmConvId}, s2s=${!!s2sConnectionId}`);
+
+        // Method 1: S2S REST
         if (confirmConvId && s2sConnectionId && authToken) {
           try {
             const host = rainbowHost || "openrainbow.com";
@@ -3313,19 +3322,32 @@ async function start() {
               body: JSON.stringify({ message: { body: confirmMsg, lang: "en" } }),
             });
             confirmSent = resp.ok;
+            console.log(`${LOG} File confirm REST: ${resp.ok ? "OK" : resp.status}`);
           } catch (e) {
             console.warn(`${LOG} S2S file confirmation failed:`, e.message);
           }
         }
+        // Method 2: SDK sendMessageToConversation
         if (!confirmSent && conversation) {
           try {
             await sdk.im.sendMessageToConversation(conversation, confirmMsg);
             confirmSent = true;
+            console.log(`${LOG} File confirm SDK: OK`);
           } catch (e) {
             console.warn(`${LOG} SDK file confirmation failed:`, e.message);
           }
         }
-        if (!confirmSent) console.warn(`${LOG} Could not send file confirmation to ${fromJid}`);
+        // Method 3: SDK s2s.sendMessageInConversation with dbId
+        if (!confirmSent && conversation?.dbId && sdk.s2s) {
+          try {
+            await sdk.s2s.sendMessageInConversation(conversation.dbId, { message: { body: confirmMsg, lang: "en" } });
+            confirmSent = true;
+            console.log(`${LOG} File confirm S2S SDK: OK`);
+          } catch (e) {
+            console.warn(`${LOG} S2S SDK file confirmation failed:`, e.message);
+          }
+        }
+        if (!confirmSent) console.warn(`${LOG} Could not send file confirmation to ${fromJid} (convId=${confirmConvId})`);
 
         // File received — just acknowledge, don't call AI until user asks
         console.log(`${LOG} File stored in history for ${fHistoryKey}, awaiting user question`);
