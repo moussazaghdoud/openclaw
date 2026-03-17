@@ -198,15 +198,18 @@ async function initRedis() {
           // Rainbow S2S rejects unknown urgency values — do NOT set urgency on REST payload
           // Urgency is only supported via SDK sendMessageToConversation parameter
 
-          // SDK path first — only SDK supports urgency parameter properly
+          // SDK path — use s2s.sendMessageInConversation directly with correct urgency
+          // Note: sdk.im.sendMessageToConversation has a bug in S2S mode — it sets
+          // urgency to the UrgencyType enum object instead of the string value
           try {
             const contact = await sdk.contacts.getContactByJid(userJid);
             if (contact) {
               const conv = await sdk.conversations.openConversationForContact(contact);
-              if (conv) {
-                const urg = isUrgent ? urgency : null;
-                await sdk.im.sendMessageToConversation(conv, text, "en", null, null, urg);
-                console.log(`${LOG} Proactive send OK via SDK (urgency=${urg})`);
+              if (conv && conv.dbId) {
+                const msg = { message: { body: text, lang: "en" } };
+                if (isUrgent) msg.message.urgency = urgency; // string "high"
+                await sdk.s2s.sendMessageInConversation(conv.dbId, msg);
+                console.log(`${LOG} Proactive send OK via S2S SDK (urgency=${isUrgent ? urgency : "std"})`);
                 return;
               }
             }
