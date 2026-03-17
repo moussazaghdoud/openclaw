@@ -188,8 +188,10 @@ async function initRedis() {
         m365Auth,
         graph: m365Graph,
         agent: agent || null,
-        sendMessage: async (userJid, text) => {
-          console.log(`${LOG} Proactive send to ${userJid}: ${text.substring(0, 80)}`);
+        sendMessage: async (userJid, text, urgency = "std") => {
+          console.log(`${LOG} Proactive send to ${userJid} (urgency=${urgency}): ${text.substring(0, 80)}`);
+          const msgPayload = { body: text, lang: "en" };
+          if (urgency && urgency !== "std") msgPayload.urgency = urgency;
           // Try SDK: find contact by JID, open conversation, send
           try {
             const contact = await sdk.contacts.getContactByJid(userJid);
@@ -212,7 +214,7 @@ async function initRedis() {
                 await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
                   method: "POST",
                   headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                  body: JSON.stringify({ message: { body: text, lang: "en" } }),
+                  body: JSON.stringify({ message: msgPayload }),
                 });
                 console.log(`${LOG} Proactive send OK via REST (conv ${convId})`);
                 return;
@@ -3732,7 +3734,7 @@ async function start() {
 
       // Force agent for email/calendar when available — bypass detectIntent result
       const useAgent = agent && agent.isAvailable() && (
-        /\b(emails?|mails?|inbox|unread|outlook|sender|draft|reply|forward|archive|flag|sent|received|wrote)\b/i.test(content) ||
+        /\b(emails?|mails?|inbox|unread|outlook|sender|draft|reply|forward|archive|flag|sent|received|wrote|urgent|priority|notification|rule|alert)\b/i.test(content) ||
         /\b(meetings?|calendar|schedule|agenda|appointments?|events?|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|this\s+week|next\s+week|free\s+slots?|busy|available)\b/i.test(content) ||
         /\b(search|google|look\s*up|find\s+out|what('?s| is)\s+(the\s+)?latest|news|stock|weather|price)\b/i.test(content) ||
         /^(and\s+)?(after|next|then)\b/i.test(content)

@@ -225,6 +225,21 @@ function getTools() {
     });
   }
 
+  // Notification rules
+  tools.push({
+    name: "set_email_rule",
+    description: "Set an email notification rule. When a new email matches the keyword (sender name or subject), the notification urgency is set. Use 'high' for urgent, 'std' for normal. User says things like 'if I get an email from Yann, mark it as urgent'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["add", "remove", "list"], description: "Add a rule, remove a rule, or list all rules" },
+        keyword: { type: "string", description: "Sender name or subject keyword to match (required for add/remove)" },
+        urgency: { type: "string", enum: ["high", "std"], description: "Urgency level (default: high)" },
+      },
+      required: ["action"],
+    },
+  });
+
   tools.push({
     name: "update_memory",
     description: "Update working memory with a resolved entity, topic, or reference. Call this whenever you discover new facts (e.g. 'Jack' = 'CHEN Jack Lixin', email = 'jack.chen@company.com').",
@@ -423,6 +438,31 @@ async function executeTool(toolName, input, userId, memory) {
           };
         } catch (e) {
           return { error: `Search error: ${e.message}` };
+        }
+      }
+
+      // ── Email Notification Rules ────────────────────
+      case "set_email_rule": {
+        try {
+          const emailWebhook = require("./email-webhook");
+          if (input.action === "list") {
+            const rules = await emailWebhook.listNotificationRules(userId);
+            if (rules.length === 0) return { message: "No notification rules set." };
+            return { rules: rules.map(r => ({ keyword: r.keyword, urgency: r.urgency })) };
+          } else if (input.action === "add" && input.keyword) {
+            const added = await emailWebhook.addNotificationRule(userId, input.keyword, input.urgency || "high");
+            return added
+              ? { success: true, message: `Rule added: emails matching "${input.keyword}" will be marked as ${input.urgency || "high"} urgency.` }
+              : { success: false, message: `Rule for "${input.keyword}" already exists.` };
+          } else if (input.action === "remove" && input.keyword) {
+            const removed = await emailWebhook.removeNotificationRule(userId, input.keyword);
+            return removed
+              ? { success: true, message: `Rule removed for "${input.keyword}".` }
+              : { success: false, message: `No rule found for "${input.keyword}".` };
+          }
+          return { error: "Invalid action. Use add, remove, or list." };
+        } catch (e) {
+          return { error: e.message };
         }
       }
 

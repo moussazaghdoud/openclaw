@@ -168,6 +168,22 @@ async function processNotification(notification) {
   const subject = email.subject || "(no subject)";
   let messageText = `New email from ${sender}: ${subject}`;
 
+  // Check notification rules for urgency
+  let urgency = "std";
+  const rules = await getNotificationRules(userId);
+  if (rules.length > 0) {
+    const senderLower = (sender + " " + senderEmail).toLowerCase();
+    const subjectLower = (subject || "").toLowerCase();
+    for (const rule of rules) {
+      const keyword = (rule.keyword || "").toLowerCase();
+      if (keyword && (senderLower.includes(keyword) || subjectLower.includes(keyword))) {
+        urgency = rule.urgency || "high";
+        console.log(`${LOG} Rule matched: "${rule.keyword}" → urgency=${urgency}`);
+        break;
+      }
+    }
+  }
+
   // Optionally use the agent to provide a brief summary
   if (agentModule && agentModule.isAvailable() && email.preview) {
     try {
@@ -180,11 +196,15 @@ async function processNotification(notification) {
     }
   }
 
-  // Send the Rainbow notification
+  if (urgency === "high") {
+    messageText = `🔴 URGENT — ${messageText}`;
+  }
+
+  // Send the Rainbow notification with urgency
   if (sendRainbowMessage) {
     try {
-      await sendRainbowMessage(userId, messageText);
-      console.log(`${LOG} Notification sent to user ${userId}: "${subject}"`);
+      await sendRainbowMessage(userId, messageText, urgency);
+      console.log(`${LOG} Notification sent to user ${userId}: "${subject}" (urgency=${urgency})`);
     } catch (err) {
       console.error(`${LOG} Failed to send Rainbow notification to ${userId}:`, err.message);
     }
@@ -643,11 +663,58 @@ function stop() {
   }
 }
 
+// ══════════════════════════════════════════════════════════
+// NOTIFICATION RULES — user-defined urgency rules
+// ══════════════════════════════════════════════════════════
+
+/**
+ * Add a notification rule for a user.
+ * Rule: { keyword: "Yann", urgency: "high" }
+ * When an email matches the keyword (sender or subject), urgency is set.
+ */
+async function addNotificationRule(userId, keyword, urgency = "high") {
+  if (!redisClient) return false;
+  const rules = await getNotificationRules(userId);
+  // Avoid duplicates
+  if (rules.some(r => r.keyword.toLowerCase() === keyword.toLowerCase())) {
+    return false;
+  }
+  rules.push({ keyword, urgency, createdAt: new Date().toISOString() });
+  await redisClient.set(`email_rules:${userId}`, JSON.stringify(rules));
+  console.log(`${LOG} Rule added for ${userId}: "${keyword}" → ${urgency}`);
+  return true;
+}
+
+async function removeNotificationRule(userId, keyword) {
+  if (!redisClient) return false;
+  const rules = await getNotificationRules(userId);
+  const filtered = rules.filter(r => r.keyword.toLowerCase() !== keyword.toLowerCase());
+  if (filtered.length === rules.length) return false;
+  await redisClient.set(`email_rules:${userId}`, JSON.stringify(filtered));
+  console.log(`${LOG} Rule removed for ${userId}: "${keyword}"`);
+  return true;
+}
+
+async function getNotificationRules(userId) {
+  if (!redisClient) return [];
+  try {
+    const raw = await redisClient.get(`email_rules:${userId}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+async function listNotificationRules(userId) {
+  return getNotificationRules(userId);
+}
+
 module.exports = {
   init,
   createSubscription,
   renewSubscription,
   deleteSubscription,
   onAccountLinked,
+  addNotificationRule,
+  removeNotificationRule,
+  listNotificationRules,
   stop,
 };
