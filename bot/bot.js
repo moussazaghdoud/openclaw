@@ -2137,6 +2137,9 @@ async function processFileFromCallback(msg, convId, fromUserId, isGroup) {
     : `📎 I see **${fileInfo.filename}** was shared, but I couldn't download it. Try pasting the content directly.`;
 
   let sent = false;
+  console.log(`${LOG} File confirmation: convId=${convId}, fromUserId=${fromUserId}, s2s=${!!s2sConnectionId}`);
+
+  // Method 1: S2S REST with conversation_id
   if (convId && s2sConnectionId && authToken) {
     try {
       const host = rainbowHost || "openrainbow.com";
@@ -2146,16 +2149,20 @@ async function processFileFromCallback(msg, convId, fromUserId, isGroup) {
         body: JSON.stringify({ message: { body: confirmMsg, lang: "en" } }),
       });
       sent = resp.ok;
-      if (sent) console.log(`${LOG} File confirmation sent to conv ${convId}`);
-      else console.warn(`${LOG} File confirmation REST failed: ${resp.status}`);
+      if (sent) console.log(`${LOG} File confirmation sent via REST conv ${convId}`);
+      else console.warn(`${LOG} File confirmation REST failed: ${resp.status} ${await resp.text().catch(() => "")}`);
     } catch (e) {
       console.warn(`${LOG} File confirmation REST error:`, e.message);
     }
   }
-  // SDK fallback
-  if (!sent && sdk) {
+
+  // Method 2: SDK — try by user ID first, then by JID
+  if (!sent && sdk && fromUserId) {
     try {
-      const contact = await sdk.contacts.getContactByJid(fromUserId);
+      let contact = null;
+      // fromUserId might be a user ID or a JID — try both
+      try { contact = await sdk.contacts.getContactById(fromUserId); } catch {}
+      if (!contact) { try { contact = await sdk.contacts.getContactByJid(fromUserId); } catch {} }
       if (contact) {
         const conv = await sdk.conversations.openConversationForContact(contact);
         if (conv) {
@@ -2166,7 +2173,7 @@ async function processFileFromCallback(msg, convId, fromUserId, isGroup) {
       }
     } catch (e) { console.warn(`${LOG} File confirmation SDK failed:`, e.message); }
   }
-  if (!sent) console.warn(`${LOG} Could not send file confirmation for ${fileInfo.filename}`);
+  if (!sent) console.warn(`${LOG} Could not send file confirmation for ${fileInfo.filename} (convId=${convId}, userId=${fromUserId})`);
 }
 
 // ── Create Express app for S2S callbacks ────────────────
