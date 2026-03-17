@@ -3734,6 +3734,7 @@ async function start() {
       const useAgent = agent && agent.isAvailable() && (
         /\b(emails?|mails?|inbox|unread|outlook|sender|draft|reply|forward|archive|flag|sent|received|wrote)\b/i.test(content) ||
         /\b(meetings?|calendar|schedule|agenda|appointments?|events?|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|this\s+week|next\s+week|free\s+slots?|busy|available)\b/i.test(content) ||
+        /\b(search|google|look\s*up|find\s+out|what('?s| is)\s+(the\s+)?latest|news|stock|weather|price)\b/i.test(content) ||
         /^(and\s+)?(after|next|then)\b/i.test(content)
       );
 

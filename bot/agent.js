@@ -209,6 +209,22 @@ function getTools() {
     });
   }
 
+  // Web search — always available when TAVILY_API_KEY is set
+  if (process.env.TAVILY_API_KEY) {
+    tools.push({
+      name: "web_search",
+      description: "Search the internet for real-time information. Use for news, company info, market data, product updates, or any question requiring up-to-date information beyond your training data.",
+      input_schema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query" },
+          max_results: { type: "number", description: "Max results (default 5, max 10)" },
+        },
+        required: ["query"],
+      },
+    });
+  }
+
   tools.push({
     name: "update_memory",
     description: "Update working memory with a resolved entity, topic, or reference. Call this whenever you discover new facts (e.g. 'Jack' = 'CHEN Jack Lixin', email = 'jack.chen@company.com').",
@@ -376,6 +392,38 @@ async function executeTool(toolName, input, userId, memory) {
           isOnlineMeeting: event.isOnlineMeeting,
           onlineMeetingUrl: event.onlineMeetingUrl,
         };
+      }
+
+      // ── Web Search Tool ─────────────────────────────
+      case "web_search": {
+        const TAVILY_KEY = process.env.TAVILY_API_KEY;
+        if (!TAVILY_KEY) return { error: "Web search not configured." };
+        try {
+          const resp = await fetch("https://api.tavily.com/search", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              api_key: TAVILY_KEY,
+              query: input.query,
+              max_results: Math.min(input.max_results || 5, 10),
+              include_answer: true,
+              search_depth: "basic",
+            }),
+            signal: AbortSignal.timeout(10000),
+          });
+          if (!resp.ok) return { error: `Search failed (${resp.status})` };
+          const data = await resp.json();
+          return {
+            answer: data.answer || null,
+            results: (data.results || []).map(r => ({
+              title: r.title,
+              url: r.url,
+              content: (r.content || "").substring(0, 300),
+            })),
+          };
+        } catch (e) {
+          return { error: `Search error: ${e.message}` };
+        }
       }
 
       // ── Working Memory Tool ──────────────────────────
