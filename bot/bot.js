@@ -192,14 +192,15 @@ async function initRedis() {
           console.log(`${LOG} Proactive send to ${userJid} (urgency=${urgency}): ${text.substring(0, 80)}`);
           const msgPayload = { body: text, lang: "en" };
           if (urgency && urgency !== "std") msgPayload.urgency = urgency;
-          // Try SDK: find contact by JID, open conversation, send
+          // Try SDK with full signature: sendMessageToConversation(conversation, message, lang, content, subject, urgency)
           try {
             const contact = await sdk.contacts.getContactByJid(userJid);
             if (contact) {
               const conv = await sdk.conversations.openConversationForContact(contact);
               if (conv) {
-                await sdk.im.sendMessageToConversation(conv, text);
-                console.log(`${LOG} Proactive send OK via SDK`);
+                const urg = (urgency && urgency !== "std") ? urgency : null;
+                await sdk.im.sendMessageToConversation(conv, text, "en", null, null, urg);
+                console.log(`${LOG} Proactive send OK via SDK (urgency=${urg})`);
                 return;
               }
             }
