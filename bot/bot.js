@@ -3260,24 +3260,36 @@ async function start() {
         await addMessage(fHistoryKey, "user", `[${fromName} shared a file]\n${fileContext}`);
 
         // Send confirmation to user
+        const fileSize = fileInfo.size ? ` (${Math.round(fileInfo.size / 1024)}KB)` : "";
         const confirmMsg = downloaded
-          ? `📎 Got it — **${fileInfo.filename}** received and ready. You can ask me about it.`
+          ? `📎 **${fileInfo.filename}**${fileSize} received and ready.\n\nYou can now ask me to:\n- Translate it\n- Summarize it\n- Anonymize it\n- Or ask any question about its content`
           : `📎 I see **${fileInfo.filename}** was shared, but I couldn't download it. Try sending a text file (.txt, .csv, .json) or paste the content directly.`;
 
-        // Send confirmation via S2S REST (quick, no need to resolve full conversation)
+        // Send confirmation via S2S REST + SDK fallback
         const confirmConvId = rawCb?.conversation_id || conversationId;
+        let confirmSent = false;
         if (confirmConvId && s2sConnectionId && authToken) {
           try {
             const host = rainbowHost || "openrainbow.com";
-            await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${confirmConvId}/messages`, {
+            const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${confirmConvId}/messages`, {
               method: "POST",
               headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
               body: JSON.stringify({ message: { body: confirmMsg, lang: "en" } }),
             });
+            confirmSent = resp.ok;
           } catch (e) {
-            console.warn(`${LOG} Failed to send file confirmation:`, e.message);
+            console.warn(`${LOG} S2S file confirmation failed:`, e.message);
           }
         }
+        if (!confirmSent && conversation) {
+          try {
+            await sdk.im.sendMessageToConversation(conversation, confirmMsg);
+            confirmSent = true;
+          } catch (e) {
+            console.warn(`${LOG} SDK file confirmation failed:`, e.message);
+          }
+        }
+        if (!confirmSent) console.warn(`${LOG} Could not send file confirmation to ${fromJid}`);
 
         // File received — just acknowledge, don't call AI until user asks
         console.log(`${LOG} File stored in history for ${fHistoryKey}, awaiting user question`);
