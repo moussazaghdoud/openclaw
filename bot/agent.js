@@ -31,6 +31,7 @@ let gmailAuthModule = null;
 let gmailApiModule = null;
 let calendarGoogleModule = null;
 let redisClient = null;
+let salesAgentModule = null;
 
 function init(deps) {
   graphModule = deps.graph || null;
@@ -40,11 +41,12 @@ function init(deps) {
   gmailApiModule = deps.gmailApi || null;
   calendarGoogleModule = deps.calendarGoogle || null;
   redisClient = deps.redis || null;
-  console.log(`${LOG} Initialized (email: ${!!graphModule}, calendar: ${!!calendarGraphModule}, anthropic: ${!!ANTHROPIC_API_KEY})`);
+  salesAgentModule = deps.salesAgent || null;
+  console.log(`${LOG} Initialized (email: ${!!graphModule}, calendar: ${!!calendarGraphModule}, sales: ${!!salesAgentModule}, anthropic: ${!!ANTHROPIC_API_KEY})`);
 }
 
 function isAvailable() {
-  return !!(ANTHROPIC_API_KEY && (graphModule || calendarGraphModule));
+  return !!(ANTHROPIC_API_KEY && (graphModule || calendarGraphModule || (salesAgentModule && salesAgentModule.isAvailable())));
 }
 
 // ══════════════════════════════════════════════════════════
@@ -253,6 +255,12 @@ function getTools() {
       required: ["entity_name", "resolved_value", "type"],
     },
   });
+
+  // ── Sales Pipeline Tools (from sales-agent module) ────
+  if (salesAgentModule && salesAgentModule.isAvailable()) {
+    const salesTools = salesAgentModule.getToolDefinitions();
+    tools.push(...salesTools);
+  }
 
   return tools;
 }
@@ -477,6 +485,21 @@ async function executeTool(toolName, input, userId, memory) {
         return { success: true, message: `Stored: "${input.entity_name}" = ${input.resolved_value}` };
       }
 
+      // ── Sales Pipeline Tools ──────────────────────────
+      case "analyze_pipeline":
+      case "get_deal_risks":
+      case "get_stale_deals":
+      case "get_missing_next_steps":
+      case "get_pipeline_summary":
+      case "get_deal_details":
+      case "get_ghost_deals":
+      case "get_deals_by_owner": {
+        if (!salesAgentModule || !salesAgentModule.isAvailable()) {
+          return { error: "Sales module not available. Salesforce may not be configured." };
+        }
+        return salesAgentModule.executeTool(toolName, input, userId);
+      }
+
       default:
         return { error: `Unknown tool: ${toolName}` };
     }
@@ -536,7 +559,8 @@ async function run(userId, userMessage, conversationHistory = [], onProgress = n
     dateRef.push(`${d.toLocaleDateString("en-US", { weekday: "long" })} = ${d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}${label ? ` (${label})` : ""}`);
   }
 
-  const systemPrompt = `You are an executive AI assistant with access to email and calendar tools. Today is ${today}.
+  const hasSalesTools = salesAgentModule && salesAgentModule.isAvailable();
+  const systemPrompt = `You are an executive AI assistant with access to email, calendar${hasSalesTools ? ", and sales pipeline" : ""} tools. Today is ${today}.
 
 DATE REFERENCE (use these, NEVER calculate dates yourself):
 ${dateRef.join("\n")}
@@ -579,7 +603,15 @@ Response style:
 - Lead with the answer, then supporting details
 - Use numbered lists for multiple items
 - Reference specific emails/meetings by subject and date
-
+${hasSalesTools ? `
+Sales pipeline tools:
+- You have access to sales pipeline analysis tools (analyze_pipeline, get_deal_risks, get_stale_deals, get_missing_next_steps, get_pipeline_summary, get_deal_details, get_ghost_deals, get_deals_by_owner)
+- Use these when users ask about pipeline health, deals at risk, stale deals, next steps, ghost deals, or sales performance
+- Always present risk levels clearly: 🔴 High, 🟡 Medium, 🟢 Low
+- For deal amounts, use compact notation ($50K, $1.2M)
+- Prioritize actionable insights over raw data
+- When presenting deals at risk, explain WHY each deal is at risk and recommend specific next actions
+` : ""}
 ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryContext}\n` : ""}`;
 
   // Build messages — ONLY the current user message
@@ -674,6 +706,15 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
           read_event: "Reading meeting details...",
           send_email: "Sending email...",
           update_memory: null, // silent
+          // Sales tools
+          analyze_pipeline: "Analyzing pipeline...",
+          get_deal_risks: "Checking deal risks...",
+          get_stale_deals: "Finding stale deals...",
+          get_missing_next_steps: "Checking next steps...",
+          get_pipeline_summary: "Building pipeline summary...",
+          get_deal_details: "Looking up deal details...",
+          get_ghost_deals: "Detecting ghost deals...",
+          get_deals_by_owner: "Analyzing rep performance...",
         };
         const updates = toolNames.map(n => progressMap[n]).filter(Boolean);
         if (updates.length > 0) {

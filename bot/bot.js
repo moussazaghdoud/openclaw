@@ -49,6 +49,8 @@ let enterprise;
 try { enterprise = require("./enterprise"); console.log("[OpenClawBot] Enterprise module loaded OK"); } catch (e) { enterprise = null; console.warn("[OpenClawBot] Enterprise module failed to load:", e.message); }
 let agent;
 try { agent = require("./agent"); console.log("[OpenClawBot] Agent module loaded OK"); } catch (e) { agent = null; console.warn("[OpenClawBot] Agent module failed to load:", e.message); }
+let salesAgent;
+try { salesAgent = require("./sales-agent"); console.log("[OpenClawBot] Sales agent module loaded OK"); } catch (e) { salesAgent = null; console.warn("[OpenClawBot] Sales agent module failed to load:", e.message); }
 let emailWebhook;
 try { emailWebhook = require("./email-webhook"); console.log("[OpenClawBot] Email webhook module loaded OK"); } catch (e) { emailWebhook = null; console.warn("[OpenClawBot] Email webhook module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
@@ -174,11 +176,16 @@ async function initRedis() {
       enterprise.init(redis, { m365Auth, sfAuth });
       console.log(`${LOG} Enterprise module initialized`);
     }
+    if (salesAgent && sfAuth && sfApi) {
+      salesAgent.init({ sfAuth, sfApi, redis });
+      console.log(`${LOG} Sales agent module initialized (available: ${salesAgent.isAvailable()})`);
+    }
     if (agent) {
       agent.init({
         graph: m365Graph, calendarGraph, m365Auth,
         gmailAuth, gmailApi: gmailApi, calendarGoogle,
         redis,
+        salesAgent: salesAgent || null,
       });
       console.log(`${LOG} Agent module initialized (available: ${agent.isAvailable()})`);
     }
@@ -3817,7 +3824,8 @@ async function start() {
         /\b(emails?|mails?|inbox|unread|outlook|sender|draft|reply|forward|archive|flag|sent|received|wrote|urgent|priority|notification|rule|alert)\b/i.test(content) ||
         /\b(meetings?|calendar|schedule|agenda|appointments?|events?|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|this\s+week|next\s+week|free\s+slots?|busy|available)\b/i.test(content) ||
         /\b(search|google|look\s*up|find\s+out|what('?s| is)\s+(the\s+)?latest|news|stock|weather|price)\b/i.test(content) ||
-        /^(and\s+)?(after|next|then)\b/i.test(content)
+        /^(and\s+)?(after|next|then)\b/i.test(content) ||
+        (salesAgent && salesAgent.isAvailable() && /\b(pipeline|deal[s ]?risk|stale.?deal|at.?risk|ghost.?deal|next.?step|pipeline.?health|pipeline.?summary|sales.?report|forecast|deal.?review|pipeline.?review|win.?rate|deal.?stuck|no.?activity|follow.?up.?miss|missing.?next|pipeline.?coverage|quota|sales.?performance|deal.?slip|close.?date|pipeline.?discipline|fake.?pipeline)\b/i.test(content))
       );
 
       lastMessageDebug = {
