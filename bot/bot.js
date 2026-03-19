@@ -425,9 +425,26 @@ function formatForRainbow(text) {
 /**
  * Build Rainbow S2S message payload with both plain text and HTML.
  */
+function stripMarkdown(text) {
+  if (!text) return "";
+  return text
+    // Headers: ## text → text (keep the text, remove #)
+    .replace(/^#{1,3}\s+/gm, "")
+    // Bold: **text** → text
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    // Italic: *text* → text
+    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "$1")
+    // Inline code: `text` → text
+    .replace(/`([^`]+)`/g, "$1")
+    // Horizontal rules: --- → ────
+    .replace(/^[-*_]{3,}$/gm, "────────────────────────")
+    // Keep bullets and numbered lists as-is (they look fine in plain text)
+    .trim();
+}
+
 function buildMessage(text) {
-  const { body, content } = formatForRainbow(text);
-  return { message: { body, content, content_type: "text/html", lang: "en" } };
+  const cleanBody = stripMarkdown(text);
+  return { message: { body: cleanBody, lang: "en" } };
 }
 
 /**
