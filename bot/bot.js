@@ -3892,12 +3892,14 @@ async function start() {
           };
           responseText = await agent.run(fromJid, content, history, sendProgress);
           console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
-          // Capture final result for sales dashboard + append link
-          // Check if dashboard has raw data (means a sales tool was used in this run)
+          // Capture final result for sales dashboard + append unique link
           if (salesDashboard && responseText && salesDashboard.hasNewData()) {
+            const sessionId = salesDashboard.getCurrentSessionId();
             salesDashboard.captureResult(fromJid, responseText);
-            const dashboardUrl = `${config.hostCallback}/sales/dashboard`;
-            responseText += `\n\nView full report: ${dashboardUrl}`;
+            if (sessionId) {
+              const dashboardUrl = `${config.hostCallback}/sales/dashboard/${sessionId}`;
+              responseText += `\n\nView full report: ${dashboardUrl}`;
+            }
           }
         } catch (agentErr) {
           console.error(`${LOG} Agent crashed:`, agentErr.message);

@@ -10,74 +10,117 @@
  * to demonstrate PII protection transparently.
  */
 
+const crypto = require("crypto");
 const LOG = "[Sales-Dashboard]";
 
 let piiModule = null;
 let redisClient = null;
 
-// Last captured stages (in-memory, one per user — latest wins)
-const stages = {
-  raw: null,          // { timestamp, userId, query, data }
-  anonymized: null,   // { timestamp, userId, data, mapping }
-  result: null,       // { timestamp, userId, response }
-};
+// Store multiple sessions, keyed by unique session ID
+// Each session: { id, raw, anonymized, result }
+const sessions = new Map();
+const MAX_SESSIONS = 50; // keep last 50 sessions
+
+// Current session being built (set during a tool execution)
+let currentSessionId = null;
 
 function init(app, deps) {
   piiModule = deps.pii || null;
   redisClient = deps.redis || null;
 
-  // Register Express routes
-  app.get("/sales/raw", (req, res) => res.send(renderPage("raw")));
-  app.get("/sales/anonymized", (req, res) => res.send(renderPage("anonymized")));
-  app.get("/sales/result", (req, res) => res.send(renderPage("result")));
-  app.get("/sales/dashboard", (req, res) => res.send(renderDashboard()));
-  // API endpoint for auto-refresh
-  app.get("/api/sales/stages", (req, res) => res.json(stages));
+  // Session-specific routes: /sales/dashboard/:id, /sales/raw/:id, etc.
+  app.get("/sales/dashboard/:id", (req, res) => {
+    const session = sessions.get(req.params.id);
+    if (!session) return res.status(404).send(renderNotFound());
+    res.send(renderDashboard(session));
+  });
+  app.get("/sales/raw/:id", (req, res) => {
+    const session = sessions.get(req.params.id);
+    if (!session) return res.status(404).send(renderNotFound());
+    res.send(renderPage("raw", session));
+  });
+  app.get("/sales/anonymized/:id", (req, res) => {
+    const session = sessions.get(req.params.id);
+    if (!session) return res.status(404).send(renderNotFound());
+    res.send(renderPage("anonymized", session));
+  });
+  app.get("/sales/result/:id", (req, res) => {
+    const session = sessions.get(req.params.id);
+    if (!session) return res.status(404).send(renderNotFound());
+    res.send(renderPage("result", session));
+  });
+  // List all sessions
+  app.get("/sales/history", (req, res) => res.send(renderHistory()));
 
-  console.log(`${LOG} Dashboard routes registered (/sales/raw, /sales/anonymized, /sales/result, /sales/dashboard)`);
+  console.log(`${LOG} Dashboard routes registered (/sales/dashboard/:id, /sales/history)`);
 }
 
 // ══════════════════════════════════════════════════════════
 // DATA CAPTURE
 // ══════════════════════════════════════════════════════════
 
-// Track whether new data was captured during the current agent run
 let newDataFlag = false;
 
 function hasNewData() {
   const had = newDataFlag;
-  newDataFlag = false; // reset after check
+  newDataFlag = false;
   return had;
 }
 
+/**
+ * Get the current session ID (returns the URL path for the dashboard link).
+ */
+function getCurrentSessionId() {
+  return currentSessionId;
+}
+
 function captureRaw(userId, query, data) {
-  stages.raw = {
-    timestamp: new Date().toISOString(),
+  // Create a new session for each tool execution
+  const id = crypto.randomBytes(6).toString("hex");
+  currentSessionId = id;
+
+  const session = {
+    id,
+    createdAt: new Date().toISOString(),
     userId,
     query,
-    data,
+    raw: { timestamp: new Date().toISOString(), userId, query, data },
+    anonymized: null,
+    result: null,
   };
+  sessions.set(id, session);
   newDataFlag = true;
-  console.log(`${LOG} Captured RAW stage (${typeof data === "object" ? JSON.stringify(data).length : 0} bytes)`);
+
+  // Prune old sessions
+  if (sessions.size > MAX_SESSIONS) {
+    const oldest = sessions.keys().next().value;
+    sessions.delete(oldest);
+  }
+
+  console.log(`${LOG} Captured RAW stage — session ${id}`);
 }
 
 function captureAnonymized(userId, data, mapping) {
-  stages.anonymized = {
+  if (!currentSessionId || !sessions.has(currentSessionId)) return;
+  const session = sessions.get(currentSessionId);
+  session.anonymized = {
     timestamp: new Date().toISOString(),
     userId,
     data,
     mapping,
   };
-  console.log(`${LOG} Captured ANONYMIZED stage (${Object.keys(mapping || {}).length} replacements)`);
+  console.log(`${LOG} Captured ANONYMIZED stage — session ${currentSessionId} (${Object.keys(mapping || {}).length} replacements)`);
 }
 
 function captureResult(userId, response) {
-  stages.result = {
+  if (!currentSessionId || !sessions.has(currentSessionId)) return;
+  const session = sessions.get(currentSessionId);
+  session.result = {
     timestamp: new Date().toISOString(),
     userId,
     response,
   };
-  console.log(`${LOG} Captured RESULT stage (${(response || "").length} chars)`);
+  console.log(`${LOG} Captured RESULT stage — session ${currentSessionId}`);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -224,12 +267,14 @@ const CSS = `
   .auto-refresh { font-size: 11px; color: #94a3b8; }
 `;
 
-function renderNav(activePage) {
+function renderNav(activePage, sessionId) {
+  const s = sessionId ? `/${sessionId}` : "";
   const pages = [
-    { id: "dashboard", url: "/sales/dashboard", label: "Dashboard Overview" },
-    { id: "raw", url: "/sales/raw", label: "Step 1: Raw Salesforce Data" },
-    { id: "anonymized", url: "/sales/anonymized", label: "Step 2: Anonymized Data" },
-    { id: "result", url: "/sales/result", label: "Step 3: Final Result" },
+    { id: "dashboard", url: `/sales/dashboard${s}`, label: "Dashboard Overview" },
+    { id: "raw", url: `/sales/raw${s}`, label: "Step 1: Raw Salesforce Data" },
+    { id: "anonymized", url: `/sales/anonymized${s}`, label: "Step 2: Anonymized Data" },
+    { id: "result", url: `/sales/result${s}`, label: "Step 3: Final Result" },
+    { id: "history", url: "/sales/history", label: "All Reports" },
   ];
   return `<div class="nav">${pages.map(p =>
     `<a href="${p.url}" class="${p.id === activePage ? 'active' : ''}">${p.label}</a>`
@@ -261,12 +306,12 @@ function escHtml(str) {
   return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-function renderPage(page) {
-  const stage = stages[page];
+function renderPage(page, session) {
+  const stage = session[page];
   let body = "";
 
   if (!stage) {
-    body = `<div class="empty"><h3>No data yet</h3><p>Ask the bot "pipeline health" on Rainbow to trigger the analysis.</p><p class="auto-refresh">This page auto-refreshes every 5 seconds.</p></div>`;
+    body = `<div class="empty"><h3>Data not yet available for this step</h3><p>This step hasn't completed yet. The page auto-refreshes every 5 seconds.</p></div>`;
   } else if (page === "raw") {
     body = renderRawPage(stage);
   } else if (page === "anonymized") {
@@ -276,13 +321,14 @@ function renderPage(page) {
   }
 
   const stepNum = page === "raw" ? 1 : page === "anonymized" ? 2 : 3;
+  const title = page === "raw" ? "Raw Data" : page === "anonymized" ? "Anonymized" : "Result";
 
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sales Pipeline — ${page === "raw" ? "Raw Data" : page === "anonymized" ? "Anonymized" : "Result"}</title>
-<meta http-equiv="refresh" content="5">
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sales Pipeline — ${title}</title>
+${!stage ? '<meta http-equiv="refresh" content="5">' : ''}
 <style>${CSS}</style></head><body>
 <div class="header"><h1>Sales Pipeline — PII Protection Visualization</h1>
-<div class="subtitle">Demonstrating how sensitive sales data is protected before reaching AI</div></div>
-${renderNav(page)}
+<div class="subtitle">Query: "${escHtml(session.query)}" — Session: ${session.id} — ${session.createdAt}</div></div>
+${renderNav(page, session.id)}
 <div class="container">
 ${renderStepIndicator(stepNum)}
 ${body}
@@ -408,22 +454,24 @@ Placeholders like [ACCOUNT_1] have been replaced back with real names before sen
   return html;
 }
 
-function renderDashboard() {
-  const rawReady = !!stages.raw;
-  const anonReady = !!stages.anonymized;
-  const resultReady = !!stages.result;
+function renderDashboard(session) {
+  const rawReady = !!session.raw;
+  const anonReady = !!session.anonymized;
+  const resultReady = !!session.result;
+  const id = session.id;
+  const needsRefresh = !resultReady;
 
   let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sales Pipeline — Dashboard</title>
-<meta http-equiv="refresh" content="5">
+${needsRefresh ? '<meta http-equiv="refresh" content="5">' : ''}
 <style>${CSS}</style></head><body>
 <div class="header"><h1>Sales Pipeline — PII Protection Dashboard</h1>
-<div class="subtitle">Real-time visualization of the data anonymization process</div></div>
-${renderNav("dashboard")}
+<div class="subtitle">Query: "${escHtml(session.query)}" — Session: ${id} — ${session.createdAt}</div></div>
+${renderNav("dashboard", id)}
 <div class="container">
 
 <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:24px">
 
-<a href="/sales/raw" style="text-decoration:none">
+<a href="/sales/raw/${id}" style="text-decoration:none">
 <div class="card" style="border-left:4px solid ${rawReady ? '#dc2626' : '#e2e8f0'}">
 <div class="card-body" style="text-align:center;padding:30px">
 <div class="step ${rawReady ? 'step-done' : 'step-pending'}" style="margin:0 auto 12px;width:48px;height:48px;font-size:20px">1</div>
@@ -432,7 +480,7 @@ ${renderNav("dashboard")}
 ${rawReady ? `<span class="badge badge-red" style="margin-top:8px">SENSITIVE</span>` : ''}
 </div></div></a>
 
-<a href="/sales/anonymized" style="text-decoration:none">
+<a href="/sales/anonymized/${id}" style="text-decoration:none">
 <div class="card" style="border-left:4px solid ${anonReady ? '#22c55e' : '#e2e8f0'}">
 <div class="card-body" style="text-align:center;padding:30px">
 <div class="step ${anonReady ? 'step-done' : 'step-pending'}" style="margin:0 auto 12px;width:48px;height:48px;font-size:20px">2</div>
@@ -441,7 +489,7 @@ ${rawReady ? `<span class="badge badge-red" style="margin-top:8px">SENSITIVE</sp
 ${anonReady ? `<span class="badge badge-green" style="margin-top:8px">PII REMOVED</span>` : ''}
 </div></div></a>
 
-<a href="/sales/result" style="text-decoration:none">
+<a href="/sales/result/${id}" style="text-decoration:none">
 <div class="card" style="border-left:4px solid ${resultReady ? '#3b82f6' : '#e2e8f0'}">
 <div class="card-body" style="text-align:center;padding:30px">
 <div class="step ${resultReady ? 'step-done' : 'step-pending'}" style="margin:0 auto 12px;width:48px;height:48px;font-size:20px">3</div>
@@ -454,19 +502,59 @@ ${resultReady ? `<span class="badge badge-blue" style="margin-top:8px">DEANONYMI
 
 <div class="card"><div class="card-header"><h2>How it works</h2></div>
 <div class="card-body" style="font-size:13px;line-height:1.8;color:#475569">
-<p><strong>Step 1:</strong> User asks "pipeline health" on Rainbow. The bot fetches all open opportunities from Salesforce via REST API. This raw data contains real company names, deal names, and sales rep names.</p>
+<p><strong>Step 1:</strong> User asks "${escHtml(session.query)}" on Rainbow. The bot fetches data from Salesforce via REST API. This raw data contains real company names, deal names, and sales rep names.</p>
 <p style="margin-top:8px"><strong>Step 2:</strong> Before sending to Claude AI, all sensitive fields are anonymized: account names become [ACCOUNT_1], people become [PERSON_1], deals become [DEAL_1]. The AI only sees placeholders — never real data.</p>
-<p style="margin-top:8px"><strong>Step 3:</strong> Claude analyzes the anonymized data and produces insights (risk scores, recommendations). The bot then deanonymizes the response — replacing [ACCOUNT_1] back with the real company name — and sends the final answer to the user on Rainbow.</p>
-</div></div>
-
-<div class="card"><div class="card-body" style="text-align:center;color:#94a3b8;font-size:12px">
-Ask the bot <strong>"pipeline health"</strong> on Rainbow to see the full flow.
-<br>Pages auto-refresh every 5 seconds.
+<p style="margin-top:8px"><strong>Step 3:</strong> Claude analyzes the anonymized data and produces insights. The bot then deanonymizes the response — replacing placeholders back with real names — and sends the final answer to the user on Rainbow.</p>
 </div></div>
 
 </div></body></html>`;
 
   return html;
+}
+
+function renderHistory() {
+  const allSessions = [...sessions.values()].reverse(); // newest first
+
+  let rows = "";
+  for (const s of allSessions) {
+    const status = s.result ? "Complete" : s.anonymized ? "Processing" : "Started";
+    const statusBadge = s.result ? "badge-green" : s.anonymized ? "badge-yellow" : "badge-blue";
+    rows += `<tr>
+      <td><a href="/sales/dashboard/${s.id}" style="color:#3b82f6;font-weight:600">${s.id}</a></td>
+      <td>${escHtml(s.query)}</td>
+      <td>${s.createdAt}</td>
+      <td><span class="badge ${statusBadge}">${status}</span></td>
+      <td>
+        <a href="/sales/raw/${s.id}" style="color:#dc2626;font-size:12px;margin-right:8px">Raw</a>
+        <a href="/sales/anonymized/${s.id}" style="color:#22c55e;font-size:12px;margin-right:8px">Anonymized</a>
+        <a href="/sales/result/${s.id}" style="color:#3b82f6;font-size:12px">Result</a>
+      </td>
+    </tr>`;
+  }
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sales Pipeline — Report History</title>
+<style>${CSS}</style></head><body>
+<div class="header"><h1>Sales Pipeline — Report History</h1>
+<div class="subtitle">All pipeline analysis reports (${allSessions.length} total)</div></div>
+${renderNav("history", null)}
+<div class="container">
+<div class="card"><div class="card-body">
+${allSessions.length === 0
+  ? '<div class="empty"><h3>No reports yet</h3><p>Ask the bot a sales question on Rainbow to generate a report.</p></div>'
+  : `<table><thead><tr><th>Session</th><th>Query</th><th>Time</th><th>Status</th><th>View</th></tr></thead><tbody>${rows}</tbody></table>`
+}
+</div></div>
+</div></body></html>`;
+}
+
+function renderNotFound() {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Not Found</title>
+<style>${CSS}</style></head><body>
+<div class="header"><h1>Sales Pipeline Dashboard</h1></div>
+${renderNav("", null)}
+<div class="container"><div class="empty"><h3>Session not found</h3>
+<p>This report may have expired. <a href="/sales/history" style="color:#3b82f6">View all reports</a></p>
+</div></div></body></html>`;
 }
 
 module.exports = {
@@ -476,4 +564,5 @@ module.exports = {
   captureResult,
   anonymizeSalesData,
   hasNewData,
+  getCurrentSessionId,
 };
