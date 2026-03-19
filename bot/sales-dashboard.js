@@ -324,7 +324,6 @@ function renderPage(page, session) {
   const title = page === "raw" ? "Raw Data" : page === "anonymized" ? "Anonymized" : "Result";
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sales Pipeline — ${title}</title>
-${!stage ? '<meta http-equiv="refresh" content="5">' : ''}
 <style>${CSS}</style></head><body>
 <div class="header"><h1>Sales Pipeline — PII Protection Visualization</h1>
 <div class="subtitle">Query: "${escHtml(session.query)}" — Session: ${session.id} — ${session.createdAt}</div></div>
@@ -462,7 +461,6 @@ function renderDashboard(session) {
   const needsRefresh = !resultReady;
 
   let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sales Pipeline — Dashboard</title>
-${needsRefresh ? '<meta http-equiv="refresh" content="5">' : ''}
 <style>${CSS}</style></head><body>
 <div class="header"><h1>Sales Pipeline — PII Protection Dashboard</h1>
 <div class="subtitle">Query: "${escHtml(session.query)}" — Session: ${id} — ${session.createdAt}</div></div>
