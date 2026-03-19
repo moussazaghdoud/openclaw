@@ -393,14 +393,24 @@ function formatForRainbow(text) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
+    // Headers: ### text → h3, ## text → h2, # text → h1
+    .replace(/^###\s+(.+)$/gm, '<div style="font-size:14px;font-weight:bold;color:#1a73e8;margin:8px 0 4px">$1</div>')
+    .replace(/^##\s+(.+)$/gm, '<div style="font-size:15px;font-weight:bold;color:#1a73e8;margin:10px 0 4px">$1</div>')
+    .replace(/^#\s+(.+)$/gm, '<div style="font-size:16px;font-weight:bold;color:#1a73e8;margin:12px 0 4px">$1</div>')
+    // Horizontal rule: --- or *** or ___
+    .replace(/^[-*_]{3,}$/gm, '<hr style="border:none;border-top:1px solid #dadce0;margin:8px 0">')
     // Bold: **text** → <b style="color:#1a73e8">text</b> (blue for emphasis)
     .replace(/\*\*([^*]+)\*\*/g, '<b style="color:#1a73e8">$1</b>')
     // Italic: *text* → <i>text</i>
     .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<i>$1</i>")
+    // Inline code: `text` → styled span
+    .replace(/`([^`]+)`/g, '<span style="background:#f1f3f4;padding:1px 4px;border-radius:3px;font-family:monospace;font-size:12px">$1</span>')
     // Numbered lists: 1. text → styled line
     .replace(/^(\d+)\.\s+(.+)$/gm, '<div style="margin:2px 0;padding-left:8px"><b style="color:#e8710a">$1.</b> $2</div>')
-    // Bullet lists: - text → styled line
-    .replace(/^[-•]\s+(.+)$/gm, '<div style="margin:2px 0;padding-left:8px">• $1</div>')
+    // Bullet lists: - text or * text → styled line
+    .replace(/^[-•*]\s+(.+)$/gm, '<div style="margin:2px 0;padding-left:8px">• $1</div>')
+    // Indented bullets:   - text → nested
+    .replace(/^  [-•*]\s+(.+)$/gm, '<div style="margin:2px 0;padding-left:20px">◦ $1</div>')
     // Headers-like lines (lines ending with :) → bold colored
     .replace(/^([A-Z][^:\n]{3,50}):$/gm, '<div style="color:#5f6368;font-weight:bold;margin-top:6px">$1:</div>')
     // Line breaks
