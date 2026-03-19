@@ -135,23 +135,31 @@ async function executeTool(toolName, input, userId) {
   const { token, instanceUrl } = tokenData;
 
   try {
+    const result = await executeToolInner(toolName, input, token, instanceUrl, userId);
+
+    // Dashboard: capture every tool result
+    if (dashboard && result && !result.error) {
+      dashboard.captureRaw(userId, toolName, result);
+      const { anonymizedData, mapping } = dashboard.anonymizeSalesData(result);
+      dashboard.captureAnonymized(userId, anonymizedData, mapping);
+      return anonymizedData;
+    }
+
+    return result;
+  } catch (e) {
+    console.error(`${LOG} Tool ${toolName} error:`, e.message);
+    return { error: e.message };
+  }
+}
+
+async function executeToolInner(toolName, input, token, instanceUrl, userId) {
+  try {
     switch (toolName) {
       case "analyze_pipeline": {
         if (input.refresh) await analyzer.invalidateCache(userId);
         const report = await analyzer.analyzePipeline(token, instanceUrl, userId);
         if (!report || report.error) return { error: report?.error || "Analysis failed" };
-        const formatted = templates.formatForAgent(report);
-
-        // Dashboard: capture raw data + anonymize + capture anonymized
-        if (dashboard) {
-          dashboard.captureRaw(userId, "analyze_pipeline", formatted);
-          const { anonymizedData, mapping } = dashboard.anonymizeSalesData(formatted);
-          dashboard.captureAnonymized(userId, anonymizedData, mapping);
-          // Return anonymized data to agent (AI sees placeholders)
-          return anonymizedData;
-        }
-
-        return formatted;
+        return templates.formatForAgent(report);
       }
 
       case "get_deal_risks": {
@@ -181,12 +189,6 @@ async function executeTool(toolName, input, userId) {
           })),
         };
 
-        if (dashboard) {
-          dashboard.captureRaw(userId, "get_deal_risks", result);
-          const { anonymizedData, mapping } = dashboard.anonymizeSalesData(result);
-          dashboard.captureAnonymized(userId, anonymizedData, mapping);
-          return anonymizedData;
-        }
         return result;
       }
 
@@ -239,12 +241,6 @@ async function executeTool(toolName, input, userId) {
         const report = await analyzer.analyzePipeline(token, instanceUrl, userId);
         if (!report || report.error) return { error: report?.error || "Analysis failed" };
 
-        if (dashboard) {
-          dashboard.captureRaw(userId, "get_pipeline_summary", report.summary);
-          const { anonymizedData, mapping } = dashboard.anonymizeSalesData(report.summary);
-          dashboard.captureAnonymized(userId, anonymizedData, mapping);
-          return anonymizedData;
-        }
         return report.summary;
       }
 

@@ -3893,7 +3893,8 @@ async function start() {
           responseText = await agent.run(fromJid, content, history, sendProgress);
           console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
           // Capture final result for sales dashboard + append link
-          if (salesDashboard && responseText && salesAgent && salesAgent.isSalesQuery(content)) {
+          // Check if dashboard has raw data (means a sales tool was used in this run)
+          if (salesDashboard && responseText && salesDashboard.hasNewData()) {
             salesDashboard.captureResult(fromJid, responseText);
             const dashboardUrl = `${config.hostCallback}/sales/dashboard`;
             responseText += `\n\nView full report: ${dashboardUrl}`;

@@ -41,6 +41,15 @@ function init(app, deps) {
 // DATA CAPTURE
 // ══════════════════════════════════════════════════════════
 
+// Track whether new data was captured during the current agent run
+let newDataFlag = false;
+
+function hasNewData() {
+  const had = newDataFlag;
+  newDataFlag = false; // reset after check
+  return had;
+}
+
 function captureRaw(userId, query, data) {
   stages.raw = {
     timestamp: new Date().toISOString(),
@@ -48,6 +57,7 @@ function captureRaw(userId, query, data) {
     query,
     data,
   };
+  newDataFlag = true;
   console.log(`${LOG} Captured RAW stage (${typeof data === "object" ? JSON.stringify(data).length : 0} bytes)`);
 }
 
@@ -465,4 +475,5 @@ module.exports = {
   captureAnonymized,
   captureResult,
   anonymizeSalesData,
+  hasNewData,
 };
