@@ -12,10 +12,10 @@ const LOG = "[Salesforce-Auth]";
 
 // ── Configuration ────────────────────────────────────────
 
-const SF_CLIENT_ID = process.env.SALESFORCE_CLIENT_ID || "";
-const SF_CLIENT_SECRET = process.env.SALESFORCE_CLIENT_SECRET || "";
+const SF_CLIENT_ID = process.env.SALESFORCE_CLIENT_ID || process.env.SF_CLIENT_ID || "";
+const SF_CLIENT_SECRET = process.env.SALESFORCE_CLIENT_SECRET || process.env.SF_CLIENT_SECRET || "";
 const SF_REDIRECT_URI = process.env.SALESFORCE_REDIRECT_URI || "";
-const SF_LOGIN_URL = process.env.SALESFORCE_LOGIN_URL || "https://login.salesforce.com";
+const SF_LOGIN_URL = process.env.SALESFORCE_LOGIN_URL || process.env.SF_LOGIN_URL || "https://login.salesforce.com";
 const ENCRYPTION_KEY_HEX = process.env.M365_TOKEN_ENCRYPTION_KEY || ""; // reuse same key
 
 const TOKEN_TTL = 90 * 24 * 3600; // 90 days
@@ -37,7 +37,52 @@ function init(redis) {
 }
 
 function isConfigured() {
-  return !!(SF_CLIENT_ID && SF_CLIENT_SECRET && SF_REDIRECT_URI);
+  return !!(SF_CLIENT_ID && SF_CLIENT_SECRET);
+}
+
+// Client Credentials flow — no redirect, no per-user auth
+// Shared Salesforce connection for all users
+let ccCachedToken = null;
+let ccTokenExpiresAt = 0;
+
+function isClientCredentialsMode() {
+  return !!(SF_CLIENT_ID && SF_CLIENT_SECRET && !SF_REDIRECT_URI);
+}
+
+async function authenticateClientCredentials() {
+  if (ccCachedToken && Date.now() < ccTokenExpiresAt) {
+    return ccCachedToken;
+  }
+
+  const params = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: SF_CLIENT_ID,
+    client_secret: SF_CLIENT_SECRET,
+  });
+
+  const resp = await fetch(`${SF_LOGIN_URL}/services/oauth2/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    console.error(`${LOG} Client Credentials auth failed (${resp.status}): ${errText.substring(0, 300)}`);
+    ccCachedToken = null;
+    return null;
+  }
+
+  const data = await resp.json();
+  ccCachedToken = {
+    accessToken: data.access_token,
+    instanceUrl: data.instance_url,
+  };
+  // Cache for 55 minutes (tokens last ~60 min)
+  ccTokenExpiresAt = Date.now() + 55 * 60 * 1000;
+  console.log(`${LOG} Client Credentials token obtained (${data.instance_url})`);
+  return ccCachedToken;
 }
 
 // ── Encryption ───────────────────────────────────────────
@@ -187,6 +232,13 @@ async function getStoredTokens(rainbowUserId) {
  * We refresh proactively every 90 minutes.
  */
 async function getValidToken(rainbowUserId) {
+  // Client Credentials mode — shared token, no per-user auth needed
+  if (isClientCredentialsMode()) {
+    const cc = await authenticateClientCredentials();
+    if (!cc) return null;
+    return { token: cc.accessToken, instanceUrl: cc.instanceUrl, email: "shared" };
+  }
+
   const stored = await getStoredTokens(rainbowUserId);
   if (!stored) return null;
 
@@ -242,6 +294,7 @@ async function getValidToken(rainbowUserId) {
 }
 
 async function isLinked(rainbowUserId) {
+  if (isClientCredentialsMode()) return true; // shared connection — always linked
   if (!redisClient) return false;
   const exists = await redisClient.exists(`sf:${rainbowUserId}`);
   return exists === 1;
