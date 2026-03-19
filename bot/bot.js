@@ -51,6 +51,8 @@ let agent;
 try { agent = require("./agent"); console.log("[OpenClawBot] Agent module loaded OK"); } catch (e) { agent = null; console.warn("[OpenClawBot] Agent module failed to load:", e.message); }
 let salesAgent;
 try { salesAgent = require("./sales-agent"); console.log("[OpenClawBot] Sales agent module loaded OK"); } catch (e) { salesAgent = null; console.warn("[OpenClawBot] Sales agent module failed to load:", e.message); }
+let salesDashboard;
+try { salesDashboard = require("./sales-dashboard"); console.log("[OpenClawBot] Sales dashboard module loaded OK"); } catch (e) { salesDashboard = null; console.warn("[OpenClawBot] Sales dashboard module failed to load:", e.message); }
 let emailWebhook;
 try { emailWebhook = require("./email-webhook"); console.log("[OpenClawBot] Email webhook module loaded OK"); } catch (e) { emailWebhook = null; console.warn("[OpenClawBot] Email webhook module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
@@ -2215,6 +2217,11 @@ async function processFileFromCallback(msg, convId, fromUserId, isGroup) {
 const app = express();
 app.use(express.json());
 
+// Initialize sales dashboard routes
+if (salesDashboard) {
+  salesDashboard.init(app, { pii, redis: null }); // redis set later in initRedis
+}
+
 // Store last messages for debug
 const debugMessages = [];
 
@@ -3885,6 +3892,10 @@ async function start() {
           };
           responseText = await agent.run(fromJid, content, history, sendProgress);
           console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
+          // Capture final result for sales dashboard
+          if (salesDashboard && responseText && salesAgent && salesAgent.isSalesQuery(content)) {
+            salesDashboard.captureResult(fromJid, responseText);
+          }
         } catch (agentErr) {
           console.error(`${LOG} Agent crashed:`, agentErr.message);
           responseText = null;

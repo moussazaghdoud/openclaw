@@ -11,6 +11,8 @@
 const analyzer = require("./sales-analyzer");
 const templates = require("./sales-templates");
 const cfg = require("./sales-config");
+let dashboard = null;
+try { dashboard = require("./sales-dashboard"); } catch {}
 const LOG = "[Sales-Tools]";
 
 let sfAuthModule = null;
@@ -22,7 +24,7 @@ function init(deps) {
   sfApiModule = deps.sfApi || null;
   redisClient = deps.redis || null;
   analyzer.init({ sfApi: sfApiModule, redis: redisClient });
-  console.log(`${LOG} Initialized (sfAuth: ${!!sfAuthModule}, sfApi: ${!!sfApiModule})`);
+  console.log(`${LOG} Initialized (sfAuth: ${!!sfAuthModule}, sfApi: ${!!sfApiModule}, dashboard: ${!!dashboard})`);
 }
 
 function isAvailable() {
@@ -138,7 +140,18 @@ async function executeTool(toolName, input, userId) {
         if (input.refresh) await analyzer.invalidateCache(userId);
         const report = await analyzer.analyzePipeline(token, instanceUrl, userId);
         if (!report || report.error) return { error: report?.error || "Analysis failed" };
-        return templates.formatForAgent(report);
+        const formatted = templates.formatForAgent(report);
+
+        // Dashboard: capture raw data + anonymize + capture anonymized
+        if (dashboard) {
+          dashboard.captureRaw(userId, "analyze_pipeline", formatted);
+          const { anonymizedData, mapping } = dashboard.anonymizeSalesData(formatted);
+          dashboard.captureAnonymized(userId, anonymizedData, mapping);
+          // Return anonymized data to agent (AI sees placeholders)
+          return anonymizedData;
+        }
+
+        return formatted;
       }
 
       case "get_deal_risks": {
@@ -152,7 +165,7 @@ async function executeTool(toolName, input, userId) {
         }
 
         const max = Math.min(input.max_results || 10, 20);
-        return {
+        const result = {
           totalAtRisk: deals.length,
           deals: deals.slice(0, max).map(d => ({
             name: d.name,
@@ -167,6 +180,14 @@ async function executeTool(toolName, input, userId) {
             issues: d.issues.map(i => i.message),
           })),
         };
+
+        if (dashboard) {
+          dashboard.captureRaw(userId, "get_deal_risks", result);
+          const { anonymizedData, mapping } = dashboard.anonymizeSalesData(result);
+          dashboard.captureAnonymized(userId, anonymizedData, mapping);
+          return anonymizedData;
+        }
+        return result;
       }
 
       case "get_stale_deals": {
@@ -217,6 +238,13 @@ async function executeTool(toolName, input, userId) {
       case "get_pipeline_summary": {
         const report = await analyzer.analyzePipeline(token, instanceUrl, userId);
         if (!report || report.error) return { error: report?.error || "Analysis failed" };
+
+        if (dashboard) {
+          dashboard.captureRaw(userId, "get_pipeline_summary", report.summary);
+          const { anonymizedData, mapping } = dashboard.anonymizeSalesData(report.summary);
+          dashboard.captureAnonymized(userId, anonymizedData, mapping);
+          return anonymizedData;
+        }
         return report.summary;
       }
 
