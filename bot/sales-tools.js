@@ -386,8 +386,24 @@ async function executeToolInner(toolName, input, token, instanceUrl, userId) {
       }
 
       case "search_crm": {
-        const results = await sfApiModule.globalSearch(token, instanceUrl, input.query);
-        if (!results || results._error) return { error: "CRM search failed" };
+        // Try SOSL global search first
+        let results = await sfApiModule.globalSearch(token, instanceUrl, input.query);
+        const hasResults = results && !results._error &&
+          ((results.accounts?.length || 0) + (results.contacts?.length || 0) + (results.opportunities?.length || 0)) > 0;
+
+        // If SOSL returned nothing, fallback to SOQL LIKE search on key objects
+        if (!hasResults) {
+          const escaped = input.query.replace(/'/g, "\\'");
+          const [accts, opps, contacts] = await Promise.all([
+            sfApiModule.searchAccounts(token, instanceUrl, input.query, 5).catch(() => []),
+            sfApiModule.getOpportunities(token, instanceUrl, null, 50).then(all =>
+              (all || []).filter(o => o.name.toLowerCase().includes(input.query.toLowerCase()))
+            ).catch(() => []),
+            sfApiModule.searchContacts(token, instanceUrl, input.query, 5).catch(() => []),
+          ]);
+          results = { accounts: accts || [], contacts: contacts || [], opportunities: opps || [] };
+        }
+
         return {
           query: input.query,
           accounts: results.accounts || [],

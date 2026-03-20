@@ -187,7 +187,9 @@ async function getRecentActivity(token, instanceUrl, { accountId, contactId, lim
  * Global search across Salesforce objects.
  */
 async function globalSearch(token, instanceUrl, searchTerm) {
-  const encoded = encodeURIComponent(`FIND {${searchTerm}} IN ALL FIELDS RETURNING Account(Id,Name,Industry,Phone), Contact(Id,Name,Email,Phone,Account.Name), Opportunity(Id,Name,StageName,Amount,CloseDate,Account.Name) LIMIT 10`);
+  // Escape SOSL special characters: ? & | ! { } [ ] ( ) ^ ~ * : \ ' "
+  const safeTerm = searchTerm.replace(/[?&|!{}[\]()^~*:\\'"-]/g, " ").replace(/\s+/g, " ").trim();
+  const encoded = encodeURIComponent(`FIND {${safeTerm}} IN ALL FIELDS RETURNING Account(Id,Name,Industry,Phone), Contact(Id,Name,Email,Phone,Account.Name), Opportunity(Id,Name,StageName,Amount,CloseDate,Account.Name) LIMIT 10`);
   const resp = await sfFetch(token, instanceUrl, `/search/?q=${encoded}`);
   if (!resp || resp._error) return resp;
 
