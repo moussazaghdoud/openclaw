@@ -16,8 +16,6 @@ const SF_CLIENT_ID = process.env.SALESFORCE_CLIENT_ID || process.env.SF_CLIENT_I
 const SF_CLIENT_SECRET = process.env.SALESFORCE_CLIENT_SECRET || process.env.SF_CLIENT_SECRET || "";
 const SF_REDIRECT_URI = process.env.SALESFORCE_REDIRECT_URI || "";
 const SF_LOGIN_URL = process.env.SALESFORCE_LOGIN_URL || process.env.SF_LOGIN_URL || "https://login.salesforce.com";
-const SF_USERNAME = process.env.SF_USERNAME || process.env.SALESFORCE_USERNAME || "";
-const SF_PASSWORD = process.env.SF_PASSWORD || process.env.SALESFORCE_PASSWORD || ""; // password + security token
 const ENCRYPTION_KEY_HEX = process.env.M365_TOKEN_ENCRYPTION_KEY || ""; // reuse same key
 
 const TOKEN_TTL = 90 * 24 * 3600; // 90 days
@@ -63,30 +61,13 @@ async function authenticateShared() {
     return ccCachedToken;
   }
 
-  let params;
-  let flowName;
+  const params = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: SF_CLIENT_ID,
+    client_secret: SF_CLIENT_SECRET,
+  });
 
-  if (SF_USERNAME && SF_PASSWORD) {
-    // Username-Password flow — works on all Salesforce editions
-    flowName = "Username-Password";
-    params = new URLSearchParams({
-      grant_type: "password",
-      client_id: SF_CLIENT_ID,
-      client_secret: SF_CLIENT_SECRET,
-      username: SF_USERNAME,
-      password: SF_PASSWORD,
-    });
-  } else {
-    // Client Credentials flow — requires Enterprise+ edition
-    flowName = "Client Credentials";
-    params = new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: SF_CLIENT_ID,
-      client_secret: SF_CLIENT_SECRET,
-    });
-  }
-
-  console.log(`${LOG} Authenticating via ${flowName} flow...`);
+  console.log(`${LOG} Authenticating via Client Credentials flow...`);
 
   const resp = await fetch(`${SF_LOGIN_URL}/services/oauth2/token`, {
     method: "POST",
@@ -97,8 +78,8 @@ async function authenticateShared() {
 
   if (!resp.ok) {
     const errText = await resp.text();
-    console.error(`${LOG} ${flowName} auth failed (${resp.status}): ${errText.substring(0, 300)}`);
-    ccLastError = `${flowName} ${resp.status}: ${errText.substring(0, 300)}`;
+    console.error(`${LOG} Client Credentials auth failed (${resp.status}): ${errText.substring(0, 300)}`);
+    ccLastError = `Client Credentials ${resp.status}: ${errText.substring(0, 300)}`;
     ccCachedToken = null;
     return null;
   }
@@ -110,7 +91,7 @@ async function authenticateShared() {
   };
   ccTokenExpiresAt = Date.now() + 55 * 60 * 1000;
   ccLastError = null;
-  console.log(`${LOG} ${flowName} token obtained (${data.instance_url})`);
+  console.log(`${LOG} Client Credentials token obtained (${data.instance_url})`);
   return ccCachedToken;
 }
 
