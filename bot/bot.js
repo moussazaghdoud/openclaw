@@ -2945,6 +2945,15 @@ async function processBubbleCallback(body) {
         }
         return;
       } else if (target === "salesforce" && sfAuth && sfAuth.isConfigured()) {
+        if (sfAuth.isSharedMode && sfAuth.isSharedMode()) {
+          if (isConnect) {
+            await sendReply(`Salesforce is connected via shared service account. No individual connection needed.`);
+          } else {
+            sfAuth.unlinkAccount(fromJid); // clears cached token
+            await sendReply(`Salesforce token cache cleared. Will re-authenticate on next request.`);
+          }
+          return;
+        }
         if (isConnect) {
           const already = await sfAuth.isLinked(fromJid);
           if (already) {
@@ -3591,7 +3600,14 @@ async function start() {
           }
           return;
         } else if (target === "salesforce" && sfAuth && sfAuth.isConfigured()) {
-          if (isConnect) {
+          if (sfAuth.isSharedMode && sfAuth.isSharedMode()) {
+            if (isConnect) {
+              await sendReply(`Salesforce is connected via shared service account. No individual connection needed.`);
+            } else {
+              sfAuth.unlinkAccount(fromJid);
+              await sendReply(`Salesforce token cache cleared. Will re-authenticate on next request.`);
+            }
+          } else if (isConnect) {
             const already = await sfAuth.isLinked(fromJid);
             if (already) {
               const email = await sfAuth.getLinkedEmail(fromJid);

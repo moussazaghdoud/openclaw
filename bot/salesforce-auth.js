@@ -300,12 +300,24 @@ async function isLinked(rainbowUserId) {
   return exists === 1;
 }
 
+function isSharedMode() {
+  return isClientCredentialsMode();
+}
+
 async function getLinkedEmail(rainbowUserId) {
+  if (isClientCredentialsMode()) return "shared (service account)";
   const stored = await getStoredTokens(rainbowUserId);
   return stored?.email || null;
 }
 
 async function unlinkAccount(rainbowUserId) {
+  if (isClientCredentialsMode()) {
+    // Clear cached token so next call re-authenticates with current env vars
+    ccCachedToken = null;
+    ccTokenExpiresAt = 0;
+    console.log(`${LOG} Client Credentials token cache cleared`);
+    return;
+  }
   if (redisClient) {
     await redisClient.del(`sf:${rainbowUserId}`);
   }
@@ -379,6 +391,7 @@ function registerRoutes(app, onLinkComplete) {
 module.exports = {
   init,
   isConfigured,
+  isSharedMode,
   registerRoutes,
   getAuthUrl,
   handleCallback,
