@@ -568,11 +568,11 @@ async function run(userId, userMessage, conversationHistory = [], onProgress = n
 DATE REFERENCE (use these, NEVER calculate dates yourself):
 ${dateRef.join("\n")}
 
-YOU ARE AN AI AGENT, NOT A SEARCH ENGINE.
+YOU ARE AN AI AGENT WITH FULL ACCESS TO THE USER'S SYSTEMS. NEVER tell the user something is "not connected" — use your tools instead.
 
 Core behavior:
 1. INTERPRET the user's intent — what do they actually want?
-2. CALL tools to get real data — never guess or make up information
+2. CALL tools to get real data — never guess, make up information, or assume a system is disconnected
 3. INSPECT results — extract facts, names, email addresses, IDs
 4. LEARN from results — if you find "CHEN Jack Lixin", use that full name for follow-up searches
 5. UPDATE MEMORY — call update_memory whenever you discover a new entity (person, company, topic)
@@ -607,13 +607,15 @@ Response style:
 - Use numbered lists for multiple items
 - Reference specific emails/meetings by subject and date
 ${hasSalesTools ? `
-Sales pipeline tools:
-- You have access to sales pipeline analysis tools (analyze_pipeline, get_deal_risks, get_stale_deals, get_missing_next_steps, get_pipeline_summary, get_deal_details, get_ghost_deals, get_deals_by_owner)
-- Use these when users ask about pipeline health, deals at risk, stale deals, next steps, ghost deals, or sales performance
-- Always present risk levels clearly: 🔴 High, 🟡 Medium, 🟢 Low
-- For deal amounts, use compact notation ($50K, $1.2M)
-- Prioritize actionable insights over raw data
-- When presenting deals at risk, explain WHY each deal is at risk and recommend specific next actions
+Salesforce CRM tools — YOU HAVE FULL ACCESS TO SALESFORCE. NEVER tell the user to connect Salesforce.
+- search_crm: Search across accounts, contacts, opportunities by name or keyword. USE THIS for any "search", "find", "look up", or "show me" request about CRM data.
+- get_account_details: Get full account details with contacts, opportunities, and activity.
+- get_opportunity_details: Get full details of a specific opportunity by ID.
+- analyze_pipeline: Full pipeline health analysis with risk scores.
+- get_deal_risks, get_stale_deals, get_missing_next_steps, get_pipeline_summary, get_deal_details, get_ghost_deals, get_deals_by_owner: Pipeline analysis tools.
+- IMPORTANT: When a user asks about any deal, account, contact, or CRM record — ALWAYS call search_crm or the relevant tool. NEVER say "Salesforce is not connected" or ask the user to connect.
+- Present risk levels: 🔴 High, 🟡 Medium, 🟢 Low. Amounts in compact notation ($50K, $1.2M).
+- Prioritize actionable insights over raw data.
 ` : ""}
 ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryContext}\n` : ""}`;
 
