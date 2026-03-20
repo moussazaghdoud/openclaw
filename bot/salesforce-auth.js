@@ -16,6 +16,8 @@ const SF_CLIENT_ID = process.env.SALESFORCE_CLIENT_ID || process.env.SF_CLIENT_I
 const SF_CLIENT_SECRET = process.env.SALESFORCE_CLIENT_SECRET || process.env.SF_CLIENT_SECRET || "";
 const SF_REDIRECT_URI = process.env.SALESFORCE_REDIRECT_URI || "";
 const SF_LOGIN_URL = process.env.SALESFORCE_LOGIN_URL || process.env.SF_LOGIN_URL || "https://login.salesforce.com";
+const SF_USERNAME = process.env.SF_USERNAME || process.env.SALESFORCE_USERNAME || "";
+const SF_PASSWORD = process.env.SF_PASSWORD || process.env.SALESFORCE_PASSWORD || ""; // password + security token
 const ENCRYPTION_KEY_HEX = process.env.M365_TOKEN_ENCRYPTION_KEY || ""; // reuse same key
 
 const TOKEN_TTL = 90 * 24 * 3600; // 90 days
@@ -46,20 +48,45 @@ let ccCachedToken = null;
 let ccTokenExpiresAt = 0;
 let ccLastError = null;
 
-function isClientCredentialsMode() {
+function isSharedAuthMode() {
+  // Shared mode = no redirect URI, uses either Username-Password or Client Credentials
   return !!(SF_CLIENT_ID && SF_CLIENT_SECRET && !SF_REDIRECT_URI);
 }
 
-async function authenticateClientCredentials() {
+// Legacy alias
+function isClientCredentialsMode() {
+  return isSharedAuthMode();
+}
+
+async function authenticateShared() {
   if (ccCachedToken && Date.now() < ccTokenExpiresAt) {
     return ccCachedToken;
   }
 
-  const params = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: SF_CLIENT_ID,
-    client_secret: SF_CLIENT_SECRET,
-  });
+  let params;
+  let flowName;
+
+  if (SF_USERNAME && SF_PASSWORD) {
+    // Username-Password flow — works on all Salesforce editions
+    flowName = "Username-Password";
+    params = new URLSearchParams({
+      grant_type: "password",
+      client_id: SF_CLIENT_ID,
+      client_secret: SF_CLIENT_SECRET,
+      username: SF_USERNAME,
+      password: SF_PASSWORD,
+    });
+  } else {
+    // Client Credentials flow — requires Enterprise+ edition
+    flowName = "Client Credentials";
+    params = new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: SF_CLIENT_ID,
+      client_secret: SF_CLIENT_SECRET,
+    });
+  }
+
+  console.log(`${LOG} Authenticating via ${flowName} flow...`);
 
   const resp = await fetch(`${SF_LOGIN_URL}/services/oauth2/token`, {
     method: "POST",
@@ -70,8 +97,8 @@ async function authenticateClientCredentials() {
 
   if (!resp.ok) {
     const errText = await resp.text();
-    console.error(`${LOG} Client Credentials auth failed (${resp.status}): ${errText.substring(0, 300)}`);
-    ccLastError = `${resp.status}: ${errText.substring(0, 300)}`;
+    console.error(`${LOG} ${flowName} auth failed (${resp.status}): ${errText.substring(0, 300)}`);
+    ccLastError = `${flowName} ${resp.status}: ${errText.substring(0, 300)}`;
     ccCachedToken = null;
     return null;
   }
@@ -81,10 +108,15 @@ async function authenticateClientCredentials() {
     accessToken: data.access_token,
     instanceUrl: data.instance_url,
   };
-  // Cache for 55 minutes (tokens last ~60 min)
   ccTokenExpiresAt = Date.now() + 55 * 60 * 1000;
-  console.log(`${LOG} Client Credentials token obtained (${data.instance_url})`);
+  ccLastError = null;
+  console.log(`${LOG} ${flowName} token obtained (${data.instance_url})`);
   return ccCachedToken;
+}
+
+// Legacy alias
+async function authenticateClientCredentials() {
+  return authenticateShared();
 }
 
 // ── Encryption ───────────────────────────────────────────
@@ -234,9 +266,9 @@ async function getStoredTokens(rainbowUserId) {
  * We refresh proactively every 90 minutes.
  */
 async function getValidToken(rainbowUserId) {
-  // Client Credentials mode — shared token, no per-user auth needed
-  if (isClientCredentialsMode()) {
-    const cc = await authenticateClientCredentials();
+  // Shared mode (Username-Password or Client Credentials) — no per-user auth needed
+  if (isSharedAuthMode()) {
+    const cc = await authenticateShared();
     if (!cc) return null;
     return { token: cc.accessToken, instanceUrl: cc.instanceUrl, email: "shared" };
   }
