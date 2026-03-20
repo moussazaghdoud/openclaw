@@ -493,7 +493,10 @@ async function executeTool(toolName, input, userId, memory) {
       case "get_pipeline_summary":
       case "get_deal_details":
       case "get_ghost_deals":
-      case "get_deals_by_owner": {
+      case "get_deals_by_owner":
+      case "search_crm":
+      case "get_opportunity_details":
+      case "get_account_details": {
         if (!salesAgentModule || !salesAgentModule.isAvailable()) {
           return { error: "Sales module not available. Salesforce may not be configured." };
         }
@@ -715,6 +718,9 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
           get_deal_details: "Looking up deal details...",
           get_ghost_deals: "Detecting ghost deals...",
           get_deals_by_owner: "Analyzing rep performance...",
+          search_crm: "Searching CRM...",
+          get_opportunity_details: "Loading opportunity details...",
+          get_account_details: "Loading account details...",
         };
         const updates = toolNames.map(n => progressMap[n]).filter(Boolean);
         if (updates.length > 0) {

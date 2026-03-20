@@ -118,6 +118,39 @@ function getToolDefinitions() {
         },
       },
     },
+    {
+      name: "search_crm",
+      description: "Search Salesforce CRM across accounts, contacts, and opportunities. Use when user asks to search/find/look up a specific deal, account, contact, or any CRM record by name.",
+      input_schema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search term — deal name, account name, contact name, or keyword" },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "get_opportunity_details",
+      description: "Get full details of a specific opportunity by its Salesforce ID. Use after search_crm returns an opportunity ID.",
+      input_schema: {
+        type: "object",
+        properties: {
+          opportunity_id: { type: "string", description: "Salesforce Opportunity ID (18-char)" },
+        },
+        required: ["opportunity_id"],
+      },
+    },
+    {
+      name: "get_account_details",
+      description: "Get account details and its contacts, opportunities, and recent activity. Use when user asks about a specific company/customer.",
+      input_schema: {
+        type: "object",
+        properties: {
+          account_name: { type: "string", description: "Account/company name to search for" },
+        },
+        required: ["account_name"],
+      },
+    },
   ];
 }
 
@@ -349,6 +382,47 @@ async function executeToolInner(toolName, input, token, instanceUrl, userId) {
               totalAmount: data.amount,
               highRiskDeals: data.highRisk,
             })),
+        };
+      }
+
+      case "search_crm": {
+        const results = await sfApiModule.globalSearch(token, instanceUrl, input.query);
+        if (!results || results._error) return { error: "CRM search failed" };
+        return {
+          query: input.query,
+          accounts: results.accounts || [],
+          contacts: results.contacts || [],
+          opportunities: results.opportunities || [],
+          totalResults: (results.accounts?.length || 0) + (results.contacts?.length || 0) + (results.opportunities?.length || 0),
+        };
+      }
+
+      case "get_opportunity_details": {
+        const opp = await sfApiModule.getOpportunityDetails(token, instanceUrl, input.opportunity_id);
+        if (!opp || opp._error) return { error: "Failed to fetch opportunity details" };
+        // Also fetch activity
+        let activity = { tasks: [], events: [] };
+        if (opp.accountId) {
+          try { activity = await sfApiModule.getRecentActivity(token, instanceUrl, { accountId: opp.accountId, limit: 5 }); } catch {}
+        }
+        return { ...opp, recentActivity: activity };
+      }
+
+      case "get_account_details": {
+        const accounts = await sfApiModule.searchAccounts(token, instanceUrl, input.account_name, 3);
+        if (!accounts || accounts.length === 0) return { error: `No account found matching "${input.account_name}"` };
+        const account = accounts[0];
+        // Fetch related data in parallel
+        const [contacts, opportunities, activity] = await Promise.all([
+          sfApiModule.getContactsByAccount(token, instanceUrl, account.id, 10).catch(() => []),
+          sfApiModule.getOpportunities(token, instanceUrl, account.id, 10).catch(() => []),
+          sfApiModule.getRecentActivity(token, instanceUrl, { accountId: account.id, limit: 5 }).catch(() => ({ tasks: [], events: [] })),
+        ]);
+        return {
+          account,
+          contacts: contacts || [],
+          opportunities: opportunities || [],
+          recentActivity: activity,
         };
       }
 
