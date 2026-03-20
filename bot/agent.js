@@ -494,6 +494,7 @@ async function executeTool(toolName, input, userId, memory) {
       case "get_deal_details":
       case "get_ghost_deals":
       case "get_deals_by_owner":
+      case "list_opportunities":
       case "search_crm":
       case "get_opportunity_details":
       case "get_account_details": {
@@ -608,7 +609,8 @@ Response style:
 - Reference specific emails/meetings by subject and date
 ${hasSalesTools ? `
 Salesforce CRM tools — YOU HAVE FULL ACCESS TO SALESFORCE. NEVER tell the user to connect Salesforce.
-- search_crm: Search across accounts, contacts, opportunities by name or keyword. USE THIS for any "search", "find", "look up", or "show me" request about CRM data.
+- list_opportunities: List opportunities from Salesforce. USE THIS when user asks for "opportunities", "deals", "recent deals", "show me deals", or any list request.
+- search_crm: Search across accounts, contacts, opportunities by name or keyword. USE THIS for any "search", "find", "look up" request about CRM data.
 - get_account_details: Get full account details with contacts, opportunities, and activity.
 - get_opportunity_details: Get full details of a specific opportunity by ID.
 - analyze_pipeline: Full pipeline health analysis with risk scores.
@@ -720,6 +722,7 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
           get_deal_details: "Looking up deal details...",
           get_ghost_deals: "Detecting ghost deals...",
           get_deals_by_owner: "Analyzing rep performance...",
+          list_opportunities: "Fetching opportunities...",
           search_crm: "Searching CRM...",
           get_opportunity_details: "Loading opportunity details...",
           get_account_details: "Loading account details...",

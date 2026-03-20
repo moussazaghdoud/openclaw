@@ -119,6 +119,17 @@ function getToolDefinitions() {
       },
     },
     {
+      name: "list_opportunities",
+      description: "List opportunities from Salesforce. Use when user asks to see opportunities, recent deals, open deals, or any list of opportunities. Returns name, account, stage, amount, close date, owner.",
+      input_schema: {
+        type: "object",
+        properties: {
+          account_name: { type: "string", description: "Filter by account name (optional — omit for all)" },
+          limit: { type: "number", description: "Max results (default 10, max 50)" },
+        },
+      },
+    },
+    {
       name: "search_crm",
       description: "Search Salesforce CRM across accounts, contacts, and opportunities. Use when user asks to search/find/look up a specific deal, account, contact, or any CRM record by name.",
       input_schema: {
@@ -382,6 +393,35 @@ async function executeToolInner(toolName, input, token, instanceUrl, userId) {
               totalAmount: data.amount,
               highRiskDeals: data.highRisk,
             })),
+        };
+      }
+
+      case "list_opportunities": {
+        const limit = Math.min(input.limit || 10, 50);
+        let opps;
+        if (input.account_name) {
+          const accounts = await sfApiModule.searchAccounts(token, instanceUrl, input.account_name, 1);
+          if (accounts && accounts.length > 0) {
+            opps = await sfApiModule.getOpportunities(token, instanceUrl, accounts[0].id, limit);
+          } else {
+            return { error: `No account found matching "${input.account_name}"` };
+          }
+        } else {
+          opps = await sfApiModule.getOpenOpportunities(token, instanceUrl, limit);
+        }
+        if (!opps) return { error: "Failed to fetch opportunities" };
+        return {
+          count: opps.length,
+          opportunities: opps.map(o => ({
+            name: o.name,
+            account: o.account,
+            stage: o.stage,
+            amount: o.amount,
+            closeDate: o.closeDate,
+            probability: o.probability,
+            owner: o.owner,
+            nextStep: o.nextStep || "(none)",
+          })),
         };
       }
 
