@@ -181,12 +181,11 @@ async function executeTool(toolName, input, userId) {
   try {
     const result = await executeToolInner(toolName, input, token, instanceUrl, userId);
 
-    // Dashboard: capture every tool result
+    // Dashboard: capture for visualization only — don't modify what AI sees
     if (dashboard && result && !result.error) {
       dashboard.captureRaw(userId, toolName, result);
       const { anonymizedData, mapping } = dashboard.anonymizeSalesData(result);
       dashboard.captureAnonymized(userId, anonymizedData, mapping);
-      return anonymizedData;
     }
 
     return result;
