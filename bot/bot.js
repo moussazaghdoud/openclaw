@@ -3916,7 +3916,7 @@ async function start() {
         /\b(meetings?|calendar|schedule|agenda|appointments?|events?|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|this\s+week|next\s+week|free\s+slots?|busy|available)\b/i.test(content) ||
         /\b(search|google|look\s*up|find\s+out|what('?s| is)\s+(the\s+)?latest|news|stock|weather|price)\b/i.test(content) ||
         /^(and\s+)?(after|next|then)\b/i.test(content) ||
-        (salesAgent && salesAgent.isAvailable() && /\b(pipeline|deals?|deal[s ]?risk|stale.?deal|at.?risk|ghost.?deal|next.?step|pipeline.?health|pipeline.?summary|sales.?report|forecast|deal.?review|pipeline.?review|win.?rate|deal.?stuck|no.?activity|follow.?up.?miss|missing.?next|pipeline.?coverage|quota|sales.?performance|deal.?slip|close.?date|pipeline.?discipline|fake.?pipeline|crm|salesforce|opportunit|accounts?|contacts?|leads?|customers?)\b/i.test(content))
+        (salesAgent && salesAgent.isAvailable() && /\b(pipeline|deals?|deal[s ]?risk|stale.?deal|at.?risk|ghost.?deal|next.?step|pipeline.?health|pipeline.?summary|sales.?report|forecast|deal.?review|pipeline.?review|win.?rate|deal.?stuck|no.?activity|follow.?up.?miss|missing.?next|pipeline.?coverage|quota|sales.?performance|deal.?slip|close.?date|pipeline.?discipline|fake.?pipeline|crm|salesforce|opportunit\w*|accounts?|contacts?|leads?|customers?)\b/i.test(content))
       );
 
       lastMessageDebug = {
