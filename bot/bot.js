@@ -53,6 +53,12 @@ let salesAgent;
 try { salesAgent = require("./sales-agent"); console.log("[OpenClawBot] Sales agent module loaded OK"); } catch (e) { salesAgent = null; console.warn("[OpenClawBot] Sales agent module failed to load:", e.message); }
 let salesDashboard;
 try { salesDashboard = require("./sales-dashboard"); console.log("[OpenClawBot] Sales dashboard module loaded OK"); } catch (e) { salesDashboard = null; console.warn("[OpenClawBot] Sales dashboard module failed to load:", e.message); }
+let tenant;
+try { tenant = require("./tenant"); console.log("[OpenClawBot] Tenant module loaded OK"); } catch (e) { tenant = null; console.warn("[OpenClawBot] Tenant module failed to load:", e.message); }
+let tenantResolver;
+try { tenantResolver = require("./tenant-resolver"); console.log("[OpenClawBot] Tenant resolver module loaded OK"); } catch (e) { tenantResolver = null; console.warn("[OpenClawBot] Tenant resolver module failed to load:", e.message); }
+let superAdmin;
+try { superAdmin = require("./super-admin"); console.log("[OpenClawBot] Super-admin module loaded OK"); } catch (e) { superAdmin = null; console.warn("[OpenClawBot] Super-admin module failed to load:", e.message); }
 let emailWebhook;
 try { emailWebhook = require("./email-webhook"); console.log("[OpenClawBot] Email webhook module loaded OK"); } catch (e) { emailWebhook = null; console.warn("[OpenClawBot] Email webhook module failed to load:", e.message); }
 const LOG = "[OpenClawBot]";
@@ -177,6 +183,14 @@ async function initRedis() {
     if (enterprise) {
       enterprise.init(redis, { m365Auth, sfAuth });
       console.log(`${LOG} Enterprise module initialized`);
+    }
+    if (tenant) {
+      tenant.init(redis);
+      console.log(`${LOG} Tenant module initialized`);
+    }
+    if (tenantResolver) {
+      tenantResolver.init(redis);
+      console.log(`${LOG} Tenant resolver initialized`);
     }
     if (salesAgent && sfAuth && sfApi) {
       salesAgent.init({ sfAuth, sfApi, redis });
@@ -2220,6 +2234,10 @@ app.use(express.json());
 // Initialize sales dashboard routes
 if (salesDashboard) {
   salesDashboard.init(app, { pii, redis: null }); // redis set later in initRedis
+}
+// Initialize super-admin portal
+if (superAdmin && tenant) {
+  superAdmin.init(app, { redis: null, tenant }); // redis set later in initRedis
 }
 
 // Store last messages for debug
