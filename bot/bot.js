@@ -2634,6 +2634,25 @@ app.get("/api/agent-debug", (req, res) => {
   });
 });
 
+// Salesforce auth debug endpoint
+app.get("/api/sf-debug", async (req, res) => {
+  if (!sfAuth) return res.json({ error: "sfAuth module not loaded" });
+  const info = {
+    configured: sfAuth.isConfigured(),
+    sharedMode: sfAuth.isSharedMode ? sfAuth.isSharedMode() : "N/A",
+  };
+  try {
+    const token = await sfAuth.getValidToken("debug-test");
+    info.tokenObtained = !!token;
+    info.instanceUrl = token?.instanceUrl || null;
+    info.email = token?.email || null;
+    if (token?.token) info.tokenLength = token.token.length;
+  } catch (e) {
+    info.tokenError = e.message;
+  }
+  res.json(info);
+});
+
 // Register M365 OAuth routes
 if (m365Auth && m365Auth.isConfigured()) {
   m365Auth.registerRoutes(app, async (result) => {
