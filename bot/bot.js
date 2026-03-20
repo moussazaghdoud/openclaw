@@ -2650,6 +2650,10 @@ app.get("/api/sf-debug", async (req, res) => {
   } catch (e) {
     info.tokenError = e.message;
   }
+  if (sfAuth.getLastError) info.lastError = sfAuth.getLastError();
+  info.loginUrl = process.env.SF_LOGIN_URL || process.env.SALESFORCE_LOGIN_URL || "(default)";
+  info.clientIdSet = !!(process.env.SF_CLIENT_ID || process.env.SALESFORCE_CLIENT_ID);
+  info.clientSecretSet = !!(process.env.SF_CLIENT_SECRET || process.env.SALESFORCE_CLIENT_SECRET);
   res.json(info);
 });
 

@@ -44,6 +44,7 @@ function isConfigured() {
 // Shared Salesforce connection for all users
 let ccCachedToken = null;
 let ccTokenExpiresAt = 0;
+let ccLastError = null;
 
 function isClientCredentialsMode() {
   return !!(SF_CLIENT_ID && SF_CLIENT_SECRET && !SF_REDIRECT_URI);
@@ -70,6 +71,7 @@ async function authenticateClientCredentials() {
   if (!resp.ok) {
     const errText = await resp.text();
     console.error(`${LOG} Client Credentials auth failed (${resp.status}): ${errText.substring(0, 300)}`);
+    ccLastError = `${resp.status}: ${errText.substring(0, 300)}`;
     ccCachedToken = null;
     return null;
   }
@@ -304,6 +306,10 @@ function isSharedMode() {
   return isClientCredentialsMode();
 }
 
+function getLastError() {
+  return ccLastError;
+}
+
 async function getLinkedEmail(rainbowUserId) {
   if (isClientCredentialsMode()) return "shared (service account)";
   const stored = await getStoredTokens(rainbowUserId);
@@ -392,6 +398,7 @@ module.exports = {
   init,
   isConfigured,
   isSharedMode,
+  getLastError,
   registerRoutes,
   getAuthUrl,
   handleCallback,
