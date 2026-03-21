@@ -75,7 +75,22 @@ function getCurrentSessionId() {
 }
 
 function captureRaw(userId, query, data) {
-  // Create a new session for each tool execution
+  // Reuse current session if one exists (multiple tools in same agent run)
+  if (currentSessionId && sessions.has(currentSessionId)) {
+    const session = sessions.get(currentSessionId);
+    // Merge data into existing raw
+    if (session.raw && session.raw.data) {
+      // Append tool results
+      if (!session.raw.toolResults) session.raw.toolResults = [session.raw.data];
+      session.raw.toolResults.push(data);
+      session.raw.data = data; // keep latest as primary
+    }
+    console.log(`${LOG} Updated RAW stage — session ${currentSessionId} (tool: ${query})`);
+    newDataFlag = true;
+    return;
+  }
+
+  // Create a new session
   const id = crypto.randomBytes(6).toString("hex");
   currentSessionId = id;
 
@@ -121,6 +136,10 @@ function captureResult(userId, response) {
     response,
   };
   console.log(`${LOG} Captured RESULT stage — session ${currentSessionId}`);
+  // Reset so next request creates a new session
+  const completedId = currentSessionId;
+  currentSessionId = null;
+  return completedId;
 }
 
 // ══════════════════════════════════════════════════════════

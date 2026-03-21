@@ -3966,10 +3966,10 @@ async function start() {
           responseText = await agent.run(fromJid, content, history, sendProgress);
           console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
           // Capture final result for sales dashboard + append unique link
-          if (salesDashboard && responseText && salesDashboard.hasNewData()) {
+          if (salesDashboard && responseText) {
             const sessionId = salesDashboard.getCurrentSessionId();
-            salesDashboard.captureResult(fromJid, responseText);
             if (sessionId) {
+              salesDashboard.captureResult(fromJid, responseText);
               const resultUrl = `${config.hostCallback}/sales/result/${sessionId}`;
               responseText += `\n\nView full report: ${resultUrl}`;
             }
