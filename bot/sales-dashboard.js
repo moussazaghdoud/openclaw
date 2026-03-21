@@ -436,18 +436,41 @@ The AI never sees the actual company names, people names, or deal names.</p>`;
   return html;
 }
 
+function markdownToHtml(text) {
+  if (!text) return "";
+  return escHtml(text)
+    // Headers
+    .replace(/^###\s+(.+)$/gm, '<h3 style="font-size:15px;font-weight:600;color:#1a1a2e;margin:16px 0 8px">$1</h3>')
+    .replace(/^##\s+(.+)$/gm, '<h2 style="font-size:17px;font-weight:700;color:#1a1a2e;margin:20px 0 10px">$1</h2>')
+    .replace(/^#\s+(.+)$/gm, '<h1 style="font-size:20px;font-weight:700;color:#1a1a2e;margin:24px 0 12px">$1</h1>')
+    // Horizontal rule
+    .replace(/^[-*_]{3,}$/gm, '<hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0">')
+    // Bold
+    .replace(/\*\*([^*]+)\*\*/g, '<strong style="color:#1a1a2e">$1</strong>')
+    // Italic
+    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
+    // Inline code
+    .replace(/`([^`]+)`/g, '<code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:12px">$1</code>')
+    // Numbered lists
+    .replace(/^(\d+)\.\s+(.+)$/gm, '<div style="margin:4px 0;padding-left:12px"><span style="color:#3b82f6;font-weight:600">$1.</span> $2</div>')
+    // Bullet lists (indented)
+    .replace(/^\s+[-•*]\s+(.+)$/gm, '<div style="margin:2px 0;padding-left:28px;color:#475569">◦ $1</div>')
+    // Bullet lists
+    .replace(/^[-•*]\s+(.+)$/gm, '<div style="margin:4px 0;padding-left:12px">• $1</div>')
+    // Double line breaks → paragraph spacing
+    .replace(/\n\n/g, '<div style="margin:12px 0"></div>')
+    // Single line breaks
+    .replace(/\n/g, '<br>');
+}
+
 function renderResultPage(stage) {
   let html = "";
 
-  html += `<div class="card"><div class="card-header"><h2>Final Result — Sent to User</h2>
-<div><span class="badge badge-blue">DEANONYMIZED</span> <span class="timestamp">${stage.timestamp}</span></div></div>`;
+  html += `<div class="card"><div class="card-header"><h2>AI Analysis Result</h2>
+<div><span class="badge badge-blue">FINAL RESPONSE</span> <span class="timestamp">${stage.timestamp}</span></div></div>`;
 
-  html += `<div class="card-body"><p style="margin-bottom:16px;color:#64748b;font-size:13px">
-This is the AI's response after deanonymization. The AI analyzed the anonymized data and produced insights.
-Placeholders like [ACCOUNT_1] have been replaced back with real names before sending to the user on Rainbow.</p>`;
-
-  html += `<div class="result-text" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:20px">${escHtml(stage.response)}</div>`;
-
+  html += `<div class="card-body">`;
+  html += `<div style="font-size:14px;line-height:1.8;color:#1e293b">${markdownToHtml(stage.response)}</div>`;
   html += `</div></div>`;
 
   return html;

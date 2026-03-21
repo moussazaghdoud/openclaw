@@ -3970,8 +3970,8 @@ async function start() {
             const sessionId = salesDashboard.getCurrentSessionId();
             salesDashboard.captureResult(fromJid, responseText);
             if (sessionId) {
-              const dashboardUrl = `${config.hostCallback}/sales/dashboard/${sessionId}`;
-              responseText += `\n\nView full report: ${dashboardUrl}`;
+              const resultUrl = `${config.hostCallback}/sales/result/${sessionId}`;
+              responseText += `\n\nView full report: ${resultUrl}`;
             }
           }
         } catch (agentErr) {
