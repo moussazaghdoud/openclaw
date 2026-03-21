@@ -3507,6 +3507,24 @@ async function start() {
         return;
       }
 
+      // "stop" — cancel running agent request
+      if (contentLower.trim() === "stop" || contentLower.trim() === "cancel" || contentLower.trim() === "juju stop") {
+        if (agent && agent.cancelRequest) {
+          agent.cancelRequest(fromJid);
+          const stopMsg = "Stopping current request...";
+          const stopConvId = rawConversationId || conversationId;
+          if (stopConvId && s2sConnectionId && authToken) {
+            const host = rainbowHost || "openrainbow.com";
+            await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${stopConvId}/messages`, {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ message: { body: stopMsg, lang: "en" } }),
+            }).catch(() => {});
+          }
+        }
+        return;
+      }
+
       // "juju secure" / "juju unsecure" — toggle PII secure mode (intercept before LLM)
       console.log(`${LOG} CMD check: pii=${!!pii}, contentLower="${contentLower.trim()}", match=${contentLower.trim() === "juju secure" || contentLower.trim() === "juju unsecure"}`);
       const secCmd = contentLower.trim();

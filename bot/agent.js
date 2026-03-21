@@ -33,6 +33,9 @@ let calendarGoogleModule = null;
 let redisClient = null;
 let salesAgentModule = null;
 
+// Active request cancellation
+const cancelledUsers = new Set();
+
 function init(deps) {
   graphModule = deps.graph || null;
   calendarGraphModule = deps.calendarGraph || null;
@@ -43,6 +46,11 @@ function init(deps) {
   redisClient = deps.redis || null;
   salesAgentModule = deps.salesAgent || null;
   console.log(`${LOG} Initialized (email: ${!!graphModule}, calendar: ${!!calendarGraphModule}, sales: ${!!salesAgentModule}, anthropic: ${!!ANTHROPIC_API_KEY})`);
+}
+
+function cancelRequest(userId) {
+  cancelledUsers.add(userId);
+  console.log(`${LOG} Cancel requested for ${userId}`);
 }
 
 function isAvailable() {
@@ -641,7 +649,18 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
 
   let currentMessages = [...messages];
 
+  // Clear any previous cancel flag for this user
+  cancelledUsers.delete(userId);
+
   for (let loop = 0; loop < MAX_LOOPS; loop++) {
+    // Check if user cancelled
+    if (cancelledUsers.has(userId)) {
+      cancelledUsers.delete(userId);
+      console.log(`${LOG} Request cancelled by user after ${loop} loops`);
+      await saveWorkingMemory(userId, memory);
+      return "Request cancelled.";
+    }
+
     // Check total timeout
     if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
       console.warn(`${LOG} Total timeout reached after ${loop} loops`);
@@ -798,6 +817,7 @@ module.exports = {
   init,
   isAvailable,
   run,
+  cancelRequest,
   getWorkingMemory,
   saveWorkingMemory,
   getLastRunTrace,
