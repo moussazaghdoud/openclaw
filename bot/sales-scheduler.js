@@ -152,8 +152,16 @@ async function checkDailyDigests() {
       const userHour = getLocalHour(now, prefs.timezone);
       const userMinute = getLocalMinute(now, prefs.timezone);
 
-      // Check if current hour matches dailyTime (within +/-5 min window)
-      const targetMinute = prefs.dailyTime * 60;
+      // Check if current time matches dailyTime (within +/-5 min window)
+      // dailyTime can be integer hour (8) or from daily_digest.time string ("08:30")
+      let targetMinute;
+      if (prefs.daily_digest?.time) {
+        const parts = prefs.daily_digest.time.split(":");
+        targetMinute = parseInt(parts[0], 10) * 60 + (parseInt(parts[1], 10) || 0);
+      } else {
+        targetMinute = (prefs.dailyTime || 8) * 60;
+      }
+      if (prefs.daily_digest?.enabled === false) continue;
       const currentMinute = userHour * 60 + userMinute;
       if (Math.abs(currentMinute - targetMinute) > 5) continue;
 
