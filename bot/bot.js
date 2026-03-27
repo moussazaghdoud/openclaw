@@ -2723,6 +2723,15 @@ app.get("/api/agent-debug", (req, res) => {
   });
 });
 
+// Sales alert test endpoint
+app.get("/api/sales-alert-test", async (req, res) => {
+  const uid = req.query.uid;
+  if (!uid) return res.json({ error: "Missing uid parameter" });
+  if (!salesScheduler || !salesScheduler.triggerDailyDigest) return res.json({ error: "Scheduler not available" });
+  const result = await salesScheduler.triggerDailyDigest(uid);
+  res.json(result);
+});
+
 // Salesforce auth debug endpoint
 app.get("/api/sf-debug", async (req, res) => {
   if (!sfAuth) return res.json({ error: "sfAuth module not loaded" });

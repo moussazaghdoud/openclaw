@@ -723,4 +723,34 @@ async function applyConfigFile(userId, jsonContent) {
   }
 }
 
-module.exports = { init, stop, getUserPrefs, setUserPrefs, enableAlerts, disableAlerts, applyConfigFile };
+/**
+ * Manually trigger a daily digest for a user (bypasses time check and dedup lock).
+ * For testing purposes.
+ */
+async function triggerDailyDigest(userId) {
+  if (!redisClient || !sfAuthModule || !salesAnalyzer || !sendMessageFn) {
+    return { error: "Scheduler not fully initialized" };
+  }
+
+  try {
+    const tokenData = await sfAuthModule.getValidToken(userId);
+    if (!tokenData || !tokenData.token) {
+      return { error: `No SF token for ${userId}` };
+    }
+
+    const report = await salesAnalyzer.analyzePipeline(tokenData.token, tokenData.instanceUrl, userId);
+    if (!report || report.error) {
+      return { error: `Analysis failed: ${report?.error || "unknown"}` };
+    }
+
+    const text = buildDailyDigest(report);
+    await sendMessageFn(userId, text);
+    console.log(`${LOG} Manual daily digest sent to ${userId}`);
+    return { success: true, message: "Daily digest sent", preview: text.substring(0, 200) };
+  } catch (e) {
+    console.error(`${LOG} Manual digest error:`, e.message);
+    return { error: e.message };
+  }
+}
+
+module.exports = { init, stop, getUserPrefs, setUserPrefs, enableAlerts, disableAlerts, applyConfigFile, triggerDailyDigest };
