@@ -32,6 +32,7 @@ let gmailApiModule = null;
 let calendarGoogleModule = null;
 let redisClient = null;
 let salesAgentModule = null;
+let contextManagerModule = null;
 
 // Active request cancellation
 const cancelledUsers = new Set();
@@ -45,7 +46,8 @@ function init(deps) {
   calendarGoogleModule = deps.calendarGoogle || null;
   redisClient = deps.redis || null;
   salesAgentModule = deps.salesAgent || null;
-  console.log(`${LOG} Initialized (email: ${!!graphModule}, calendar: ${!!calendarGraphModule}, sales: ${!!salesAgentModule}, anthropic: ${!!ANTHROPIC_API_KEY})`);
+  contextManagerModule = deps.contextManager || null;
+  console.log(`${LOG} Initialized (email: ${!!graphModule}, calendar: ${!!calendarGraphModule}, sales: ${!!salesAgentModule}, context: ${!!contextManagerModule}, anthropic: ${!!ANTHROPIC_API_KEY})`);
 }
 
 function cancelRequest(userId) {
@@ -628,6 +630,16 @@ Salesforce CRM tools — YOU HAVE FULL ACCESS TO SALESFORCE. NEVER tell the user
 - Prioritize actionable insights over raw data.
 ` : ""}
 ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryContext}\n` : ""}`;
+
+  // Inject recent conversation context from unified store
+  if (contextManagerModule) {
+    try {
+      const recentCtx = await contextManagerModule.getContextForAgent(userId);
+      if (recentCtx) {
+        systemPrompt += `\n${recentCtx}\n`;
+      }
+    } catch {}
+  }
 
   // Build messages — ONLY the current user message
   // The agent must ALWAYS use tools for data. Conversation history is provided

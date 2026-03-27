@@ -53,6 +53,8 @@ let salesAgent;
 try { salesAgent = require("./sales-agent"); console.log("[OpenClawBot] Sales agent module loaded OK"); } catch (e) { salesAgent = null; console.warn("[OpenClawBot] Sales agent module failed to load:", e.message); }
 let salesDashboard;
 try { salesDashboard = require("./sales-dashboard"); console.log("[OpenClawBot] Sales dashboard module loaded OK"); } catch (e) { salesDashboard = null; console.warn("[OpenClawBot] Sales dashboard module failed to load:", e.message); }
+let contextManager;
+try { contextManager = require("./context-manager"); console.log("[OpenClawBot] Context manager loaded OK"); } catch (e) { contextManager = null; console.warn("[OpenClawBot] Context manager failed to load:", e.message); }
 let tenant;
 try { tenant = require("./tenant"); console.log("[OpenClawBot] Tenant module loaded OK"); } catch (e) { tenant = null; console.warn("[OpenClawBot] Tenant module failed to load:", e.message); }
 let tenantResolver;
@@ -184,6 +186,10 @@ async function initRedis() {
       enterprise.init(redis, { m365Auth, sfAuth });
       console.log(`${LOG} Enterprise module initialized`);
     }
+    if (contextManager) {
+      contextManager.init(redis);
+      console.log(`${LOG} Context manager initialized`);
+    }
     if (tenant) {
       tenant.init(redis);
       console.log(`${LOG} Tenant module initialized`);
@@ -202,6 +208,7 @@ async function initRedis() {
         gmailAuth, gmailApi: gmailApi, calendarGoogle,
         redis,
         salesAgent: salesAgent || null,
+        contextManager: contextManager || null,
       });
       console.log(`${LOG} Agent module initialized (available: ${agent.isAvailable()})`);
     }
@@ -1336,9 +1343,20 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
 Do NOT upload files to tmpfiles.org, transfer.sh, or any external service. Do NOT reference paths like /.openclaw/workspace/.
 Do NOT mention tools, downloads, or file creation capabilities. Just answer naturally — the system handles file delivery automatically.
 You are an AI assistant integrated with the user's calendar, email, and CRM. When meeting details, email summaries, or CRM data appear in the conversation history, treat them as real data you retrieved. Answer follow-up questions about them confidently using the data in the conversation. Never say you don't have access to the calendar or email — you do, and the data is in the conversation history.`;
-  const sysPrompt = config.systemPrompt
+  let sysPrompt = config.systemPrompt
     ? `${config.systemPrompt}\n\n${fileNote}`
     : fileNote;
+
+  // Inject unified context (entities, agent summaries, file refs)
+  if (contextManager) {
+    try {
+      const ctx = await contextManager.getContextForChat(userId);
+      if (ctx) sysPrompt += `\n\n${ctx}`;
+    } catch (e) {
+      console.warn(`${LOG} Context injection error:`, e.message);
+    }
+  }
+
   messages.push({ role: "system", content: sysPrompt });
   messages.push(...history);
   messages.push({ role: "user", content: userMessage });
@@ -1381,6 +1399,15 @@ You are an AI assistant integrated with the user's calendar, email, and CRM. Whe
 
     await addMessage(userId, "user", userMessage);
     await addMessage(userId, "assistant", assistantMessage);
+
+    // Write to unified context store
+    if (contextManager) {
+      contextManager.addEntry(userId, "user", userMessage, { path: "chat" }).catch(() => {});
+      contextManager.addEntry(userId, "assistant", assistantMessage, {
+        path: "chat",
+        summary: contextManager.generateSummary(assistantMessage),
+      }).catch(() => {});
+    }
 
     console.log(`${LOG} <- OpenClaw response (${assistantMessage.length} chars)`);
     return { content: assistantMessage, model: data.model, usage: data.usage };
@@ -3965,6 +3992,22 @@ async function start() {
           };
           responseText = await agent.run(fromJid, content, history, sendProgress);
           console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
+
+          // Write to unified context + sync agent memory
+          if (contextManager && responseText) {
+            const agentTrace = agent.getLastRunTrace();
+            contextManager.addEntry(fromJid, "user", content, { path: "agent" }).catch(() => {});
+            contextManager.addEntry(fromJid, "assistant", responseText, {
+              path: "agent",
+              toolsUsed: agentTrace?.tools || [],
+              summary: contextManager.generateSummary(responseText),
+            }).catch(() => {});
+            // Sync entities from agent working memory
+            agent.getWorkingMemory(fromJid).then(mem => {
+              if (mem) contextManager.syncAgentMemory(fromJid, mem);
+            }).catch(() => {});
+          }
+
           // Capture final result for sales dashboard + append unique link
           if (salesDashboard && responseText) {
             const sessionId = salesDashboard.getCurrentSessionId();
