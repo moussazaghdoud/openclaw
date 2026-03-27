@@ -20,7 +20,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 let lastRunTrace = { timestamp: null, userId: null, message: null, loops: [], tools: [], finalResponse: null, error: null };
 const SONNET = "claude-sonnet-4-20250514";
 const OPUS = "claude-opus-4-20250514";
-const MAX_LOOPS = 8;
+const MAX_LOOPS = 4;
 const LOOP_TIMEOUT_MS = 30000;
 const TOTAL_TIMEOUT_MS = 120000;
 
@@ -581,9 +581,18 @@ ${dateRef.join("\n")}
 
 YOU ARE AN AI AGENT WITH FULL ACCESS TO THE USER'S SYSTEMS. NEVER tell the user something is "not connected" — use your tools instead.
 
+EFFICIENCY RULES — VERY IMPORTANT:
+- Use the MINIMUM number of tool calls needed. One tool call is usually enough.
+- "show top 5 opportunities" → call list_opportunities ONCE, present the top 5. Done.
+- "pipeline health" → call analyze_pipeline ONCE. Done.
+- "search for X" → call search_crm ONCE. Done.
+- Do NOT chain multiple tools unless the user explicitly asks for combined data.
+- Do NOT call the same tool twice with different parameters.
+- Answer with what you get from the first tool call. If data is incomplete, present what you have.
+
 Core behavior:
 1. INTERPRET the user's intent — what do they actually want?
-2. CALL tools to get real data — never guess, make up information, or assume a system is disconnected
+2. CALL ONE tool to get real data — never guess, make up information, or assume a system is disconnected
 3. INSPECT results — extract facts, names, email addresses, IDs
 4. LEARN from results — if you find "CHEN Jack Lixin", use that full name for follow-up searches
 5. UPDATE MEMORY — call update_memory whenever you discover a new entity (person, company, topic)
