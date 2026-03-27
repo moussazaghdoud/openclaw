@@ -2207,6 +2207,14 @@ async function processFileFromCallback(msg, convId, fromUserId, isGroup) {
   const fromName = fromUserId; // Best we have from raw callback
   await addMessage(historyKey, "user", `[${fromName} shared a file]\n${fileContext}`);
 
+  // Write file context to unified store
+  if (contextManager) {
+    contextManager.addEntry(historyKey, "system", `File shared: ${fileInfo.filename}. ${fileContext.substring(0, 500)}`, {
+      path: "file_upload",
+      filesReferenced: [fileInfo.filename],
+    }).catch(() => {});
+  }
+
   // Send confirmation
   const fileSize = fileInfo.filesize ? ` (${Math.round(fileInfo.filesize / 1024)}KB)` : "";
   const confirmMsg = downloaded
@@ -3418,6 +3426,14 @@ async function start() {
         }
 
         await addMessage(fHistoryKey, "user", `[${fromName} shared a file]\n${fileContext}`);
+
+        // Write file context to unified store
+        if (contextManager) {
+          contextManager.addEntry(fHistoryKey, "system", `File shared: ${fileInfo.filename}. ${fileContext.substring(0, 500)}`, {
+            path: "file_upload",
+            filesReferenced: [fileInfo.filename],
+          }).catch(() => {});
+        }
 
         // Send confirmation to user
         const fileSize = fileInfo.filesize ? ` (${Math.round(fileInfo.filesize / 1024)}KB)` : "";
