@@ -2236,6 +2236,29 @@ async function processFileFromCallback(msg, convId, fromUserId, isGroup) {
     }).catch(() => {});
   }
 
+  // Detect alert config file (JSON with alert keys)
+  if (salesScheduler && downloaded && fileInfo.filename.toLowerCase().endsWith(".json")) {
+    try {
+      const jsonText = downloaded.buffer.toString("utf-8");
+      const parsed = JSON.parse(jsonText);
+      if (parsed.daily_digest || parsed.weekly_summary || parsed.stale_deal_alert || parsed.close_date_alert || parsed.high_value_alert) {
+        const result = await salesScheduler.applyConfigFile(fromUserId || convId, parsed);
+        const configMsg = result.success
+          ? `Alert configuration applied (${result.timezone}):\n${result.alerts.map(a => `- ${a}`).join("\n")}`
+          : `Failed to apply config: ${result.error}`;
+        // Send config confirmation
+        if (s2sConnectionId && authToken) {
+          const host = rainbowHost || "openrainbow.com";
+          await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+            method: "POST", headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ message: { body: configMsg, lang: "en" } }),
+          }).catch(() => {});
+        }
+        return;
+      }
+    } catch {}
+  }
+
   // Send confirmation
   const fileSize = fileInfo.filesize ? ` (${Math.round(fileInfo.filesize / 1024)}KB)` : "";
   const confirmMsg = downloaded

@@ -38,6 +38,12 @@ const DEFAULT_PREFS = {
   dailyTime: 8,              // 8:00 AM local time
   weeklyDay: 1,              // Monday (0=Sun, 1=Mon, ...)
   alertsEnabled: true,
+  // Per-alert configuration
+  daily_digest: { enabled: true, time: "08:00" },
+  weekly_summary: { enabled: true, day: "Monday", time: "09:00" },
+  stale_deal_alert: { enabled: true, min_days_inactive: 14, min_amount: 0 },
+  close_date_alert: { enabled: true, days_before: 7 },
+  high_value_alert: { enabled: true, min_amount: 100000 },
 };
 
 // Simple timezone offsets (no library needed)
@@ -649,4 +655,64 @@ function stop() {
 
 // ── Exports ───────────────────────────────────────────────
 
-module.exports = { init, stop, getUserPrefs, setUserPrefs, enableAlerts, disableAlerts };
+/**
+ * Apply alert configuration from an uploaded JSON file.
+ * Expected format:
+ * {
+ *   "timezone": "Europe/Paris",
+ *   "daily_digest": { "enabled": true, "time": "08:00" },
+ *   "weekly_summary": { "enabled": true, "day": "Monday", "time": "09:00" },
+ *   "stale_deal_alert": { "enabled": true, "min_days_inactive": 14, "min_amount": 50000 },
+ *   "close_date_alert": { "enabled": true, "days_before": 7 },
+ *   "high_value_alert": { "enabled": true, "min_amount": 100000 }
+ * }
+ */
+async function applyConfigFile(userId, jsonContent) {
+  try {
+    const config = typeof jsonContent === "string" ? JSON.parse(jsonContent) : jsonContent;
+    const prefs = await getUserPrefs(userId);
+
+    // Map config file fields to prefs
+    if (config.timezone) prefs.timezone = config.timezone;
+    if (config.daily_digest) prefs.daily_digest = { ...prefs.daily_digest, ...config.daily_digest };
+    if (config.weekly_summary) prefs.weekly_summary = { ...prefs.weekly_summary, ...config.weekly_summary };
+    if (config.stale_deal_alert) prefs.stale_deal_alert = { ...prefs.stale_deal_alert, ...config.stale_deal_alert };
+    if (config.close_date_alert) prefs.close_date_alert = { ...prefs.close_date_alert, ...config.close_date_alert };
+    if (config.high_value_alert) prefs.high_value_alert = { ...prefs.high_value_alert, ...config.high_value_alert };
+
+    // Sync top-level fields from config
+    if (config.daily_digest?.time) {
+      const hour = parseInt(config.daily_digest.time.split(":")[0], 10);
+      if (!isNaN(hour)) prefs.dailyTime = hour;
+    }
+    if (config.weekly_summary?.day) {
+      const dayMap = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+      if (dayMap[config.weekly_summary.day] !== undefined) prefs.weeklyDay = dayMap[config.weekly_summary.day];
+    }
+
+    prefs.alertsEnabled = true;
+    await setUserPrefs(userId, prefs);
+    await enableAlerts(userId);
+
+    // Build summary of what was configured
+    const summary = [];
+    if (prefs.daily_digest?.enabled) summary.push(`Daily digest at ${prefs.daily_digest.time || "08:00"}`);
+    else summary.push("Daily digest: disabled");
+    if (prefs.weekly_summary?.enabled) summary.push(`Weekly summary on ${prefs.weekly_summary.day || "Monday"}`);
+    else summary.push("Weekly summary: disabled");
+    if (prefs.stale_deal_alert?.enabled) summary.push(`Stale deal alert: ${prefs.stale_deal_alert.min_days_inactive}+ days, min $${prefs.stale_deal_alert.min_amount || 0}`);
+    else summary.push("Stale deal alert: disabled");
+    if (prefs.close_date_alert?.enabled) summary.push(`Close date alert: ${prefs.close_date_alert.days_before} days before`);
+    else summary.push("Close date alert: disabled");
+    if (prefs.high_value_alert?.enabled) summary.push(`High-value alert: deals > $${prefs.high_value_alert.min_amount}`);
+    else summary.push("High-value alert: disabled");
+
+    console.log(`${LOG} Config file applied for ${userId}`);
+    return { success: true, timezone: prefs.timezone, alerts: summary };
+  } catch (e) {
+    console.error(`${LOG} Config file parse error:`, e.message);
+    return { error: `Invalid config file: ${e.message}` };
+  }
+}
+
+module.exports = { init, stop, getUserPrefs, setUserPrefs, enableAlerts, disableAlerts, applyConfigFile };
