@@ -175,15 +175,15 @@ async function checkDailyDigests() {
 
       // Get SF token
       const tokenData = await sfAuthModule.getValidToken(userId);
-      if (!tokenData || !tokenData.access_token) {
+      if (!tokenData || !tokenData.token) {
         console.warn(`${LOG} No SF token for ${userId} — skipping daily digest`);
         continue;
       }
 
       // Run analysis
       const report = await salesAnalyzer.analyzePipeline(
-        tokenData.access_token,
-        tokenData.instance_url,
+        tokenData.token,
+        tokenData.instanceUrl,
         userId
       );
       if (!report || report.error) {
@@ -235,14 +235,14 @@ async function checkWeeklyDigests() {
       console.log(`${LOG} Sending weekly digest to ${userId}`);
 
       const tokenData = await sfAuthModule.getValidToken(userId);
-      if (!tokenData || !tokenData.access_token) {
+      if (!tokenData || !tokenData.token) {
         console.warn(`${LOG} No SF token for ${userId} — skipping weekly digest`);
         continue;
       }
 
       const report = await salesAnalyzer.analyzePipeline(
-        tokenData.access_token,
-        tokenData.instance_url,
+        tokenData.token,
+        tokenData.instanceUrl,
         userId
       );
       if (!report || report.error) {
@@ -273,11 +273,11 @@ async function checkInstantAlerts() {
       if (!prefs.alertsEnabled) continue;
 
       const tokenData = await sfAuthModule.getValidToken(userId);
-      if (!tokenData || !tokenData.access_token) continue;
+      if (!tokenData || !tokenData.token) continue;
 
       const report = await salesAnalyzer.analyzePipeline(
-        tokenData.access_token,
-        tokenData.instance_url,
+        tokenData.token,
+        tokenData.instanceUrl,
         userId
       );
       if (!report || report.error || !report.deals) continue;
