@@ -282,23 +282,39 @@ async function checkInstantAlerts() {
       );
       if (!report || report.error || !report.deals) continue;
 
-      // Find high-value deals that are stale
+      // Find high-value deals that are stale — use user prefs for thresholds
+      const minAmount = prefs.high_value_alert?.min_amount || cfg.HIGH_VALUE_THRESHOLD;
+      const minDays = prefs.stale_deal_alert?.min_days_inactive || cfg.STALE_DEAL_DAYS;
+      if (prefs.high_value_alert?.enabled === false && prefs.stale_deal_alert?.enabled === false) continue;
+
       const atRiskDeals = report.deals.filter(d =>
-        d.amount >= cfg.HIGH_VALUE_THRESHOLD &&
-        d.daysSinceActivity >= cfg.STALE_DEAL_DAYS
+        d.amount >= minAmount &&
+        d.daysSinceActivity >= minDays
       );
 
+      // Only alert on NEW stale deals (not already locked)
+      const newAlerts = [];
       for (const deal of atRiskDeals) {
-        // Dedup lock per deal (prevent re-alerting same deal within 24h)
         const lockKey = KEYS.lockAlert(userId, deal.id);
-        const acquired = await redisClient.set(lockKey, "1", { NX: true, EX: 24 * 3600 });
-        if (!acquired) continue;
-
-        const amountStr = formatAmount(deal.amount);
-        const text = `\u26a0\ufe0f High-value deal at risk: ${deal.name} (${amountStr}) \u2014 ${deal.daysSinceActivity} days without activity`;
-        await sendMessageFn(userId, text);
-        console.log(`${LOG} Alert sent to ${userId} for deal ${deal.name}`);
+        const acquired = await redisClient.set(lockKey, "1", { NX: true, EX: 7 * 24 * 3600 }); // 7-day lock
+        if (acquired) newAlerts.push(deal);
       }
+
+      if (newAlerts.length === 0) continue;
+
+      // Send ONE consolidated message with top 5 new alerts
+      const top5 = newAlerts
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 5);
+      const lines = [`\u26a0\ufe0f ${newAlerts.length} deal(s) newly at risk:\n`];
+      for (const deal of top5) {
+        lines.push(`- ${deal.name} (${formatAmount(deal.amount)}) — ${deal.daysSinceActivity} days inactive`);
+      }
+      if (newAlerts.length > 5) {
+        lines.push(`\n...and ${newAlerts.length - 5} more. Ask "deals at risk" for the full list.`);
+      }
+      await sendMessageFn(userId, lines.join("\n"));
+      console.log(`${LOG} Consolidated alert sent to ${userId}: ${newAlerts.length} deals`);
     } catch (err) {
       console.error(`${LOG} Instant alert error for ${userId}:`, err.message);
     }
