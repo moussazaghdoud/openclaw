@@ -53,6 +53,8 @@ let salesAgent;
 try { salesAgent = require("./sales-agent"); console.log("[OpenClawBot] Sales agent module loaded OK"); } catch (e) { salesAgent = null; console.warn("[OpenClawBot] Sales agent module failed to load:", e.message); }
 let salesDashboard;
 try { salesDashboard = require("./sales-dashboard"); console.log("[OpenClawBot] Sales dashboard module loaded OK"); } catch (e) { salesDashboard = null; console.warn("[OpenClawBot] Sales dashboard module failed to load:", e.message); }
+let salesScheduler;
+try { salesScheduler = require("./sales-scheduler"); console.log("[OpenClawBot] Sales scheduler module loaded OK"); } catch (e) { salesScheduler = null; console.warn("[OpenClawBot] Sales scheduler module failed to load:", e.message); }
 let contextManager;
 try { contextManager = require("./context-manager"); console.log("[OpenClawBot] Context manager loaded OK"); } catch (e) { contextManager = null; console.warn("[OpenClawBot] Context manager failed to load:", e.message); }
 let tenant;
@@ -201,6 +203,25 @@ async function initRedis() {
     if (salesAgent && sfAuth && sfApi) {
       salesAgent.init({ sfAuth, sfApi, redis });
       console.log(`${LOG} Sales agent module initialized (available: ${salesAgent.isAvailable()})`);
+    }
+    if (salesScheduler && sfAuth && sfApi) {
+      salesScheduler.init({
+        redis,
+        sfAuth,
+        sfApi,
+        salesAnalyzer: require("./sales-analyzer"),
+        sendMessage: async (userJid, text) => {
+          // Reuse the proactive send pattern from email-webhook
+          try {
+            const contact = await sdk.contacts.getContactByJid(userJid);
+            const conv = await sdk.conversations.openConversationForContact(contact);
+            await sdk.s2s.sendMessageInConversation(conv.dbId, { message: { body: text, lang: "en" } });
+          } catch (e) {
+            console.warn(`${LOG} Scheduler proactive send failed:`, e.message);
+          }
+        },
+      });
+      console.log(`${LOG} Sales scheduler initialized`);
     }
     if (agent) {
       agent.init({
@@ -3948,6 +3969,44 @@ async function start() {
               if (typingInterval) clearInterval(typingInterval);
               return;
             }
+          }
+        }
+      }
+
+      // ── Sales pending action confirmation (yes/no for CRM write operations) ──
+      if (salesAgent && redis) {
+        const trimmedCmd = content.trim().toLowerCase();
+        if (trimmedCmd === "yes" || trimmedCmd === "oui" || trimmedCmd === "confirm") {
+          const salesPending = await redis.get(`sales:pending:${fromJid}`).catch(() => null);
+          if (salesPending) {
+            const result = await salesAgent.executePendingAction(fromJid);
+            const msg = result?.success ? result.message : (result?.error || "Action failed.");
+            const convId = rawConversationId || conversationId;
+            if (convId && s2sConnectionId && authToken) {
+              const host = rainbowHost || "openrainbow.com";
+              await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+                method: "POST", headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ message: { body: msg, lang: "en" } }),
+              }).catch(() => {});
+            }
+            if (typingInterval) clearInterval(typingInterval);
+            return;
+          }
+        }
+        if (trimmedCmd === "no" || trimmedCmd === "non" || trimmedCmd === "cancel") {
+          const salesPending = await redis.get(`sales:pending:${fromJid}`).catch(() => null);
+          if (salesPending) {
+            await redis.del(`sales:pending:${fromJid}`);
+            const convId = rawConversationId || conversationId;
+            if (convId && s2sConnectionId && authToken) {
+              const host = rainbowHost || "openrainbow.com";
+              await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+                method: "POST", headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ message: { body: "Action cancelled.", lang: "en" } }),
+              }).catch(() => {});
+            }
+            if (typingInterval) clearInterval(typingInterval);
+            return;
           }
         }
       }

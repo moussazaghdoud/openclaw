@@ -317,6 +317,153 @@ function escapeSoql(str) {
   return str.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
 }
 
+// ── Write Operations ─────────────────────────────────────
+
+/**
+ * Update an opportunity's fields.
+ * @param {string} oppId - Opportunity ID
+ * @param {object} fields - { StageName, CloseDate, Amount, NextStep, Probability, Description }
+ */
+async function updateOpportunity(token, instanceUrl, oppId, fields) {
+  const resp = await sfFetch(token, instanceUrl, `/sobjects/Opportunity/${oppId}`, {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
+  if (!resp || resp._error) return resp || { _error: true, message: "No response" };
+  return { success: true };
+}
+
+/**
+ * Create a new task.
+ * @param {object} taskData - { Subject, Status, Priority, ActivityDate, WhatId, WhoId, Description, OwnerId }
+ */
+async function createTask(token, instanceUrl, taskData) {
+  const body = { ...taskData };
+  if (!body.Status) body.Status = "Not Started";
+  const resp = await sfFetch(token, instanceUrl, "/sobjects/Task", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (!resp || resp._error) return resp || { _error: true, message: "No response" };
+  return { success: true, id: resp.id };
+}
+
+/**
+ * Log a completed activity (call, email, etc.).
+ * @param {object} params - { subject, description, whatId, whoId, type }
+ */
+async function logActivity(token, instanceUrl, { subject, description, whatId, whoId, type }) {
+  const subtypeMap = { Call: "Call", Email: "Email" };
+  const body = {
+    Subject: subject,
+    Description: description,
+    WhatId: whatId,
+    WhoId: whoId,
+    Status: "Completed",
+  };
+  if (type && subtypeMap[type]) body.TaskSubtype = subtypeMap[type];
+  const resp = await sfFetch(token, instanceUrl, "/sobjects/Task", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (!resp || resp._error) return resp || { _error: true, message: "No response" };
+  return { success: true, id: resp.id };
+}
+
+/**
+ * Close an opportunity as won or lost.
+ */
+async function closeOpportunity(token, instanceUrl, oppId, won, amount) {
+  const fields = { StageName: won ? "Closed Won" : "Closed Lost" };
+  if (amount !== undefined && amount !== null) fields.Amount = amount;
+  return updateOpportunity(token, instanceUrl, oppId, fields);
+}
+
+// ── Forecast Queries ─────────────────────────────────────
+
+/**
+ * Get total closed-won amount and deal count for this fiscal quarter.
+ */
+async function getClosedWonThisQuarter(token, instanceUrl) {
+  const soql = `SELECT SUM(Amount) totalWon, COUNT(Id) dealCount FROM Opportunity WHERE StageName = 'Closed Won' AND CloseDate = THIS_FISCAL_QUARTER`;
+  const resp = await sfQuery(token, instanceUrl, soql);
+  if (!resp || resp.length === 0) return { totalWon: 0, dealCount: 0 };
+  return { totalWon: resp[0].totalWon || 0, dealCount: resp[0].dealCount || 0 };
+}
+
+/**
+ * Get total closed-won amount and deal count for last fiscal quarter.
+ */
+async function getClosedWonLastQuarter(token, instanceUrl) {
+  const soql = `SELECT SUM(Amount) totalWon, COUNT(Id) dealCount FROM Opportunity WHERE StageName = 'Closed Won' AND CloseDate = LAST_FISCAL_QUARTER`;
+  const resp = await sfQuery(token, instanceUrl, soql);
+  if (!resp || resp.length === 0) return { totalWon: 0, dealCount: 0 };
+  return { totalWon: resp[0].totalWon || 0, dealCount: resp[0].dealCount || 0 };
+}
+
+/**
+ * Get deals closed (won or lost) this week.
+ */
+async function getClosedDealsThisWeek(token, instanceUrl) {
+  const soql = `SELECT Id, Name, StageName, Amount, CloseDate, Account.Name, Owner.Name FROM Opportunity WHERE (StageName = 'Closed Won' OR StageName = 'Closed Lost') AND CloseDate = THIS_WEEK ORDER BY Amount DESC NULLS LAST LIMIT 20`;
+  const resp = await sfQuery(token, instanceUrl, soql);
+  if (!resp) return [];
+  return resp.map(normalizeOpportunity);
+}
+
+// ── Competitor Operations ────────────────────────────────
+
+/**
+ * Get competitors for an opportunity.
+ * Falls back with { _fallback: true } if OpportunityCompetitor object doesn't exist.
+ */
+async function getCompetitors(token, instanceUrl, oppId) {
+  const soql = `SELECT Id, CompetitorName, Strengths, Weaknesses FROM OpportunityCompetitor WHERE OpportunityId = '${escapeSoql(oppId)}'`;
+  const resp = await sfQuery(token, instanceUrl, soql);
+  if (resp === null) return { _fallback: true };
+  return resp.map(c => ({
+    id: c.Id,
+    name: c.CompetitorName || "",
+    strengths: c.Strengths || "",
+    weaknesses: c.Weaknesses || "",
+  }));
+}
+
+/**
+ * Add a competitor to an opportunity.
+ */
+async function addCompetitor(token, instanceUrl, oppId, name, strengths, weaknesses) {
+  const body = {
+    OpportunityId: oppId,
+    CompetitorName: name,
+  };
+  if (strengths) body.Strengths = strengths;
+  if (weaknesses) body.Weaknesses = weaknesses;
+  const resp = await sfFetch(token, instanceUrl, "/sobjects/OpportunityCompetitor", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (!resp || resp._error) return resp || { _error: true, message: "No response" };
+  return { success: true, id: resp.id };
+}
+
+/**
+ * Search deals by competitor name.
+ */
+async function searchDealsByCompetitor(token, instanceUrl, competitorName) {
+  const soql = `SELECT OpportunityId, Opportunity.Name, Opportunity.Amount, Opportunity.StageName, Opportunity.Account.Name, CompetitorName FROM OpportunityCompetitor WHERE CompetitorName LIKE '%${escapeSoql(competitorName)}%' LIMIT 20`;
+  const resp = await sfQuery(token, instanceUrl, soql);
+  if (!resp) return [];
+  return resp.map(r => ({
+    opportunityId: r.OpportunityId || "",
+    opportunityName: r.Opportunity?.Name || "",
+    amount: r.Opportunity?.Amount || null,
+    stage: r.Opportunity?.StageName || "",
+    account: r.Opportunity?.Account?.Name || "",
+    competitor: r.CompetitorName || "",
+  }));
+}
+
 module.exports = {
   // Accounts
   getAccount,
@@ -334,4 +481,17 @@ module.exports = {
   getRecentActivity,
   // Search
   globalSearch,
+  // Write Operations
+  updateOpportunity,
+  createTask,
+  logActivity,
+  closeOpportunity,
+  // Forecast Queries
+  getClosedWonThisQuarter,
+  getClosedWonLastQuarter,
+  getClosedDealsThisWeek,
+  // Competitor Operations
+  getCompetitors,
+  addCompetitor,
+  searchDealsByCompetitor,
 };

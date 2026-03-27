@@ -166,6 +166,147 @@ function getToolDefinitions() {
         required: ["account_name"],
       },
     },
+
+    // ── Write tools (require confirmation) ──────────────────
+    {
+      name: "update_opportunity",
+      description: "Update stage, close date, amount, next step, or probability on an opportunity. REQUIRES CONFIRMATION — the change is staged and must be confirmed before it is applied.",
+      input_schema: {
+        type: "object",
+        properties: {
+          opportunity_id: { type: "string", description: "Salesforce Opportunity ID (18-char)" },
+          stage: { type: "string", description: "New stage name" },
+          close_date: { type: "string", description: "New close date (YYYY-MM-DD)" },
+          amount: { type: "number", description: "New amount" },
+          next_step: { type: "string", description: "New next step text" },
+          probability: { type: "number", description: "New probability (0-100)" },
+        },
+        required: ["opportunity_id"],
+      },
+    },
+    {
+      name: "create_task",
+      description: "Create a follow-up task linked to an opportunity or contact. Executes immediately (no confirmation needed).",
+      input_schema: {
+        type: "object",
+        properties: {
+          subject: { type: "string", description: "Task subject / title" },
+          opportunity_id: { type: "string", description: "Link to opportunity (optional)" },
+          contact_id: { type: "string", description: "Link to contact (optional)" },
+          due_date: { type: "string", description: "Due date (YYYY-MM-DD)" },
+          priority: { type: "string", enum: ["High", "Normal", "Low"], description: "Task priority (default Normal)" },
+          description: { type: "string", description: "Task description / notes" },
+        },
+        required: ["subject"],
+      },
+    },
+    {
+      name: "log_activity",
+      description: "Log a call, email, or note as a completed activity. Executes immediately (no confirmation needed).",
+      input_schema: {
+        type: "object",
+        properties: {
+          subject: { type: "string", description: "Activity subject" },
+          type: { type: "string", enum: ["Call", "Email", "Note"], description: "Activity type (default Note)" },
+          account_id: { type: "string", description: "Link to account (optional)" },
+          opportunity_id: { type: "string", description: "Link to opportunity (optional)" },
+          description: { type: "string", description: "Activity details / notes" },
+        },
+        required: ["subject"],
+      },
+    },
+    {
+      name: "close_deal",
+      description: "Close a deal as won or lost. REQUIRES CONFIRMATION — the change is staged and must be confirmed before it is applied.",
+      input_schema: {
+        type: "object",
+        properties: {
+          opportunity_id: { type: "string", description: "Salesforce Opportunity ID (18-char)" },
+          won: { type: "boolean", description: "true = Closed Won, false = Closed Lost" },
+          amount: { type: "number", description: "Final deal amount (optional override)" },
+          close_reason: { type: "string", description: "Reason for closing (especially if lost)" },
+        },
+        required: ["opportunity_id", "won"],
+      },
+    },
+
+    // ── Forecast tools ──────────────────────────────────────
+    {
+      name: "get_forecast",
+      description: "Get pipeline forecast: coverage, weighted/unweighted pipeline, closed-won totals, and quarter-over-quarter comparison. Use when user asks about forecast, quota attainment, or pipeline coverage.",
+      input_schema: {
+        type: "object",
+        properties: {
+          quarter: { type: "string", description: "Target quarter (e.g. 'Q1 2026'). Defaults to current quarter." },
+          compare_previous: { type: "boolean", description: "Compare with previous quarter (default true)" },
+        },
+      },
+    },
+    {
+      name: "set_quota",
+      description: "Set the sales quota for a specific quarter or annual target. Stored persistently for forecast calculations.",
+      input_schema: {
+        type: "object",
+        properties: {
+          annual: { type: "number", description: "Annual quota amount" },
+          quarter: { type: "string", description: "Quarter label (e.g. 'Q1 2026')" },
+          amount: { type: "number", description: "Quarterly quota amount" },
+        },
+      },
+    },
+
+    // ── Competitor tools ────────────────────────────────────
+    {
+      name: "get_competitors",
+      description: "List competitors on a deal. Provide either the opportunity ID or the deal name.",
+      input_schema: {
+        type: "object",
+        properties: {
+          opportunity_id: { type: "string", description: "Salesforce Opportunity ID" },
+          deal_name: { type: "string", description: "Deal name to search for (partial match)" },
+        },
+      },
+    },
+    {
+      name: "add_competitor",
+      description: "Add a competitor to a deal. REQUIRES CONFIRMATION — the change is staged and must be confirmed before it is applied.",
+      input_schema: {
+        type: "object",
+        properties: {
+          opportunity_id: { type: "string", description: "Salesforce Opportunity ID (18-char)" },
+          competitor_name: { type: "string", description: "Competitor company name" },
+          strengths: { type: "string", description: "Competitor strengths on this deal" },
+          weaknesses: { type: "string", description: "Competitor weaknesses on this deal" },
+        },
+        required: ["opportunity_id", "competitor_name"],
+      },
+    },
+    {
+      name: "search_deals_by_competitor",
+      description: "Find all deals where a specific competitor is present. Use to understand competitive landscape across pipeline.",
+      input_schema: {
+        type: "object",
+        properties: {
+          competitor_name: { type: "string", description: "Competitor company name to search for" },
+        },
+        required: ["competitor_name"],
+      },
+    },
+
+    // ── Alert management ────────────────────────────────────
+    {
+      name: "manage_sales_alerts",
+      description: "Enable, disable, or configure proactive sales alerts (daily/weekly pipeline notifications). Use when user asks to set up or manage sales alerts.",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["enable", "disable", "configure", "status"], description: "Action to perform" },
+          timezone: { type: "string", description: "User timezone (e.g. 'Europe/Paris')" },
+          daily_time: { type: "string", description: "Daily alert time (HH:MM, 24h format)" },
+          weekly_day: { type: "string", description: "Weekly summary day (e.g. 'Monday')" },
+        },
+      },
+    },
   ];
 }
 
@@ -491,6 +632,298 @@ async function executeToolInner(toolName, input, token, instanceUrl, userId) {
         };
       }
 
+      // ── Write tools (confirmation pattern) ──────────────────
+
+      case "update_opportunity": {
+        if (!input.opportunity_id) return { error: "opportunity_id is required" };
+        const updates = {};
+        if (input.stage !== undefined) updates.StageName = input.stage;
+        if (input.close_date !== undefined) updates.CloseDate = input.close_date;
+        if (input.amount !== undefined) updates.Amount = input.amount;
+        if (input.next_step !== undefined) updates.NextStep = input.next_step;
+        if (input.probability !== undefined) updates.Probability = input.probability;
+        if (Object.keys(updates).length === 0) return { error: "No fields to update. Provide at least one of: stage, close_date, amount, next_step, probability." };
+
+        const pendingKey = `sales:pending:${userId}`;
+        const pendingAction = {
+          action: "update_opportunity",
+          opportunity_id: input.opportunity_id,
+          updates,
+          token,
+          instanceUrl,
+          createdAt: new Date().toISOString(),
+        };
+        if (redisClient) {
+          await redisClient.set(pendingKey, JSON.stringify(pendingAction), { EX: 300 });
+        }
+        return {
+          confirmation_needed: true,
+          action: "update_opportunity",
+          details: { opportunity_id: input.opportunity_id, updates },
+          message: `I'll update opportunity ${input.opportunity_id} with: ${Object.entries(updates).map(([k, v]) => `${k}=${v}`).join(", ")}. Please confirm.`,
+        };
+      }
+
+      case "create_task": {
+        if (!input.subject) return { error: "subject is required" };
+        const taskData = {
+          Subject: input.subject,
+          Priority: input.priority || "Normal",
+          Status: "Not Started",
+        };
+        if (input.opportunity_id) taskData.WhatId = input.opportunity_id;
+        if (input.contact_id) taskData.WhoId = input.contact_id;
+        if (input.due_date) taskData.ActivityDate = input.due_date;
+        if (input.description) taskData.Description = input.description;
+
+        const result = await sfApiModule.createTask(token, instanceUrl, taskData);
+        if (!result || result._error) return { error: result?._error || "Failed to create task" };
+        return {
+          success: true,
+          task_id: result.id,
+          message: `Task "${input.subject}" created successfully.`,
+          details: taskData,
+        };
+      }
+
+      case "log_activity": {
+        if (!input.subject) return { error: "subject is required" };
+        const activityData = {
+          Subject: input.subject,
+          Type: input.type || "Note",
+          Status: "Completed",
+        };
+        if (input.account_id) activityData.WhatId = input.account_id;
+        if (input.opportunity_id) activityData.WhatId = input.opportunity_id;
+        if (input.description) activityData.Description = input.description;
+
+        const result = await sfApiModule.logActivity(token, instanceUrl, activityData);
+        if (!result || result._error) return { error: result?._error || "Failed to log activity" };
+        return {
+          success: true,
+          activity_id: result.id,
+          message: `${activityData.Type} "${input.subject}" logged successfully.`,
+          details: activityData,
+        };
+      }
+
+      case "close_deal": {
+        if (!input.opportunity_id) return { error: "opportunity_id is required" };
+        if (input.won === undefined) return { error: "won (true/false) is required" };
+
+        const updates = {
+          StageName: input.won ? "Closed Won" : "Closed Lost",
+        };
+        if (input.amount !== undefined) updates.Amount = input.amount;
+        if (input.close_reason) updates.CloseReason = input.close_reason;
+
+        const pendingKey = `sales:pending:${userId}`;
+        const pendingAction = {
+          action: "close_deal",
+          opportunity_id: input.opportunity_id,
+          updates,
+          won: input.won,
+          token,
+          instanceUrl,
+          createdAt: new Date().toISOString(),
+        };
+        if (redisClient) {
+          await redisClient.set(pendingKey, JSON.stringify(pendingAction), { EX: 300 });
+        }
+        return {
+          confirmation_needed: true,
+          action: "close_deal",
+          details: { opportunity_id: input.opportunity_id, won: input.won, updates },
+          message: `I'll close deal ${input.opportunity_id} as ${input.won ? "Won" : "Lost"}${input.close_reason ? ` (reason: ${input.close_reason})` : ""}. Please confirm.`,
+        };
+      }
+
+      // ── Forecast tools ──────────────────────────────────────
+
+      case "get_forecast": {
+        const report = await analyzer.analyzePipeline(token, instanceUrl, userId);
+        if (!report || report.error) return { error: report?.error || "Analysis failed" };
+
+        const [closedWonCurrent, closedWonPrevious] = await Promise.all([
+          sfApiModule.getClosedWonThisQuarter(token, instanceUrl).catch(() => []),
+          sfApiModule.getClosedWonLastQuarter(token, instanceUrl).catch(() => []),
+        ]);
+
+        // Load quota from Redis
+        let quota = null;
+        if (redisClient) {
+          const quotaRaw = await redisClient.get(`sales:quota:${userId}`);
+          if (quotaRaw) {
+            try { quota = JSON.parse(quotaRaw); } catch {}
+          }
+        }
+
+        const totalPipeline = report.deals.reduce((s, d) => s + d.amount, 0);
+        const weightedPipeline = report.deals.reduce((s, d) => s + (d.amount * (d.probability || 0) / 100), 0);
+        const closedWonAmount = (closedWonCurrent || []).reduce((s, d) => s + (d.amount || 0), 0);
+        const closedWonPreviousAmount = (closedWonPrevious || []).reduce((s, d) => s + (d.amount || 0), 0);
+
+        const quarterQuota = quota?.quarter === input.quarter && quota?.amount ? quota.amount : (quota?.annual ? quota.annual / 4 : null);
+        const pipelineCoverage = quarterQuota ? totalPipeline / quarterQuota : null;
+
+        const forecast = {
+          quarter: input.quarter || "current",
+          totalPipeline,
+          weightedPipeline,
+          closedWon: closedWonAmount,
+          closedWonDealCount: (closedWonCurrent || []).length,
+          openDealCount: report.deals.length,
+          quota: quarterQuota,
+          pipelineCoverage: pipelineCoverage ? `${(pipelineCoverage * 100).toFixed(0)}%` : "N/A (no quota set)",
+        };
+
+        if (input.compare_previous !== false) {
+          forecast.comparison = {
+            previousQuarterClosedWon: closedWonPreviousAmount,
+            previousQuarterDealCount: (closedWonPrevious || []).length,
+            changePercent: closedWonPreviousAmount > 0
+              ? `${(((closedWonAmount - closedWonPreviousAmount) / closedWonPreviousAmount) * 100).toFixed(1)}%`
+              : "N/A",
+          };
+        }
+
+        return forecast;
+      }
+
+      case "set_quota": {
+        const quotaData = {};
+        if (input.annual !== undefined) quotaData.annual = input.annual;
+        if (input.quarter !== undefined) quotaData.quarter = input.quarter;
+        if (input.amount !== undefined) quotaData.amount = input.amount;
+
+        if (Object.keys(quotaData).length === 0) return { error: "Provide at least one of: annual, quarter + amount." };
+
+        if (redisClient) {
+          await redisClient.set(`sales:quota:${userId}`, JSON.stringify(quotaData));
+        }
+        return {
+          success: true,
+          message: `Quota saved: ${input.annual ? `Annual $${input.annual.toLocaleString()}` : ""}${input.quarter ? ` ${input.quarter}: $${(input.amount || 0).toLocaleString()}` : ""}`.trim(),
+          quota: quotaData,
+        };
+      }
+
+      // ── Competitor tools ────────────────────────────────────
+
+      case "get_competitors": {
+        let oppId = input.opportunity_id;
+        if (!oppId && input.deal_name) {
+          // Search for the deal first
+          const report = await analyzer.analyzePipeline(token, instanceUrl, userId);
+          if (report && !report.error) {
+            const searchName = input.deal_name.toLowerCase();
+            const deal = report.deals.find(d =>
+              d.name.toLowerCase().includes(searchName) ||
+              d.account.toLowerCase().includes(searchName)
+            );
+            if (deal) oppId = deal.id;
+          }
+          if (!oppId) return { error: `No deal found matching "${input.deal_name}"` };
+        }
+        if (!oppId) return { error: "Provide either opportunity_id or deal_name" };
+
+        const competitors = await sfApiModule.getCompetitors(token, instanceUrl, oppId);
+        if (!competitors || competitors._error) return { error: competitors?._error || "Failed to fetch competitors" };
+        return {
+          opportunity_id: oppId,
+          competitors: competitors || [],
+          count: (competitors || []).length,
+        };
+      }
+
+      case "add_competitor": {
+        if (!input.opportunity_id) return { error: "opportunity_id is required" };
+        if (!input.competitor_name) return { error: "competitor_name is required" };
+
+        const pendingKey = `sales:pending:${userId}`;
+        const pendingAction = {
+          action: "add_competitor",
+          opportunity_id: input.opportunity_id,
+          competitor_name: input.competitor_name,
+          strengths: input.strengths || null,
+          weaknesses: input.weaknesses || null,
+          token,
+          instanceUrl,
+          createdAt: new Date().toISOString(),
+        };
+        if (redisClient) {
+          await redisClient.set(pendingKey, JSON.stringify(pendingAction), { EX: 300 });
+        }
+        return {
+          confirmation_needed: true,
+          action: "add_competitor",
+          details: {
+            opportunity_id: input.opportunity_id,
+            competitor_name: input.competitor_name,
+            strengths: input.strengths || null,
+            weaknesses: input.weaknesses || null,
+          },
+          message: `I'll add "${input.competitor_name}" as a competitor on opportunity ${input.opportunity_id}. Please confirm.`,
+        };
+      }
+
+      case "search_deals_by_competitor": {
+        if (!input.competitor_name) return { error: "competitor_name is required" };
+        const deals = await sfApiModule.searchDealsByCompetitor(token, instanceUrl, input.competitor_name);
+        if (!deals || deals._error) return { error: deals?._error || "Failed to search deals by competitor" };
+        return {
+          competitor: input.competitor_name,
+          count: (deals || []).length,
+          deals: deals || [],
+        };
+      }
+
+      // ── Alert management ────────────────────────────────────
+
+      case "manage_sales_alerts": {
+        let scheduler = null;
+        try { scheduler = require("./sales-scheduler"); } catch {}
+        if (!scheduler) return { error: "Sales scheduler module not available" };
+
+        const action = input.action || "status";
+
+        switch (action) {
+          case "status": {
+            const prefs = await scheduler.getUserPrefs(userId);
+            return { action: "status", prefs: prefs || { enabled: false } };
+          }
+          case "enable": {
+            const prefs = {
+              enabled: true,
+              timezone: input.timezone || "UTC",
+              dailyTime: input.daily_time || "08:00",
+              weeklyDay: input.weekly_day || "Monday",
+            };
+            await scheduler.setUserPrefs(userId, prefs);
+            await scheduler.enableAlerts(userId);
+            return { success: true, message: `Sales alerts enabled. Daily at ${prefs.dailyTime} (${prefs.timezone}), weekly on ${prefs.weeklyDay}.`, prefs };
+          }
+          case "disable": {
+            await scheduler.disableAlerts(userId);
+            return { success: true, message: "Sales alerts disabled." };
+          }
+          case "configure": {
+            const existingPrefs = await scheduler.getUserPrefs(userId) || {};
+            const updatedPrefs = {
+              ...existingPrefs,
+              enabled: existingPrefs.enabled !== false,
+              timezone: input.timezone || existingPrefs.timezone || "UTC",
+              dailyTime: input.daily_time || existingPrefs.dailyTime || "08:00",
+              weeklyDay: input.weekly_day || existingPrefs.weeklyDay || "Monday",
+            };
+            await scheduler.setUserPrefs(userId, updatedPrefs);
+            return { success: true, message: "Sales alert preferences updated.", prefs: updatedPrefs };
+          }
+          default:
+            return { error: `Unknown alert action: ${action}. Use enable, disable, configure, or status.` };
+        }
+      }
+
       default:
         return { error: `Unknown sales tool: ${toolName}` };
     }
@@ -500,9 +933,68 @@ async function executeToolInner(toolName, input, token, instanceUrl, userId) {
   }
 }
 
+// ══════════════════════════════════════════════════════════
+// PENDING ACTION EXECUTION
+// ══════════════════════════════════════════════════════════
+
+async function executePendingAction(userId) {
+  if (!redisClient) return { error: "Redis not available" };
+
+  const pendingKey = `sales:pending:${userId}`;
+  const raw = await redisClient.get(pendingKey);
+  if (!raw) return { error: "No pending action found. It may have expired (5-minute TTL)." };
+
+  let pending;
+  try { pending = JSON.parse(raw); } catch { return { error: "Failed to parse pending action" }; }
+
+  const { action, token, instanceUrl } = pending;
+
+  try {
+    let result;
+
+    switch (action) {
+      case "update_opportunity": {
+        result = await sfApiModule.updateOpportunity(token, instanceUrl, pending.opportunity_id, pending.updates);
+        if (!result || result._error) return { error: result?._error || "Failed to update opportunity" };
+        break;
+      }
+      case "close_deal": {
+        result = await sfApiModule.updateOpportunity(token, instanceUrl, pending.opportunity_id, pending.updates);
+        if (!result || result._error) return { error: result?._error || "Failed to close deal" };
+        break;
+      }
+      case "add_competitor": {
+        result = await sfApiModule.addCompetitor(token, instanceUrl, pending.opportunity_id, {
+          competitorName: pending.competitor_name,
+          strengths: pending.strengths,
+          weaknesses: pending.weaknesses,
+        });
+        if (!result || result._error) return { error: result?._error || "Failed to add competitor" };
+        break;
+      }
+      default:
+        return { error: `Unknown pending action: ${action}` };
+    }
+
+    // Delete the pending key after successful execution
+    await redisClient.del(pendingKey);
+
+    return {
+      success: true,
+      action,
+      message: `${action} executed successfully.`,
+      result,
+    };
+  } catch (e) {
+    console.error(`${LOG} executePendingAction error:`, e.message);
+    return { error: e.message };
+  }
+}
+
 module.exports = {
   init,
   isAvailable,
   getToolDefinitions,
   executeTool,
+  executePendingAction,
 };

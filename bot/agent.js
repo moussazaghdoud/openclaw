@@ -507,7 +507,17 @@ async function executeTool(toolName, input, userId, memory) {
       case "list_opportunities":
       case "search_crm":
       case "get_opportunity_details":
-      case "get_account_details": {
+      case "get_account_details":
+      case "update_opportunity":
+      case "create_task":
+      case "log_activity":
+      case "close_deal":
+      case "get_forecast":
+      case "set_quota":
+      case "get_competitors":
+      case "add_competitor":
+      case "search_deals_by_competitor":
+      case "manage_sales_alerts": {
         if (!salesAgentModule || !salesAgentModule.isAvailable()) {
           return { error: "Sales module not available. Salesforce may not be configured." };
         }
@@ -634,7 +644,19 @@ Salesforce CRM tools — YOU HAVE FULL ACCESS TO SALESFORCE. NEVER tell the user
 - get_opportunity_details: Get full details of a specific opportunity by ID.
 - analyze_pipeline: Full pipeline health analysis with risk scores.
 - get_deal_risks, get_stale_deals, get_missing_next_steps, get_pipeline_summary, get_deal_details, get_ghost_deals, get_deals_by_owner: Pipeline analysis tools.
-- IMPORTANT: When a user asks about any deal, account, contact, or CRM record — ALWAYS call search_crm or the relevant tool. NEVER say "Salesforce is not connected" or ask the user to connect.
+- update_opportunity: Update deal stage, close date, amount, next step. REQUIRES user confirmation.
+- create_task: Create a follow-up task. Executes immediately.
+- log_activity: Log a call/email/note. Executes immediately.
+- close_deal: Close a deal as won or lost. REQUIRES user confirmation.
+- get_forecast: Pipeline coverage, quota attainment, quarter comparison.
+- set_quota: Set sales quota for forecast calculations.
+- get_competitors, add_competitor, search_deals_by_competitor: Competitor tracking.
+- manage_sales_alerts: Enable/disable proactive daily/weekly pipeline alerts.
+
+WRITE SAFETY — CRITICAL:
+- For update_opportunity, close_deal, add_competitor: the tool returns confirmation_needed=true. ALWAYS show the confirmation details to the user and ask them to reply "yes" or "no" BEFORE the change is applied.
+- NEVER execute a write without showing what will change first.
+- IMPORTANT: When a user asks about any deal, account, contact, or CRM record — ALWAYS call the relevant tool. NEVER say "Salesforce is not connected".
 - Present risk levels: 🔴 High, 🟡 Medium, 🟢 Low. Amounts in compact notation ($50K, $1.2M).
 - Prioritize actionable insights over raw data.
 ` : ""}
@@ -778,6 +800,16 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
           search_crm: "Searching CRM...",
           get_opportunity_details: "Loading opportunity details...",
           get_account_details: "Loading account details...",
+          update_opportunity: "Preparing opportunity update...",
+          create_task: "Creating task...",
+          log_activity: "Logging activity...",
+          close_deal: "Preparing to close deal...",
+          get_forecast: "Building forecast...",
+          set_quota: "Setting quota...",
+          get_competitors: "Checking competitors...",
+          add_competitor: "Adding competitor...",
+          search_deals_by_competitor: "Searching by competitor...",
+          manage_sales_alerts: "Managing alerts...",
         };
         const updates = toolNames.map(n => progressMap[n]).filter(Boolean);
         if (updates.length > 0) {

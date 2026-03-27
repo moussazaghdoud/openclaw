@@ -64,6 +64,13 @@ async function executeTool(toolName, input, userId) {
 }
 
 /**
+ * Execute a pending write action (after user confirms "yes").
+ */
+async function executePendingAction(userId) {
+  return salesTools.executePendingAction(userId);
+}
+
+/**
  * Get progress message for a sales tool (for onProgress callback).
  */
 function getProgressMessage(toolName) {
@@ -86,5 +93,6 @@ module.exports = {
   isSalesQuery,
   getToolDefinitions,
   executeTool,
+  executePendingAction,
   getProgressMessage,
 };
