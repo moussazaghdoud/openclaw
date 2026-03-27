@@ -650,11 +650,23 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
     } catch {}
   }
 
-  // Build messages — ONLY the current user message
-  // The agent must ALWAYS use tools for data. Conversation history is provided
-  // via working memory (resolved entities, last emails/events) not as raw messages.
-  // Raw history caused Claude to answer from stale/tainted data instead of calling tools.
-  const messages = [{ role: "user", content: userMessage }];
+  // Build messages — include conversation history for follow-up support.
+  // Filter out PII-tainted entries (PERSON_N placeholders from secure mode).
+  const messages = [];
+  if (conversationHistory && conversationHistory.length > 0) {
+    // Include last 10 messages for context (follow-ups, references)
+    const recent = conversationHistory.slice(-10);
+    for (const msg of recent) {
+      // Skip PII-tainted entries
+      if (msg.content && (msg.content.includes("PERSON_") || msg.content.includes("[PRODUCT_"))) continue;
+      // Skip very long tool outputs stored in history
+      const content = msg.content && msg.content.length > 2000
+        ? msg.content.substring(0, 2000) + "... (truncated)"
+        : msg.content;
+      if (content) messages.push({ role: msg.role, content });
+    }
+  }
+  messages.push({ role: "user", content: userMessage });
 
   // Always use Sonnet for the agent loop (fast reasoning + tool calling)
   // Opus is too slow for multi-step loops — if high-quality writing is needed,
