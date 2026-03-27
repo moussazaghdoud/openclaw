@@ -209,7 +209,7 @@ async function initRedis() {
         redis,
         sfAuth,
         sfApi,
-        salesAnalyzer: require("./sales-analyzer"),
+        analyzer: require("./sales-analyzer"),
         sendMessage: async (userJid, text) => {
           // Reuse the proactive send pattern from email-webhook
           try {
