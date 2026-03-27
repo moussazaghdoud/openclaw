@@ -109,12 +109,33 @@ async function getOpportunities(token, instanceUrl, accountId, limit = 10) {
 
 /**
  * Get open opportunities (pipeline).
+ * @param {object} options - { limit, sortBy, sortDir, year, minAmount }
  */
-async function getOpenOpportunities(token, instanceUrl, limit = 15) {
+async function getOpenOpportunities(token, instanceUrl, limitOrOptions = 15) {
+  let limit = 15, sortBy = "CloseDate", sortDir = "ASC", whereExtra = "";
+
+  if (typeof limitOrOptions === "object" && limitOrOptions !== null) {
+    limit = limitOrOptions.limit || 15;
+    sortBy = limitOrOptions.sortBy || "CloseDate";
+    sortDir = limitOrOptions.sortDir || "ASC";
+    if (limitOrOptions.year) {
+      whereExtra += ` AND CALENDAR_YEAR(CloseDate) = ${parseInt(limitOrOptions.year, 10)}`;
+    }
+    if (limitOrOptions.minAmount) {
+      whereExtra += ` AND Amount >= ${parseFloat(limitOrOptions.minAmount)}`;
+    }
+  } else {
+    limit = limitOrOptions || 15;
+  }
+
+  const validSorts = { CloseDate: "CloseDate", Amount: "Amount", Name: "Name", Probability: "Probability", CreatedDate: "CreatedDate" };
+  const sortField = validSorts[sortBy] || "CloseDate";
+  const dir = sortDir === "DESC" ? "DESC" : "ASC";
+
   const soql = `SELECT Id, Name, StageName, Amount, CloseDate, Probability, Account.Name, AccountId, Owner.Name, NextStep
     FROM Opportunity
-    WHERE IsClosed = false
-    ORDER BY CloseDate ASC
+    WHERE IsClosed = false${whereExtra}
+    ORDER BY ${sortField} ${dir} NULLS LAST
     LIMIT ${limit}`;
   const resp = await sfQuery(token, instanceUrl, soql);
   if (!resp) return [];

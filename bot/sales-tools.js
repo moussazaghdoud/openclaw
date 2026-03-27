@@ -120,12 +120,16 @@ function getToolDefinitions() {
     },
     {
       name: "list_opportunities",
-      description: "List opportunities from Salesforce. Use when user asks to see opportunities, recent deals, open deals, or any list of opportunities. Returns name, account, stage, amount, close date, owner.",
+      description: "List opportunities from Salesforce. Use when user asks to see opportunities, deals, or pipeline. Supports sorting and filtering. For 'biggest opportunity' use sort_by='Amount' sort_dir='DESC'. For '2026 opportunities' use year=2026.",
       input_schema: {
         type: "object",
         properties: {
-          account_name: { type: "string", description: "Filter by account name (optional — omit for all)" },
+          account_name: { type: "string", description: "Filter by account name (optional)" },
           limit: { type: "number", description: "Max results (default 10, max 50)" },
+          sort_by: { type: "string", enum: ["Amount", "CloseDate", "Probability", "Name", "CreatedDate"], description: "Sort field (default CloseDate)" },
+          sort_dir: { type: "string", enum: ["ASC", "DESC"], description: "Sort direction (default ASC). Use DESC for biggest/highest/latest." },
+          year: { type: "number", description: "Filter by close date year (e.g. 2026)" },
+          min_amount: { type: "number", description: "Filter by minimum amount (e.g. 100000)" },
         },
       },
     },
@@ -406,7 +410,13 @@ async function executeToolInner(toolName, input, token, instanceUrl, userId) {
             return { error: `No account found matching "${input.account_name}"` };
           }
         } else {
-          opps = await sfApiModule.getOpenOpportunities(token, instanceUrl, limit);
+          opps = await sfApiModule.getOpenOpportunities(token, instanceUrl, {
+            limit,
+            sortBy: input.sort_by || "CloseDate",
+            sortDir: input.sort_dir || "ASC",
+            year: input.year || null,
+            minAmount: input.min_amount || null,
+          });
         }
         if (!opps) return { error: "Failed to fetch opportunities" };
         return {
