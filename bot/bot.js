@@ -2237,26 +2237,33 @@ async function processFileFromCallback(msg, convId, fromUserId, isGroup) {
   }
 
   // Detect alert config file (JSON with alert keys)
-  if (salesScheduler && downloaded && fileInfo.filename.toLowerCase().endsWith(".json")) {
-    try {
-      const jsonText = downloaded.buffer.toString("utf-8");
-      const parsed = JSON.parse(jsonText);
-      if (parsed.daily_digest || parsed.weekly_summary || parsed.stale_deal_alert || parsed.close_date_alert || parsed.high_value_alert) {
-        const result = await salesScheduler.applyConfigFile(fromUserId || convId, parsed);
-        const configMsg = result.success
-          ? `Alert configuration applied (${result.timezone}):\n${result.alerts.map(a => `- ${a}`).join("\n")}`
-          : `Failed to apply config: ${result.error}`;
-        // Send config confirmation
-        if (s2sConnectionId && authToken) {
-          const host = rainbowHost || "openrainbow.com";
-          await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
-            method: "POST", headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ message: { body: configMsg, lang: "en" } }),
-          }).catch(() => {});
+  if (salesScheduler && fileInfo.filename.toLowerCase().endsWith(".json")) {
+    let jsonText = null;
+    if (downloaded && downloaded.buffer) {
+      jsonText = downloaded.buffer.toString("utf-8");
+    } else if (fileContext) {
+      const jsonMatch = fileContext.match(/```\n([\s\S]*?)\n```/);
+      if (jsonMatch) jsonText = jsonMatch[1];
+    }
+    if (jsonText) {
+      try {
+        const parsed = JSON.parse(jsonText);
+        if (parsed.daily_digest || parsed.weekly_summary || parsed.stale_deal_alert || parsed.close_date_alert || parsed.high_value_alert) {
+          const result = await salesScheduler.applyConfigFile(fromUserId || convId, parsed);
+          const configMsg = result.success
+            ? `Alert configuration applied (${result.timezone}):\n${result.alerts.map(a => `- ${a}`).join("\n")}`
+            : `Failed to apply config: ${result.error}`;
+          if (s2sConnectionId && authToken) {
+            const host = rainbowHost || "openrainbow.com";
+            await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+              method: "POST", headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ message: { body: configMsg, lang: "en" } }),
+            }).catch(() => {});
+          }
+          return;
         }
-        return;
-      }
-    } catch {}
+      } catch {}
+    }
   }
 
   // Send confirmation
@@ -3477,6 +3484,38 @@ async function start() {
             path: "file_upload",
             filesReferenced: [fileInfo.filename],
           }).catch(() => {});
+        }
+
+        // Detect alert config file (JSON with alert keys)
+        if (salesScheduler && fileInfo.filename.toLowerCase().endsWith(".json")) {
+          let jsonText = null;
+          if (downloaded && downloaded.buffer) {
+            jsonText = downloaded.buffer.toString("utf-8");
+          } else if (fileContext) {
+            // Extract JSON from fileContext (describeFileForAI wraps in code blocks)
+            const jsonMatch = fileContext.match(/```\n([\s\S]*?)\n```/);
+            if (jsonMatch) jsonText = jsonMatch[1];
+          }
+          if (jsonText) {
+            try {
+              const parsed = JSON.parse(jsonText);
+              if (parsed.daily_digest || parsed.weekly_summary || parsed.stale_deal_alert || parsed.close_date_alert || parsed.high_value_alert) {
+                const result = await salesScheduler.applyConfigFile(fromJid, parsed);
+                const configMsg = result.success
+                  ? `Alert configuration applied (${result.timezone}):\n${result.alerts.map(a => `- ${a}`).join("\n")}`
+                  : `Failed to apply config: ${result.error}`;
+                const cfgConvId = rawCb?.conversation_id || conversationId;
+                if (cfgConvId && s2sConnectionId && authToken) {
+                  const host = rainbowHost || "openrainbow.com";
+                  await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${cfgConvId}/messages`, {
+                    method: "POST", headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                    body: JSON.stringify({ message: { body: configMsg, lang: "en" } }),
+                  }).catch(() => {});
+                }
+                return;
+              }
+            } catch {}
+          }
         }
 
         // Send confirmation to user
