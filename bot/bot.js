@@ -2249,31 +2249,34 @@ async function processFileFromCallback(msg, convId, fromUserId, isGroup) {
       try {
         const parsed = JSON.parse(jsonText);
         if (parsed.daily_digest || parsed.weekly_summary || parsed.stale_deal_alert || parsed.close_date_alert || parsed.high_value_alert) {
-          const result = await salesScheduler.applyConfigFile(fromUserId || convId, parsed);
+          const alertUserId = fromUserId || convId;
+          console.log(`${LOG} Alert config detected in ${fileInfo.filename} for ${alertUserId}`);
+          const result = await salesScheduler.applyConfigFile(alertUserId, parsed);
           const configMsg = result.success
             ? `Alert configuration applied (${result.timezone}):\n${result.alerts.map(a => `- ${a}`).join("\n")}`
             : `Failed to apply config: ${result.error}`;
-          if (s2sConnectionId && authToken) {
-            const host = rainbowHost || "openrainbow.com";
-            await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
-              method: "POST", headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ message: { body: configMsg, lang: "en" } }),
-            }).catch(() => {});
-          }
-          return;
+          console.log(`${LOG} Alert config result: ${configMsg.substring(0, 200)}`);
+          // Don't return — let it fall through to the normal confirmation handler
+          // but replace confirmMsg content
+          fileContext = configMsg;
         }
-      } catch {}
+      } catch (e) {
+        console.warn(`${LOG} Alert config parse error:`, e.message);
+      }
     }
   }
 
-  // Send confirmation
+  // Send confirmation — fileContext may have been replaced by alert config result
+  const isAlertConfig = fileContext && fileContext.startsWith("Alert configuration");
   const fileSize = fileInfo.filesize ? ` (${Math.round(fileInfo.filesize / 1024)}KB)` : "";
-  const confirmMsg = downloaded
-    ? `📎 **${fileInfo.filename}**${fileSize} received and ready.\n\nYou can now ask me to:\n- Translate it\n- Summarize it\n- Anonymize it\n- Or ask any question about its content`
-    : `📎 I see **${fileInfo.filename}** was shared, but I couldn't download it. Try pasting the content directly.`;
+  const confirmMsg = isAlertConfig
+    ? fileContext
+    : downloaded
+      ? `📎 **${fileInfo.filename}**${fileSize} received and ready.\n\nYou can now ask me to:\n- Translate it\n- Summarize it\n- Anonymize it\n- Or ask any question about its content`
+      : `📎 I see **${fileInfo.filename}** was shared, but I couldn't download it. Try pasting the content directly.`;
 
   let sent = false;
-  console.log(`${LOG} File confirmation: convId=${convId}, fromUserId=${fromUserId}, s2s=${!!s2sConnectionId}`);
+  console.log(`${LOG} File confirmation: convId=${convId}, fromUserId=${fromUserId}, s2s=${!!s2sConnectionId}, isAlert=${isAlertConfig}`);
 
   // Method 1: S2S REST with conversation_id
   if (convId && s2sConnectionId && authToken) {
@@ -3505,24 +3508,24 @@ async function start() {
                   ? `Alert configuration applied (${result.timezone}):\n${result.alerts.map(a => `- ${a}`).join("\n")}`
                   : `Failed to apply config: ${result.error}`;
                 const cfgConvId = rawCb?.conversation_id || conversationId;
-                if (cfgConvId && s2sConnectionId && authToken) {
-                  const host = rainbowHost || "openrainbow.com";
-                  await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${cfgConvId}/messages`, {
-                    method: "POST", headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                    body: JSON.stringify({ message: { body: configMsg, lang: "en" } }),
-                  }).catch(() => {});
-                }
-                return;
+                console.log(`${LOG} Alert config detected in ${fileInfo.filename} for ${fromJid}`);
+                fileContext = configMsg;
+                console.log(`${LOG} Alert config result: ${fileContext.substring(0, 200)}`);
               }
-            } catch {}
+            } catch (e) {
+              console.warn(`${LOG} Alert config parse error:`, e.message);
+            }
           }
         }
 
-        // Send confirmation to user
+        // Send confirmation to user — fileContext may have been replaced by alert config result
+        const isAlertConfig = fileContext && fileContext.startsWith("Alert configuration");
         const fileSize = fileInfo.filesize ? ` (${Math.round(fileInfo.filesize / 1024)}KB)` : "";
-        const confirmMsg = downloaded
-          ? `📎 **${fileInfo.filename}**${fileSize} received and ready.\n\nYou can now ask me to:\n- Translate it\n- Summarize it\n- Anonymize it\n- Or ask any question about its content`
-          : `📎 I see **${fileInfo.filename}** was shared, but I couldn't download it. Try sending a text file (.txt, .csv, .json) or paste the content directly.`;
+        const confirmMsg = isAlertConfig
+          ? fileContext
+          : downloaded
+            ? `📎 **${fileInfo.filename}**${fileSize} received and ready.\n\nYou can now ask me to:\n- Translate it\n- Summarize it\n- Anonymize it\n- Or ask any question about its content`
+            : `📎 I see **${fileInfo.filename}** was shared, but I couldn't download it. Try sending a text file (.txt, .csv, .json) or paste the content directly.`;
 
         // Send confirmation via S2S REST + SDK fallback + direct REST
         const confirmConvId = rawCb?.conversation_id || conversationId;
