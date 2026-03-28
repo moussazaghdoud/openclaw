@@ -649,9 +649,20 @@ async function executeTool(toolName, input, userId, memory) {
               description: input.description || "",
             };
             const success = await scheduler.addClassificationRule(userId, rule);
-            return success
-              ? { success: true, message: `Rule added: emails matching ${rule.match_type} [${rule.match_values.join(", ")}] will be classified as ${rule.category}.`, rule }
-              : { error: "Failed to save rule." };
+            if (!success) return { error: "Failed to save rule." };
+
+            // Retroactively apply: create folder and move existing matching emails
+            let retroResult = { moved: 0 };
+            if (scheduler.applyRuleRetroactively) {
+              retroResult = await scheduler.applyRuleRetroactively(userId, rule);
+            }
+
+            return {
+              success: true,
+              message: `Rule added: emails matching ${rule.match_type} [${rule.match_values.join(", ")}] will be classified as ${rule.category}. Folder "${rule.category}" created in Outlook. ${retroResult.moved || 0} existing emails moved.`,
+              rule,
+              emailsMoved: retroResult.moved || 0,
+            };
           }
           case "remove": {
             if (!input.category) return { error: "Please specify which category to remove." };

@@ -443,11 +443,13 @@ async function applyOutlookActions(token, classified, graph) {
           break;
 
         default:
-          // Custom category (e.g. EMT, VIP, etc.) — flag + categorize
-          await graph.flagEmail(token, email.id);
+          // Custom category (e.g. EMT, NAVAN, VIP) — categorize + move to named folder
           await graph.setCategories(token, email.id, [email.category]);
-          actions.flagged++;
+          await graph.moveToFolder(token, email.id, email.category);
+          await graph.markAsRead(token, email.id);
           actions.categorized++;
+          actions.moved++;
+          actions.read++;
           break;
       }
     } catch (err) {
@@ -1112,6 +1114,39 @@ function stop() {
 
 // ── Exports ───────────────────────────────────────────────
 
+/**
+ * Retroactively apply a rule: find matching emails and move them to the category folder.
+ * Called when a new rule is created to handle existing emails.
+ */
+async function applyRuleRetroactively(userId, rule) {
+  if (!m365AuthModule || !graphModule) return { error: "Email not configured" };
+
+  try {
+    const tokenData = await m365AuthModule.getValidToken(userId);
+    if (!tokenData || !tokenData.token) return { error: "No email token" };
+
+    // Search for matching emails
+    const searchTerms = (rule.match_values || []).join(" OR ");
+    const emails = await graphModule.getEmailsFromSender(tokenData.token, searchTerms, 50);
+    if (!emails || emails._error || emails.length === 0) return { moved: 0 };
+
+    let moved = 0;
+    for (const email of emails) {
+      try {
+        await graphModule.setCategories(tokenData.token, email.id, [rule.category]);
+        await graphModule.moveToFolder(tokenData.token, email.id, rule.category);
+        moved++;
+      } catch {}
+    }
+
+    console.log(`${LOG} Retroactively moved ${moved} emails to ${rule.category} folder for ${userId}`);
+    return { moved, total: emails.length };
+  } catch (e) {
+    console.error(`${LOG} Retroactive rule apply error:`, e.message);
+    return { error: e.message };
+  }
+}
+
 module.exports = {
   init,
   stop,
@@ -1126,6 +1161,7 @@ module.exports = {
   setClassificationRules,
   addClassificationRule,
   removeClassificationRule,
+  applyRuleRetroactively,
   // Exposed for testing
   classifyEmails,
   buildEmailDigest,
