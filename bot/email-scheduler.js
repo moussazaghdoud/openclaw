@@ -183,7 +183,7 @@ async function checkDailyDigests() {
       // Classify emails with AI
       let classified;
       if (ANTHROPIC_API_KEY) {
-        classified = await classifyEmails(emails);
+        classified = await classifyEmails(emails, userId);
       } else {
         // Fallback: classify by importance field
         classified = emails.map(e => ({
@@ -216,13 +216,89 @@ async function checkDailyDigests() {
 
 // ── AI Classification ────────────────────────────────────
 
+// ── Classification Rules (Redis-backed, user-configurable) ──
+
+/**
+ * Get classification rules for a user.
+ * Rules format: [{ category: "EMT", match_type: "sender", match_values: ["ROBINEAU", "BLECKEN"], description: "Executive Management Team", outlook_action: "flag+category" }]
+ */
+async function getClassificationRules(userId) {
+  if (!redisClient) return [];
+  try {
+    const raw = await redisClient.get(`email:rules:${userId}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+async function setClassificationRules(userId, rules) {
+  if (!redisClient) return false;
+  try {
+    await redisClient.set(`email:rules:${userId}`, JSON.stringify(rules));
+    console.log(`${LOG} Rules saved for ${userId}: ${rules.length} rules`);
+    return true;
+  } catch (e) {
+    console.error(`${LOG} Failed to save rules:`, e.message);
+    return false;
+  }
+}
+
+async function addClassificationRule(userId, rule) {
+  const rules = await getClassificationRules(userId);
+  // Check for duplicate category+match
+  const existing = rules.findIndex(r => r.category === rule.category && r.match_type === rule.match_type);
+  if (existing >= 0) {
+    // Merge values
+    const merged = new Set([...(rules[existing].match_values || []), ...(rule.match_values || [])]);
+    rules[existing].match_values = [...merged];
+    rules[existing].description = rule.description || rules[existing].description;
+  } else {
+    rules.push(rule);
+  }
+  return setClassificationRules(userId, rules);
+}
+
+async function removeClassificationRule(userId, category) {
+  const rules = await getClassificationRules(userId);
+  const filtered = rules.filter(r => r.category.toUpperCase() !== category.toUpperCase());
+  if (filtered.length === rules.length) return false;
+  return setClassificationRules(userId, filtered);
+}
+
+function buildRulesPrompt(rules) {
+  if (!rules || rules.length === 0) return "";
+  const lines = ["CUSTOM CLASSIFICATION RULES (these take priority over default categories):"];
+  for (const rule of rules) {
+    const values = (rule.match_values || []).join(", ");
+    if (rule.match_type === "sender") {
+      lines.push(`- ${rule.category}: Emails from any of these senders (by last name): ${values}. ${rule.description || ""}`);
+    } else if (rule.match_type === "subject") {
+      lines.push(`- ${rule.category}: Emails with subject containing: ${values}. ${rule.description || ""}`);
+    } else if (rule.match_type === "domain") {
+      lines.push(`- ${rule.category}: Emails from these domains: ${values}. ${rule.description || ""}`);
+    }
+    lines.push(`  IMPORTANT: Classify matching emails as ${rule.category} regardless of content.`);
+  }
+  return lines.join("\n");
+}
+
+function getCustomCategories(rules) {
+  if (!rules || rules.length === 0) return [];
+  return [...new Set(rules.map(r => r.category.toUpperCase()))];
+}
+
 /**
  * Classify emails using Anthropic API (Claude Sonnet).
  * Sends subjects, senders, and previews in a batch prompt.
  * Returns array of { ...email, category, action_needed }.
  */
-async function classifyEmails(emails) {
+async function classifyEmails(emails, userId) {
   if (!ANTHROPIC_API_KEY || emails.length === 0) return emails.map(e => ({ ...e, category: "FYI", action_needed: "" }));
+
+  // Load custom rules from Redis
+  const rules = await getClassificationRules(userId);
+  const customRulesText = buildRulesPrompt(rules);
+  const customCategories = getCustomCategories(rules);
+  const allCategories = ["URGENT", "ACTION", "FYI", "SYSTEM", ...customCategories, "NOISE"];
 
   const emailData = emails.map((e, i) => ({
     index: i,
@@ -244,11 +320,11 @@ async function classifyEmails(emails) {
 
 IMPORTANT: Emails from automated systems, bots, batch processes, IT infrastructure (e.g. "Your mailbox is almost full", "Your worklist contains leave requests", calendar notifications) must be classified as SYSTEM, never as URGENT.
 
-IMPORTANT: Emails from any of these people (by last name) must ALWAYS be classified as EMT: EMT, ROBINEAU, BLECKEN, ZAGHDOUD, EL KHODRY, ZHANG, MOHAMAD, LILY. These are Executive Management Team members — classify them as EMT regardless of content.
+${customRulesText}
 
-For URGENT, ACTION, and EMT emails, provide a brief action_needed description (max 10 words).
+For URGENT, ACTION, and custom category emails, provide a brief action_needed description (max 10 words).
 
-Respond with ONLY a JSON array. Each element must have: { "index": <number>, "category": "URGENT|ACTION|FYI|SYSTEM|EMT|NOISE", "action_needed": "<string or empty>" }
+Respond with ONLY a JSON array. Each element must have: { "index": <number>, "category": "${allCategories.join("|")}", "action_needed": "<string or empty>" }
 No markdown, no explanation, just the JSON array.`;
 
   try {
@@ -333,13 +409,6 @@ async function applyOutlookActions(token, classified, graph) {
   for (const email of classified) {
     try {
       switch (email.category) {
-        case "EMT":
-          await graph.flagEmail(token, email.id);
-          await graph.setCategories(token, email.id, ["EMT"]);
-          actions.flagged++;
-          actions.categorized++;
-          break;
-
         case "URGENT":
           await graph.flagEmail(token, email.id);
           await graph.setCategories(token, email.id, ["Urgent"]);
@@ -371,6 +440,14 @@ async function applyOutlookActions(token, classified, graph) {
           await graph.markAsRead(token, email.id);
           actions.moved++;
           actions.read++;
+          break;
+
+        default:
+          // Custom category (e.g. EMT, VIP, etc.) — flag + categorize
+          await graph.flagEmail(token, email.id);
+          await graph.setCategories(token, email.id, [email.category]);
+          actions.flagged++;
+          actions.categorized++;
           break;
       }
     } catch (err) {
@@ -459,24 +536,38 @@ function buildEmailDigest(classified, crmContext, prefs) {
   lines.push("");
 
   // Group by category
-  const groups = { EMT: [], URGENT: [], ACTION: [], FYI: [], SYSTEM: [], NOISE: [] };
+  const groups = { URGENT: [], ACTION: [], FYI: [], SYSTEM: [], NOISE: [] };
+  const customGroups = {}; // dynamic custom categories
   for (const email of classified) {
-    const cat = groups[email.category] ? email.category : "FYI";
-    groups[cat].push(email);
+    if (groups[email.category]) {
+      groups[email.category].push(email);
+    } else {
+      // Custom category
+      if (!customGroups[email.category]) customGroups[email.category] = [];
+      customGroups[email.category].push(email);
+    }
   }
 
   let counter = 0;
 
-  // EMT (Executive Management Team)
-  if (groups.EMT.length > 0) {
-    lines.push(`\ud83d\udc51 EMT (${groups.EMT.length})`);
-    for (const email of groups.EMT) {
-      counter++;
-      lines.push(`${counter}. ${email.from} \u2014 "${email.subject}"`);
-      if (email.action_needed) {
-        lines.push(`   \u2192 ${email.action_needed}`);
+  // Custom categories (EMT, VIP, etc.) — shown first
+  for (const [catName, catEmails] of Object.entries(customGroups)) {
+    if (catEmails.length > 0) {
+      lines.push(`\ud83d\udc51 ${catName} (${catEmails.length})`);
+      for (const email of catEmails) {
+        counter++;
+        const senderCRM = crmContext[email.fromEmail?.toLowerCase()];
+        lines.push(`${counter}. ${email.from} \u2014 "${email.subject}"`);
+        if (email.action_needed) {
+          lines.push(`   \u2192 ${email.action_needed}`);
+        }
+        if (senderCRM?.account) {
+          const dealInfo = senderCRM.deals?.[0];
+          const dealStr = dealInfo ? ` \u2014 ${formatAmount(dealInfo.amount)} deal` : "";
+          lines.push(`   \ud83d\udcce ${senderCRM.account}${dealStr}`);
+        }
+        lines.push("");
       }
-      lines.push("");
     }
   }
 
@@ -911,7 +1002,7 @@ async function triggerEmailDigest(userId) {
     // Classify
     let classified;
     if (ANTHROPIC_API_KEY) {
-      classified = await classifyEmails(emails);
+      classified = await classifyEmails(emails, userId);
     } else {
       classified = emails.map(e => ({
         ...e,
@@ -1030,6 +1121,11 @@ module.exports = {
   disableAlerts,
   applyConfigFile,
   triggerEmailDigest,
+  // Rules management
+  getClassificationRules,
+  setClassificationRules,
+  addClassificationRule,
+  removeClassificationRule,
   // Exposed for testing
   classifyEmails,
   buildEmailDigest,

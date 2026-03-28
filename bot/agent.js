@@ -191,6 +191,20 @@ function getTools() {
       },
     });
     tools.push({
+      name: "manage_email_rules",
+      description: "Manage email classification rules. Users can create custom categories (e.g. 'EMT', 'VIP', 'Partner') and define which senders belong to each. Use when user says 'rules', 'classify emails from X as Y', 'add rule', 'show my rules', or 'remove rule'.",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["list", "add", "remove"], description: "Action: list existing rules, add a new rule, or remove a rule" },
+          category: { type: "string", description: "Category name (e.g. 'EMT', 'VIP', 'Partners'). Used for add/remove." },
+          match_type: { type: "string", enum: ["sender", "subject", "domain"], description: "What to match: sender last name, subject keyword, or email domain. Default: sender." },
+          match_values: { type: "array", items: { type: "string" }, description: "List of values to match (e.g. ['ROBINEAU', 'BLECKEN'] for senders)" },
+          description: { type: "string", description: "Description of this category (e.g. 'Executive Management Team')" },
+        },
+      },
+    });
+    tools.push({
       name: "manage_email_digest",
       description: "Enable, disable, or configure the daily email digest. Use when user asks to set up email summaries, morning email briefing, or manage email digest settings.",
       input_schema: {
@@ -511,6 +525,53 @@ async function executeTool(toolName, input, userId, memory) {
           totalAwaiting: awaitingReply.length,
           awaitingReply: awaitingReply.sort((a, b) => b.daysWaiting - a.daysWaiting),
         };
+      }
+
+      case "manage_email_rules": {
+        let scheduler = null;
+        try { scheduler = require("./email-scheduler"); } catch {}
+        if (!scheduler) return { error: "Email scheduler module not available." };
+
+        const action = input.action || "list";
+
+        switch (action) {
+          case "list": {
+            const rules = await scheduler.getClassificationRules(userId);
+            if (rules.length === 0) return { rules: [], message: "No custom rules set. You can add rules like: 'classify emails from ROBINEAU as EMT'" };
+            return {
+              rules: rules.map(r => ({
+                category: r.category,
+                match_type: r.match_type,
+                match_values: r.match_values,
+                description: r.description,
+              })),
+              count: rules.length,
+            };
+          }
+          case "add": {
+            if (!input.category) return { error: "Please specify a category name (e.g. 'EMT', 'VIP')" };
+            if (!input.match_values || input.match_values.length === 0) return { error: "Please specify values to match (e.g. sender names)" };
+            const rule = {
+              category: input.category.toUpperCase(),
+              match_type: input.match_type || "sender",
+              match_values: input.match_values,
+              description: input.description || "",
+            };
+            const success = await scheduler.addClassificationRule(userId, rule);
+            return success
+              ? { success: true, message: `Rule added: emails matching ${rule.match_type} [${rule.match_values.join(", ")}] will be classified as ${rule.category}.`, rule }
+              : { error: "Failed to save rule." };
+          }
+          case "remove": {
+            if (!input.category) return { error: "Please specify which category to remove." };
+            const success = await scheduler.removeClassificationRule(userId, input.category);
+            return success
+              ? { success: true, message: `Rule "${input.category}" removed.` }
+              : { error: `No rule found for category "${input.category}".` };
+          }
+          default:
+            return { error: "Use list, add, or remove." };
+        }
       }
 
       case "manage_email_digest": {
@@ -975,6 +1036,7 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
           read_thread: "Reading conversation thread...",
           summarize_thread: "Summarizing email thread...",
           check_followups: "Checking follow-ups...",
+          manage_email_rules: "Managing email rules...",
           manage_email_digest: "Managing email digest...",
           get_sender_details: "Looking up sender...",
           search_calendar: "Checking calendar...",
