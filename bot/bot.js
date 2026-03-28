@@ -57,6 +57,8 @@ let salesScheduler;
 try { salesScheduler = require("./sales-scheduler"); console.log("[OpenClawBot] Sales scheduler module loaded OK"); } catch (e) { salesScheduler = null; console.warn("[OpenClawBot] Sales scheduler module failed to load:", e.message); }
 let emailScheduler;
 try { emailScheduler = require("./email-scheduler"); console.log("[OpenClawBot] Email scheduler module loaded OK"); } catch (e) { emailScheduler = null; console.warn("[OpenClawBot] Email scheduler module failed to load:", e.message); }
+let emailIntelligence;
+try { emailIntelligence = require("./email-intelligence"); console.log("[OpenClawBot] Email intelligence module loaded OK"); } catch (e) { emailIntelligence = null; console.warn("[OpenClawBot] Email intelligence module failed to load:", e.message); }
 let contextManager;
 try { contextManager = require("./context-manager"); console.log("[OpenClawBot] Context manager loaded OK"); } catch (e) { contextManager = null; console.warn("[OpenClawBot] Context manager failed to load:", e.message); }
 let tenant;
@@ -244,6 +246,10 @@ async function initRedis() {
       });
       console.log(`${LOG} Email scheduler initialized`);
     }
+    if (emailIntelligence) {
+      emailIntelligence.init(redis);
+      console.log(`${LOG} Email intelligence initialized`);
+    }
     if (agent) {
       agent.init({
         graph: m365Graph, calendarGraph, m365Auth,
@@ -251,6 +257,7 @@ async function initRedis() {
         redis,
         salesAgent: salesAgent || null,
         contextManager: contextManager || null,
+        emailIntelligence: emailIntelligence || null,
       });
       console.log(`${LOG} Agent module initialized (available: ${agent.isAvailable()})`);
     }

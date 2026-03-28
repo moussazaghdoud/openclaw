@@ -33,6 +33,7 @@ let calendarGoogleModule = null;
 let redisClient = null;
 let salesAgentModule = null;
 let contextManagerModule = null;
+let emailIntelligenceModule = null;
 
 // Active request cancellation
 const cancelledUsers = new Set();
@@ -47,6 +48,7 @@ function init(deps) {
   redisClient = deps.redis || null;
   salesAgentModule = deps.salesAgent || null;
   contextManagerModule = deps.contextManager || null;
+  emailIntelligenceModule = deps.emailIntelligence || null;
   console.log(`${LOG} Initialized (email: ${!!graphModule}, calendar: ${!!calendarGraphModule}, sales: ${!!salesAgentModule}, context: ${!!contextManagerModule}, anthropic: ${!!ANTHROPIC_API_KEY})`);
 }
 
@@ -190,6 +192,12 @@ function getTools() {
         },
       },
     });
+    if (emailIntelligenceModule) {
+      const timingTool = emailIntelligenceModule.getFollowUpTimingToolDef
+        ? emailIntelligenceModule.getFollowUpTimingToolDef()
+        : null;
+      if (timingTool) tools.push(timingTool);
+    }
     tools.push({
       name: "manage_email_rules",
       description: "Manage email classification rules. Users can create custom categories (e.g. 'EMT', 'VIP', 'Partner') and define which senders belong to each. Use when user says 'rules', 'classify emails from X as Y', 'add rule', 'show my rules', or 'remove rule'.",
@@ -389,6 +397,12 @@ async function executeTool(toolName, input, userId, memory) {
         if (!email || email._error) return { error: "Failed to read email." };
         // Mark as read
         ep.api.markAsRead(ep.token, input.email_id).catch(() => {});
+        // Track interaction for priority learning
+        if (emailIntelligenceModule) {
+          emailIntelligenceModule.recordInteraction(userId, "read", {
+            emailId: email.id, sender: email.from, senderEmail: email.fromEmail,
+          }).catch(() => {});
+        }
         return {
           id: email.id, from: `${email.from} <${email.fromEmail}>`,
           subject: email.subject, date: email.receivedAt,
@@ -527,6 +541,13 @@ async function executeTool(toolName, input, userId, memory) {
         };
       }
 
+      case "get_followup_timing": {
+        if (!emailIntelligenceModule || !emailIntelligenceModule.executeFollowUpTimingTool) {
+          return { error: "Email intelligence module not available." };
+        }
+        return emailIntelligenceModule.executeFollowUpTimingTool(userId, input);
+      }
+
       case "manage_email_rules": {
         let scheduler = null;
         try { scheduler = require("./email-scheduler"); } catch {}
@@ -619,6 +640,12 @@ async function executeTool(toolName, input, userId, memory) {
         const opts = { to: input.to, subject: input.subject, body: input.body };
         if (input.in_reply_to) opts.inReplyTo = input.in_reply_to;
         const sent = await ep.api.sendEmail(ep.token, opts);
+        // Track interaction for priority learning
+        if (sent && emailIntelligenceModule) {
+          emailIntelligenceModule.recordInteraction(userId, "reply", {
+            emailId: input.in_reply_to || "", sender: input.to, senderEmail: input.to,
+          }).catch(() => {});
+        }
         return sent ? { success: true, message: `Email sent to ${input.to}` } : { error: "Failed to send." };
       }
 
@@ -1036,6 +1063,7 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
           read_thread: "Reading conversation thread...",
           summarize_thread: "Summarizing email thread...",
           check_followups: "Checking follow-ups...",
+          get_followup_timing: "Checking follow-up timing...",
           manage_email_rules: "Managing email rules...",
           manage_email_digest: "Managing email digest...",
           get_sender_details: "Looking up sender...",
