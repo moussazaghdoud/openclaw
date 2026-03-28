@@ -4214,18 +4214,32 @@ async function start() {
               }).catch(() => {});
             }
           };
-          // Send immediate feedback so user doesn't see nothing for 15 seconds
+          // Send patience messages at intervals while agent works
           const progressConvId = rawConversationId || conversationId;
+          const patienceMessages = [
+            { delay: 0, text: "Let me check..." },
+            { delay: 6000, text: "Working on it..." },
+            { delay: 14000, text: "Almost there, just a moment..." },
+          ];
+          const patienceTimers = [];
           if (progressConvId && s2sConnectionId && authToken) {
             const host = rainbowHost || "openrainbow.com";
-            fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${progressConvId}/messages`, {
-              method: "POST",
-              headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ message: { body: "Let me check...", lang: "en" } }),
-            }).catch(() => {});
+            for (const pm of patienceMessages) {
+              const timer = setTimeout(() => {
+                fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${progressConvId}/messages`, {
+                  method: "POST",
+                  headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({ message: { body: pm.text, lang: "en" } }),
+                }).catch(() => {});
+              }, pm.delay);
+              patienceTimers.push(timer);
+            }
           }
 
           responseText = await agent.run(fromJid, content, history, sendProgress);
+
+          // Clear any pending patience messages
+          for (const t of patienceTimers) clearTimeout(t);
           console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
 
           // Write to unified context + sync agent memory
