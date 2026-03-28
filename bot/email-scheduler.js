@@ -236,14 +236,17 @@ async function classifyEmails(emails) {
   }));
 
   const systemPrompt = `You are an executive email classifier. Classify each email into exactly one category:
-- URGENT: Requires immediate attention (deadlines today/tomorrow, escalations, executive requests, time-sensitive approvals)
-- ACTION: Requires a response or action within 1-3 days (questions needing answers, review requests, follow-ups)
-- FYI: Informational, no action required (status updates, confirmations, newsletters with relevant content)
-- NOISE: Low value (automated notifications, marketing, mass mailings, out-of-office replies)
+- URGENT: Requires immediate attention from a HUMAN sender (deadlines today/tomorrow, escalations, executive requests, time-sensitive approvals)
+- ACTION: Requires a response or action within 1-3 days from a HUMAN sender (questions needing answers, review requests, follow-ups)
+- FYI: Informational from a human, no action required (status updates, confirmations, newsletters with relevant content)
+- SYSTEM: Automated/system-generated emails (IT notifications, mailbox alerts, batch systems, Microsoft Exchange, calendar auto-responses, leave approval systems, noreply senders, automated reports)
+- NOISE: Low value (marketing, mass mailings, spam, promotional)
+
+IMPORTANT: Emails from automated systems, bots, batch processes, IT infrastructure (e.g. "Your mailbox is almost full", "Your worklist contains leave requests", calendar notifications) must be classified as SYSTEM, never as URGENT.
 
 For URGENT and ACTION emails, provide a brief action_needed description (max 10 words).
 
-Respond with ONLY a JSON array. Each element must have: { "index": <number>, "category": "URGENT|ACTION|FYI|NOISE", "action_needed": "<string or empty>" }
+Respond with ONLY a JSON array. Each element must have: { "index": <number>, "category": "URGENT|ACTION|FYI|SYSTEM|NOISE", "action_needed": "<string or empty>" }
 No markdown, no explanation, just the JSON array.`;
 
   try {
@@ -343,6 +346,15 @@ async function applyOutlookActions(token, classified, graph) {
           actions.read++;
           break;
 
+        case "SYSTEM":
+          await graph.setCategories(token, email.id, ["System"]);
+          await graph.moveToFolder(token, email.id, "System Emails");
+          await graph.markAsRead(token, email.id);
+          actions.categorized++;
+          actions.moved++;
+          actions.read++;
+          break;
+
         case "NOISE":
           await graph.moveToFolder(token, email.id, "Low Priority");
           await graph.markAsRead(token, email.id);
@@ -436,7 +448,7 @@ function buildEmailDigest(classified, crmContext, prefs) {
   lines.push("");
 
   // Group by category
-  const groups = { URGENT: [], ACTION: [], FYI: [], NOISE: [] };
+  const groups = { URGENT: [], ACTION: [], FYI: [], SYSTEM: [], NOISE: [] };
   for (const email of classified) {
     const cat = groups[email.category] ? email.category : "FYI";
     groups[cat].push(email);
@@ -503,6 +515,16 @@ function buildEmailDigest(classified, crmContext, prefs) {
     if (meetingConfirms > 0) lines.push(`- ${meetingConfirms} meeting confirmation${meetingConfirms > 1 ? "s" : ""}`);
     if (statusUpdates > 0) lines.push(`- ${statusUpdates} status update${statusUpdates > 1 ? "s" : ""}`);
     if (other > 0) lines.push(`- ${other} other informational`);
+    lines.push("");
+  }
+
+  // SYSTEM
+  if (groups.SYSTEM.length > 0) {
+    lines.push(`\u2699\ufe0f SYSTEM (${groups.SYSTEM.length} \u2192 moved to System Emails)`);
+    for (const email of groups.SYSTEM.slice(0, 3)) {
+      lines.push(`- ${email.from} \u2014 "${email.subject}"`);
+    }
+    if (groups.SYSTEM.length > 3) lines.push(`- ...and ${groups.SYSTEM.length - 3} more`);
     lines.push("");
   }
 
