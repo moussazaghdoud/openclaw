@@ -10,6 +10,8 @@
 const crypto = require("crypto");
 const LOG = "[Enterprise]";
 
+let userDefaultsModule = null;
+
 let redisClient = null;
 let m365AuthModule = null;
 let sfAuthModule = null;
@@ -28,6 +30,7 @@ function init(redis, deps = {}) {
   redisClient = redis;
   m365AuthModule = deps.m365Auth || null;
   sfAuthModule = deps.sfAuth || null;
+  userDefaultsModule = deps.userDefaults || null;
 
   if (ENCRYPTION_KEY_HEX && ENCRYPTION_KEY_HEX.length >= 64) {
     encryptionKey = Buffer.from(ENCRYPTION_KEY_HEX, "hex");
@@ -456,6 +459,16 @@ async function handleActivationCallback(code, state, baseUrl) {
 
     await auditLog("user_activated", { userId, email: msEmail, microsoftId, salesforceId });
     console.log(`${LOG} User activated: ${msEmail} (${userId})`);
+
+    // Auto-provision default settings (email digest, sales alerts, rules)
+    if (userDefaultsModule) {
+      try {
+        const prov = await userDefaultsModule.provisionUser(userId);
+        console.log(`${LOG} User provisioned: ${JSON.stringify(prov.provisioned || prov.error)}`);
+      } catch (e) {
+        console.warn(`${LOG} User provisioning failed:`, e.message);
+      }
+    }
 
     return { success: true, userId, email: msEmail };
   } catch (err) {

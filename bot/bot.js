@@ -59,6 +59,8 @@ let emailScheduler;
 try { emailScheduler = require("./email-scheduler"); console.log("[OpenClawBot] Email scheduler module loaded OK"); } catch (e) { emailScheduler = null; console.warn("[OpenClawBot] Email scheduler module failed to load:", e.message); }
 let emailIntelligence;
 try { emailIntelligence = require("./email-intelligence"); console.log("[OpenClawBot] Email intelligence module loaded OK"); } catch (e) { emailIntelligence = null; console.warn("[OpenClawBot] Email intelligence module failed to load:", e.message); }
+let userDefaults;
+try { userDefaults = require("./user-defaults"); console.log("[OpenClawBot] User defaults module loaded OK"); } catch (e) { userDefaults = null; console.warn("[OpenClawBot] User defaults module failed to load:", e.message); }
 let contextManager;
 try { contextManager = require("./context-manager"); console.log("[OpenClawBot] Context manager loaded OK"); } catch (e) { contextManager = null; console.warn("[OpenClawBot] Context manager failed to load:", e.message); }
 let tenant;
@@ -189,7 +191,7 @@ async function initRedis() {
       console.log(`${LOG} Briefing module initialized`);
     }
     if (enterprise) {
-      enterprise.init(redis, { m365Auth, sfAuth });
+      enterprise.init(redis, { m365Auth, sfAuth, userDefaults: userDefaults || null });
       console.log(`${LOG} Enterprise module initialized`);
     }
     if (contextManager) {
@@ -249,6 +251,15 @@ async function initRedis() {
     if (emailIntelligence) {
       emailIntelligence.init(redis);
       console.log(`${LOG} Email intelligence initialized`);
+    }
+    if (userDefaults) {
+      userDefaults.init({
+        redis,
+        emailScheduler: emailScheduler || null,
+        salesScheduler: salesScheduler || null,
+        emailIntelligence: emailIntelligence || null,
+      });
+      console.log(`${LOG} User defaults initialized`);
     }
     if (agent) {
       agent.init({
