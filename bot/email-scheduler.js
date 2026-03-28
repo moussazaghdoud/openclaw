@@ -849,14 +849,14 @@ async function triggerEmailDigest(userId) {
     // Get M365 token
     const tokenData = await m365AuthModule.getValidToken(userId);
     if (!tokenData || !tokenData.token) {
-      return { error: `No M365 token for ${userId}` };
+      return { error: `No M365 token for ${userId}. User needs to run 'juju connect outlook'.` };
     }
 
     // Fetch unread emails
     const maxEmails = prefs.email_digest?.max_emails || 50;
     const emails = await graphModule.getUnreadEmails(tokenData.token, maxEmails);
     if (!emails || emails._error) {
-      return { error: `Failed to fetch emails: ${emails?._error || "unknown"}` };
+      return { error: `Failed to fetch emails: ${JSON.stringify(emails?._error || emails?.status || emails?.message || "unknown")}` };
     }
     if (emails.length === 0) {
       return { success: true, message: "No unread emails", preview: "Inbox is clean!" };
