@@ -56,11 +56,16 @@ function isClientCredentialsMode() {
   return isSharedAuthMode();
 }
 
-async function authenticateShared() {
-  if (ccCachedToken && Date.now() < ccTokenExpiresAt) {
-    return ccCachedToken;
-  }
+let pendingAuth = null;
 
+async function authenticateShared() {
+  if (ccCachedToken && Date.now() < ccTokenExpiresAt) return ccCachedToken;
+  if (pendingAuth) return pendingAuth; // dedup concurrent requests
+  pendingAuth = authenticateSharedInner();
+  try { return await pendingAuth; } finally { pendingAuth = null; }
+}
+
+async function authenticateSharedInner() {
   const params = new URLSearchParams({
     grant_type: "client_credentials",
     client_id: SF_CLIENT_ID,

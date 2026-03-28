@@ -16,8 +16,9 @@
 const LOG = "[Agent]";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 
-// Debug trace — last agent run details accessible via /api/agent-debug
-let lastRunTrace = { timestamp: null, userId: null, message: null, loops: [], tools: [], finalResponse: null, error: null };
+// Debug trace — per-user agent run details accessible via /api/agent-debug
+const lastRunTraces = new Map();
+let lastRunUserId = null; // track most recent user for backward compat
 const SONNET = "claude-sonnet-4-20250514";
 const OPUS = "claude-opus-4-20250514";
 const MAX_LOOPS = 4;
@@ -910,13 +911,15 @@ function selectModel(userMessage) {
 
 async function run(userId, userMessage, conversationHistory = [], onProgress = null) {
   if (!ANTHROPIC_API_KEY) {
-    lastRunTrace = { ...lastRunTrace, timestamp: new Date().toISOString(), error: "No ANTHROPIC_API_KEY" };
+    lastRunTraces.set(userId, { timestamp: new Date().toISOString(), userId, error: "No ANTHROPIC_API_KEY" });
+    lastRunUserId = userId;
     return null;
   }
 
   const tools = getTools();
   if (tools.length === 0) {
-    lastRunTrace = { ...lastRunTrace, timestamp: new Date().toISOString(), error: "No tools available" };
+    lastRunTraces.set(userId, { timestamp: new Date().toISOString(), userId, error: "No tools available" });
+    lastRunUserId = userId;
     return null;
   }
 
@@ -1067,8 +1070,10 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
   console.log(`${LOG} Tools: ${tools.map(t => t.name).join(", ")} (${tools.length} total)`);
   console.log(`${LOG} Message: "${userMessage.substring(0, 100)}"`);
 
-  // Reset trace
-  lastRunTrace = { timestamp: new Date().toISOString(), userId, message: userMessage.substring(0, 200), loops: [], tools: [], finalResponse: null, error: null, model };
+  // Reset trace for this user
+  const trace = { timestamp: new Date().toISOString(), userId, message: userMessage.substring(0, 200), loops: [], tools: [], finalResponse: null, error: null, model };
+  lastRunTraces.set(userId, trace);
+  lastRunUserId = userId;
 
   let currentMessages = [...messages];
 
@@ -1115,7 +1120,7 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
       if (!response.ok) {
         const errBody = await response.text().catch(() => "");
         console.error(`${LOG} Anthropic API ${response.status}: ${errBody.substring(0, 300)}`);
-        lastRunTrace.error = `API ${response.status}: ${errBody.substring(0, 200)}`;
+        trace.error = `API ${response.status}: ${errBody.substring(0, 200)}`;
         return null;
       }
 
@@ -1128,8 +1133,8 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
         const finalText = textBlocks.map(b => b.text).join("\n");
         if (loop === 0) console.warn(`${LOG} WARNING: Agent responded without calling ANY tools! Response: ${finalText.substring(0, 200)}`);
         console.log(`${LOG} Done in ${loop + 1} loop(s), ${finalText.length} chars (${Date.now() - startTime}ms)`);
-        lastRunTrace.finalResponse = finalText.substring(0, 500);
-        lastRunTrace.loops.push({ loop: loop + 1, action: "final_response" });
+        trace.finalResponse = finalText.substring(0, 500);
+        trace.loops.push({ loop: loop + 1, action: "final_response" });
 
         // Save working memory
         await saveWorkingMemory(userId, memory);
@@ -1140,8 +1145,8 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
       // Execute tools
       const toolNames = toolUseBlocks.map(b => b.name);
       console.log(`${LOG} Loop ${loop + 1}: ${toolNames.join(", ")}`);
-      lastRunTrace.loops.push({ loop: loop + 1, tools: toolNames });
-      lastRunTrace.tools.push(...toolNames);
+      trace.loops.push({ loop: loop + 1, tools: toolNames });
+      trace.tools.push(...toolNames);
 
       // Send progress update to user
       if (onProgress) {
@@ -1233,10 +1238,10 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
       clearTimeout(timeout);
       if (e.name === "AbortError") {
         console.warn(`${LOG} Loop ${loop + 1} timed out (${LOOP_TIMEOUT_MS}ms)`);
-        lastRunTrace.error = `Loop ${loop + 1} timed out`;
+        trace.error = `Loop ${loop + 1} timed out`;
       } else {
         console.error(`${LOG} Loop ${loop + 1} error:`, e.message);
-        lastRunTrace.error = `Loop ${loop + 1}: ${e.message}`;
+        trace.error = `Loop ${loop + 1}: ${e.message}`;
       }
       break;
     }
@@ -1250,7 +1255,12 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
   return null;
 }
 
-function getLastRunTrace() { return lastRunTrace; }
+function getLastRunTrace(userId) {
+  if (userId) return lastRunTraces.get(userId) || null;
+  // Backward compat: no arg returns most recent trace
+  if (lastRunUserId) return lastRunTraces.get(lastRunUserId) || null;
+  return null;
+}
 
 module.exports = {
   init,

@@ -159,6 +159,10 @@ async function checkDailyDigests() {
       const acquired = await redisClient.set(lockKey, "1", { NX: true, EX: 24 * 3600 });
       if (!acquired) continue;
 
+      // Stagger digests to avoid thundering herd when all users share the same time
+      const staggerDelay = Math.floor(Math.random() * 30000);
+      await new Promise(r => setTimeout(r, staggerDelay));
+
       console.log(`${LOG} Sending daily email digest to ${userId}`);
 
       // Get M365 token

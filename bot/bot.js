@@ -3004,6 +3004,15 @@ async function processBubbleCallback(body) {
         const access = await enterprise.checkAccess(fromJid, bubbleEmail);
         if (!access.allowed) {
           console.log(`${LOG} Access denied (bubble): ${fromJid} (${bubbleEmail})`);
+          // Send feedback to the user instead of silently dropping
+          if (body.conversation_id && s2sConnectionId && authToken) {
+            const host = rainbowHost || "openrainbow.com";
+            fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${body.conversation_id}/messages`, {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ message: { body: "Sorry, your account is not active. Please contact your administrator for access.", lang: "en" } }),
+            }).catch(() => {});
+          }
           return;
         }
       } catch (e) {
@@ -3489,6 +3498,15 @@ async function start() {
           const access = await enterprise.checkAccess(fromJid, rainbowEmail);
           if (!access.allowed) {
             console.log(`${LOG} Access denied (1:1): ${fromJid} (${rainbowEmail})`);
+            // Send feedback to the user instead of silently dropping
+            if (conversationId && s2sConnectionId && authToken) {
+              const host = rainbowHost || "openrainbow.com";
+              fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${conversationId}/messages`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ message: { body: "Sorry, your account is not active. Please contact your administrator for access.", lang: "en" } }),
+              }).catch(() => {});
+            }
             return;
           }
           console.log(`${LOG} Access granted: ${fromJid}`);
@@ -4196,6 +4214,17 @@ async function start() {
               }).catch(() => {});
             }
           };
+          // Send immediate feedback so user doesn't see nothing for 15 seconds
+          const progressConvId = rawConversationId || conversationId;
+          if (progressConvId && s2sConnectionId && authToken) {
+            const host = rainbowHost || "openrainbow.com";
+            fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${progressConvId}/messages`, {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ message: { body: "Let me check...", lang: "en" } }),
+            }).catch(() => {});
+          }
+
           responseText = await agent.run(fromJid, content, history, sendProgress);
           console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
 
@@ -4225,7 +4254,7 @@ async function start() {
           }
         } catch (agentErr) {
           console.error(`${LOG} Agent crashed:`, agentErr.message);
-          responseText = null;
+          responseText = "Sorry, I encountered an error processing your request. Please try again.";
         }
       } else if (intent.type === "translate_docx") {
         responseText = await handleDocxTranslation(historyKey, userMessage, intent.language, intent.docxKey);
