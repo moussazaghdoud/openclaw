@@ -4214,26 +4214,27 @@ async function start() {
               }).catch(() => {});
             }
           };
-          // Send patience messages at intervals while agent works
+          // Send patience messages while agent works
           const progressConvId = rawConversationId || conversationId;
-          const patienceMessages = [
-            { delay: 0, text: "Let me check..." },
-            { delay: 6000, text: "Working on it..." },
-            { delay: 14000, text: "Almost there, just a moment..." },
-          ];
           const patienceTimers = [];
-          if (progressConvId && s2sConnectionId && authToken) {
-            const host = rainbowHost || "openrainbow.com";
-            for (const pm of patienceMessages) {
-              const timer = setTimeout(() => {
-                fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${progressConvId}/messages`, {
-                  method: "POST",
-                  headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                  body: JSON.stringify({ message: { body: pm.text, lang: "en" } }),
-                }).catch(() => {});
-              }, pm.delay);
-              patienceTimers.push(timer);
+          const sendPatienceMsg = async (text) => {
+            if (progressConvId && s2sConnectionId && authToken) {
+              const host = rainbowHost || "openrainbow.com";
+              await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${progressConvId}/messages`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ message: { body: text, lang: "en" } }),
+              }).catch(() => {});
             }
+          };
+
+          // Send first message immediately (await to ensure it arrives before agent starts)
+          await sendPatienceMsg("Let me check...");
+
+          // Schedule follow-up patience messages
+          if (progressConvId && s2sConnectionId && authToken) {
+            patienceTimers.push(setTimeout(() => sendPatienceMsg("Working on it..."), 6000));
+            patienceTimers.push(setTimeout(() => sendPatienceMsg("Almost there, just a moment..."), 14000));
           }
 
           responseText = await agent.run(fromJid, content, history, sendProgress);
