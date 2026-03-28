@@ -55,6 +55,8 @@ let salesDashboard;
 try { salesDashboard = require("./sales-dashboard"); console.log("[OpenClawBot] Sales dashboard module loaded OK"); } catch (e) { salesDashboard = null; console.warn("[OpenClawBot] Sales dashboard module failed to load:", e.message); }
 let salesScheduler;
 try { salesScheduler = require("./sales-scheduler"); console.log("[OpenClawBot] Sales scheduler module loaded OK"); } catch (e) { salesScheduler = null; console.warn("[OpenClawBot] Sales scheduler module failed to load:", e.message); }
+let emailScheduler;
+try { emailScheduler = require("./email-scheduler"); console.log("[OpenClawBot] Email scheduler module loaded OK"); } catch (e) { emailScheduler = null; console.warn("[OpenClawBot] Email scheduler module failed to load:", e.message); }
 let contextManager;
 try { contextManager = require("./context-manager"); console.log("[OpenClawBot] Context manager loaded OK"); } catch (e) { contextManager = null; console.warn("[OpenClawBot] Context manager failed to load:", e.message); }
 let tenant;
@@ -222,6 +224,25 @@ async function initRedis() {
         },
       });
       console.log(`${LOG} Sales scheduler initialized`);
+    }
+    if (emailScheduler && m365Auth && m365Graph) {
+      emailScheduler.init({
+        redis,
+        m365Auth,
+        graph: m365Graph,
+        sfAuth: sfAuth || null,
+        sfApi: sfApi || null,
+        sendMessage: async (userJid, text) => {
+          try {
+            const contact = await sdk.contacts.getContactByJid(userJid);
+            const conv = await sdk.conversations.openConversationForContact(contact);
+            await sdk.s2s.sendMessageInConversation(conv.dbId, { message: { body: text, lang: "en" } });
+          } catch (e) {
+            console.warn(`${LOG} Email scheduler send failed:`, e.message);
+          }
+        },
+      });
+      console.log(`${LOG} Email scheduler initialized`);
     }
     if (agent) {
       agent.init({
@@ -2732,6 +2753,15 @@ app.get("/api/sales-alert-test", async (req, res) => {
   res.json(result);
 });
 
+// Email digest test endpoint
+app.get("/api/email-digest-test", async (req, res) => {
+  const uid = req.query.uid;
+  if (!uid) return res.json({ error: "Missing uid parameter" });
+  if (!emailScheduler || !emailScheduler.triggerEmailDigest) return res.json({ error: "Email scheduler not available" });
+  const result = await emailScheduler.triggerEmailDigest(uid);
+  res.json(result);
+});
+
 // Salesforce auth debug endpoint
 app.get("/api/sf-debug", async (req, res) => {
   if (!sfAuth) return res.json({ error: "sfAuth module not loaded" });
@@ -3521,14 +3551,23 @@ async function start() {
                 fileContext = configMsg;
                 console.log(`${LOG} Alert config result: ${fileContext.substring(0, 200)}`);
               }
+              // Email digest config
+              if (parsed.email_digest && emailScheduler && emailScheduler.applyConfigFile) {
+                const emailResult = await emailScheduler.applyConfigFile(fromJid, parsed);
+                const emailMsg = emailResult.success
+                  ? `Email digest configured: ${emailResult.alerts?.join(", ") || "enabled"}`
+                  : `Email digest config failed: ${emailResult.error}`;
+                fileContext = fileContext ? `${fileContext}\n\n${emailMsg}` : emailMsg;
+                console.log(`${LOG} Email digest config applied for ${fromJid}`);
+              }
             } catch (e) {
-              console.warn(`${LOG} Alert config parse error:`, e.message);
+              console.warn(`${LOG} Config parse error:`, e.message);
             }
           }
         }
 
-        // Send confirmation to user — fileContext may have been replaced by alert config result
-        const isAlertConfig = fileContext && fileContext.startsWith("Alert configuration");
+        // Send confirmation to user — fileContext may have been replaced by config result
+        const isAlertConfig = fileContext && (fileContext.startsWith("Alert configuration") || fileContext.startsWith("Email digest"));
         const fileSize = fileInfo.filesize ? ` (${Math.round(fileInfo.filesize / 1024)}KB)` : "";
         const confirmMsg = isAlertConfig
           ? fileContext

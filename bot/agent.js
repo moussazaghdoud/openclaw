@@ -170,6 +170,40 @@ function getTools() {
       },
     });
     tools.push({
+      name: "summarize_thread",
+      description: "Summarize an email thread/conversation. Finds the thread, reads all messages, and produces an AI summary with key points, decisions, and action items. Use when user says 'summarize the thread' or 'catch me up on the X conversation'.",
+      input_schema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search term to find the thread (sender name, subject keyword)" },
+          conversation_id: { type: "string", description: "Conversation ID if already known from a previous result" },
+        },
+      },
+    });
+    tools.push({
+      name: "check_followups",
+      description: "Check for sent emails that haven't received a reply. Shows emails awaiting response with days waiting. Use when user asks about follow-ups, pending replies, or emails waiting for response.",
+      input_schema: {
+        type: "object",
+        properties: {
+          days: { type: "number", description: "Look back period in days (default 7, max 30)" },
+        },
+      },
+    });
+    tools.push({
+      name: "manage_email_digest",
+      description: "Enable, disable, or configure the daily email digest. Use when user asks to set up email summaries, morning email briefing, or manage email digest settings.",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["enable", "disable", "configure", "status"] },
+          time: { type: "string", description: "Digest time in HH:MM format (e.g. '08:00')" },
+          auto_actions: { type: "boolean", description: "Auto-flag/categorize/move emails in Outlook" },
+          crm_enrichment: { type: "boolean", description: "Cross-reference senders with Salesforce" },
+        },
+      },
+    });
+    tools.push({
       name: "send_email",
       description: "Send an email. CRITICAL: NEVER call this without explicit user confirmation. Always show the draft first and ask 'shall I send this?'",
       input_schema: {
@@ -359,6 +393,163 @@ async function executeTool(toolName, input, userId, memory) {
           id: e.id, from: `${e.from} <${e.fromEmail}>`, subject: e.subject,
           date: e.receivedAt, body: (e.body || e.preview || "").substring(0, 2000),
         }))};
+      }
+
+      case "summarize_thread": {
+        const ep = await resolveEmailProvider(userId);
+        if (!ep) return { error: "No email account connected." };
+
+        let conversationId = input.conversation_id;
+        if (!conversationId) {
+          if (!input.query) return { error: "Provide a query or conversation_id to find the thread." };
+          const results = await ep.api.getEmailsFromSender(ep.token, input.query, 5);
+          if (!results || results._error || results.length === 0) return { error: "No emails found matching that query." };
+          conversationId = results[0].conversationId;
+          if (!conversationId) return { error: "Found emails but no conversation ID available." };
+        }
+
+        const thread = await ep.api.getEmailThread(ep.token, conversationId);
+        if (!thread || thread._error || thread.length === 0) return { error: "Failed to read thread." };
+
+        const threadMessages = thread.map(e => ({
+          from: `${e.from} <${e.fromEmail}>`,
+          date: e.receivedAt,
+          content: (e.body || e.preview || "").substring(0, 2000),
+        }));
+
+        // Collect participants and date range
+        const participants = [...new Set(thread.map(e => e.from || e.fromEmail).filter(Boolean))];
+        const dates = thread.map(e => e.receivedAt).filter(Boolean).sort();
+        const dateRange = dates.length > 0 ? { first: dates[0], last: dates[dates.length - 1] } : null;
+
+        // Call Anthropic API (Sonnet) to summarize
+        try {
+          const summaryResp = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "x-api-key": ANTHROPIC_API_KEY,
+              "anthropic-version": "2023-06-01",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: SONNET,
+              system: "Summarize this email thread concisely. Include: key points discussed, decisions made, action items, current status.",
+              messages: [{ role: "user", content: JSON.stringify(threadMessages) }],
+              max_tokens: 1000,
+            }),
+            signal: AbortSignal.timeout(15000),
+          });
+          if (!summaryResp.ok) return { error: `AI summary failed (${summaryResp.status})` };
+          const summaryData = await summaryResp.json();
+          const summaryText = (summaryData.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
+          return {
+            summary: summaryText,
+            messageCount: thread.length,
+            participants,
+            dateRange,
+          };
+        } catch (e) {
+          return { error: `Summary generation failed: ${e.message}` };
+        }
+      }
+
+      case "check_followups": {
+        const ep = await resolveEmailProvider(userId);
+        if (!ep) return { error: "No email account connected." };
+
+        const days = Math.min(Math.max(input.days || 7, 1), 30);
+
+        // Get sent emails from the look-back period
+        let sentEmails;
+        if (ep.api.getSentEmails) {
+          sentEmails = await ep.api.getSentEmails(ep.token, 30, days);
+        } else {
+          // Fallback: search for sent emails via general search
+          sentEmails = await ep.api.getEmailsFromSender(ep.token, "", 30);
+        }
+        if (!sentEmails || sentEmails._error || sentEmails.length === 0) {
+          return { totalSent: 0, totalAwaiting: 0, awaitingReply: [] };
+        }
+
+        // Check each sent email's conversation for replies (max 5 concurrent)
+        const awaitingReply = [];
+        const batchSize = 5;
+        for (let i = 0; i < sentEmails.length; i += batchSize) {
+          const batch = sentEmails.slice(i, i + batchSize);
+          const results = await Promise.all(batch.map(async (sent) => {
+            try {
+              if (!sent.conversationId) return null;
+              const thread = await ep.api.getEmailThread(ep.token, sent.conversationId);
+              if (!thread || thread._error) return null;
+
+              const sentDate = new Date(sent.sentAt || sent.receivedAt || sent.date);
+              // Check if any reply exists after the sent date from a different sender
+              const hasReply = thread.some(msg => {
+                const msgDate = new Date(msg.receivedAt);
+                const msgSender = (msg.fromEmail || "").toLowerCase();
+                const sentTo = (sent.to || []).map(t => (t.email || t || "").toLowerCase());
+                return msgDate > sentDate && sentTo.some(to => msgSender.includes(to) || to.includes(msgSender));
+              });
+
+              if (!hasReply) {
+                const daysWaiting = Math.round((Date.now() - sentDate.getTime()) / 86400000);
+                return {
+                  subject: sent.subject,
+                  to: sent.to,
+                  sentDate: sent.sentAt || sent.date,
+                  daysWaiting,
+                };
+              }
+              return null;
+            } catch { return null; }
+          }));
+          awaitingReply.push(...results.filter(Boolean));
+        }
+
+        return {
+          totalSent: sentEmails.length,
+          totalAwaiting: awaitingReply.length,
+          awaitingReply: awaitingReply.sort((a, b) => b.daysWaiting - a.daysWaiting),
+        };
+      }
+
+      case "manage_email_digest": {
+        let scheduler = null;
+        try { scheduler = require("./email-scheduler"); } catch {}
+        if (!scheduler) return { error: "Email scheduler module not available." };
+
+        const action = input.action || "status";
+
+        switch (action) {
+          case "status": {
+            const prefs = await scheduler.getUserPrefs(userId);
+            return { action: "status", prefs: prefs || { enabled: false } };
+          }
+          case "enable": {
+            const prefs = {
+              enabled: true,
+              time: input.time || "08:00",
+              auto_actions: input.auto_actions || false,
+              crm_enrichment: input.crm_enrichment || false,
+            };
+            await scheduler.setUserPrefs(userId, prefs);
+            return { action: "enable", success: true, message: `Email digest enabled at ${prefs.time}.`, prefs };
+          }
+          case "disable": {
+            await scheduler.setUserPrefs(userId, { enabled: false });
+            return { action: "disable", success: true, message: "Email digest disabled." };
+          }
+          case "configure": {
+            const existing = await scheduler.getUserPrefs(userId) || { enabled: true };
+            if (input.time) existing.time = input.time;
+            if (input.auto_actions !== undefined) existing.auto_actions = input.auto_actions;
+            if (input.crm_enrichment !== undefined) existing.crm_enrichment = input.crm_enrichment;
+            await scheduler.setUserPrefs(userId, existing);
+            return { action: "configure", success: true, message: "Email digest settings updated.", prefs: existing };
+          }
+          default:
+            return { error: "Invalid action. Use enable, disable, configure, or status." };
+        }
       }
 
       case "send_email": {
@@ -782,6 +973,9 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
           get_recent_emails: "Checking inbox...",
           read_email: "Reading email...",
           read_thread: "Reading conversation thread...",
+          summarize_thread: "Summarizing email thread...",
+          check_followups: "Checking follow-ups...",
+          manage_email_digest: "Managing email digest...",
           get_sender_details: "Looking up sender...",
           search_calendar: "Checking calendar...",
           read_event: "Reading meeting details...",

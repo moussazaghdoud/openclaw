@@ -211,8 +211,8 @@ async function unflagEmail(token, messageId) {
  * Move email to a folder (by folder name or ID).
  */
 async function moveToFolder(token, messageId, folderName) {
-  // Resolve folder name to ID
-  const folderId = await resolveFolderId(token, folderName);
+  // Resolve folder name to ID, auto-creating if needed
+  const folderId = await resolveOrCreateFolder(token, folderName);
   if (!folderId) return false;
 
   const resp = await graphFetch(token, `/me/messages/${messageId}/move`, {
@@ -236,6 +236,104 @@ async function getFolders(token) {
   const resp = await graphFetch(token, "/me/mailFolders?$top=50");
   if (!resp || !resp.value) return [];
   return resp.value.map(f => ({ id: f.id, name: f.displayName, unread: f.unreadItemCount, total: f.totalItemCount }));
+}
+
+// ── Extended Read Operations ─────────────────────────────
+
+/**
+ * Get unread emails received since a specific date.
+ * Returns same format as getUnreadEmails.
+ */
+async function getUnreadEmailsSince(token, sinceISO, top = 50) {
+  const params = new URLSearchParams({
+    $filter: `isRead eq false and receivedDateTime ge '${sinceISO}'`,
+    $orderby: "receivedDateTime desc",
+    $top: String(top),
+    $select: "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId",
+  });
+  return fetchEmails(token, `/me/mailFolders/inbox/messages?${params}`);
+}
+
+/**
+ * Get sent emails from the last N days.
+ * Returns array of { id, subject, to, sentAt, conversationId }.
+ */
+async function getSentEmails(token, top = 50, sinceDaysAgo = 7) {
+  const sinceDate = new Date(Date.now() - sinceDaysAgo * 86400000).toISOString();
+  const params = new URLSearchParams({
+    $filter: `sentDateTime ge '${sinceDate}'`,
+    $orderby: "sentDateTime desc",
+    $top: String(top),
+    $select: "id,subject,toRecipients,sentDateTime,conversationId",
+  });
+  const resp = await graphFetch(token, `/me/mailFolders/sentitems/messages?${params}`);
+  if (!resp || resp._error) return resp;
+  if (!resp.value) return [];
+  return resp.value.map(e => ({
+    id: e.id,
+    subject: e.subject || "(no subject)",
+    to: (e.toRecipients || []).map(r => r.emailAddress?.name || r.emailAddress?.address || "unknown"),
+    sentAt: e.sentDateTime,
+    conversationId: e.conversationId,
+  }));
+}
+
+// ── Extended Management Operations ──────────────────────
+
+/**
+ * Set Outlook categories on an email.
+ */
+async function setCategories(token, messageId, categories) {
+  return patchEmail(token, messageId, { categories });
+}
+
+/**
+ * Flag an email with a specific due date.
+ */
+async function flagWithDueDate(token, messageId, dueDateISO) {
+  return patchEmail(token, messageId, {
+    flag: {
+      flagStatus: "flagged",
+      dueDateTime: { dateTime: dueDateISO, timeZone: "UTC" },
+    },
+  });
+}
+
+/**
+ * Resolve a folder by name, creating it if it does not exist.
+ * Returns folderId.
+ */
+async function resolveOrCreateFolder(token, folderName) {
+  // Try well-known folders first via resolveFolderId
+  const lower = folderName.toLowerCase();
+  const wellKnown = {
+    inbox: "inbox", sent: "sentitems", drafts: "drafts",
+    deleted: "deleteditems", trash: "deleteditems", junk: "junkemail",
+    archive: "archive", outbox: "outbox",
+  };
+  if (wellKnown[lower]) return wellKnown[lower];
+
+  // Search by display name via Graph API filter
+  const filterParams = new URLSearchParams({
+    $filter: `displayName eq '${folderName.replace(/'/g, "''")}'`,
+  });
+  const resp = await graphFetch(token, `/me/mailFolders?${filterParams}`);
+  if (resp && !resp._error && resp.value && resp.value.length > 0) {
+    return resp.value[0].id;
+  }
+
+  // Folder not found — create it
+  const createResp = await graphFetch(token, "/me/mailFolders", {
+    method: "POST",
+    body: JSON.stringify({ displayName: folderName }),
+  });
+  if (createResp && !createResp._error && createResp.id) {
+    console.log(`${LOG} Created mail folder: ${folderName} (${createResp.id})`);
+    return createResp.id;
+  }
+
+  console.error(`${LOG} Failed to resolve or create folder: ${folderName}`);
+  return null;
 }
 
 // ── Internal Helpers ─────────────────────────────────────
@@ -357,7 +455,9 @@ function arrayifyRecipients(recipients) {
 module.exports = {
   // Read
   getUnreadEmails,
+  getUnreadEmailsSince,
   getRecentEmails,
+  getSentEmails,
   searchEmails,
   getEmailsFromSender,
   getEmailById,
@@ -372,7 +472,10 @@ module.exports = {
   markAsUnread,
   flagEmail,
   unflagEmail,
+  flagWithDueDate,
+  setCategories,
   moveToFolder,
   archiveEmail,
   getFolders,
+  resolveOrCreateFolder,
 };
