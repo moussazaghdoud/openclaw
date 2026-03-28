@@ -244,9 +244,11 @@ async function classifyEmails(emails) {
 
 IMPORTANT: Emails from automated systems, bots, batch processes, IT infrastructure (e.g. "Your mailbox is almost full", "Your worklist contains leave requests", calendar notifications) must be classified as SYSTEM, never as URGENT.
 
-For URGENT and ACTION emails, provide a brief action_needed description (max 10 words).
+IMPORTANT: Emails from any of these people (by last name) must ALWAYS be classified as EMT: EMT, ROBINEAU, BLECKEN, ZAGHDOUD, EL KHODRY, ZHANG, MOHAMAD, LILY. These are Executive Management Team members — classify them as EMT regardless of content.
 
-Respond with ONLY a JSON array. Each element must have: { "index": <number>, "category": "URGENT|ACTION|FYI|SYSTEM|NOISE", "action_needed": "<string or empty>" }
+For URGENT, ACTION, and EMT emails, provide a brief action_needed description (max 10 words).
+
+Respond with ONLY a JSON array. Each element must have: { "index": <number>, "category": "URGENT|ACTION|FYI|SYSTEM|EMT|NOISE", "action_needed": "<string or empty>" }
 No markdown, no explanation, just the JSON array.`;
 
   try {
@@ -318,9 +320,11 @@ No markdown, no explanation, just the JSON array.`;
 
 /**
  * Apply Outlook actions based on classification.
+ * - EMT: flag + set "EMT" category (Executive Management Team)
  * - URGENT: flag + set "Urgent" category
  * - ACTION: set "Action Required" category
  * - FYI: mark as read
+ * - SYSTEM: move to "System Emails" folder + mark as read
  * - NOISE: move to "Low Priority" folder + mark as read
  */
 async function applyOutlookActions(token, classified, graph) {
@@ -329,6 +333,13 @@ async function applyOutlookActions(token, classified, graph) {
   for (const email of classified) {
     try {
       switch (email.category) {
+        case "EMT":
+          await graph.flagEmail(token, email.id);
+          await graph.setCategories(token, email.id, ["EMT"]);
+          actions.flagged++;
+          actions.categorized++;
+          break;
+
         case "URGENT":
           await graph.flagEmail(token, email.id);
           await graph.setCategories(token, email.id, ["Urgent"]);
@@ -390,7 +401,7 @@ async function enrichWithCRM(userId, classified) {
     // Collect unique sender emails (only URGENT and ACTION — skip FYI/NOISE)
     const senderEmails = new Set();
     for (const email of classified) {
-      if ((email.category === "URGENT" || email.category === "ACTION") && email.fromEmail) {
+      if ((email.category === "EMT" || email.category === "URGENT" || email.category === "ACTION") && email.fromEmail) {
         senderEmails.add(email.fromEmail.toLowerCase());
       }
     }
@@ -448,13 +459,26 @@ function buildEmailDigest(classified, crmContext, prefs) {
   lines.push("");
 
   // Group by category
-  const groups = { URGENT: [], ACTION: [], FYI: [], SYSTEM: [], NOISE: [] };
+  const groups = { EMT: [], URGENT: [], ACTION: [], FYI: [], SYSTEM: [], NOISE: [] };
   for (const email of classified) {
     const cat = groups[email.category] ? email.category : "FYI";
     groups[cat].push(email);
   }
 
   let counter = 0;
+
+  // EMT (Executive Management Team)
+  if (groups.EMT.length > 0) {
+    lines.push(`\ud83d\udc51 EMT (${groups.EMT.length})`);
+    for (const email of groups.EMT) {
+      counter++;
+      lines.push(`${counter}. ${email.from} \u2014 "${email.subject}"`);
+      if (email.action_needed) {
+        lines.push(`   \u2192 ${email.action_needed}`);
+      }
+      lines.push("");
+    }
+  }
 
   // URGENT
   if (groups.URGENT.length > 0) {
