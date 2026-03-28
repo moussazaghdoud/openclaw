@@ -1125,13 +1125,34 @@ async function applyRuleRetroactively(userId, rule) {
     const tokenData = await m365AuthModule.getValidToken(userId);
     if (!tokenData || !tokenData.token) return { error: "No email token" };
 
-    // Search for matching emails
-    const searchTerms = (rule.match_values || []).join(" OR ");
-    const emails = await graphModule.getEmailsFromSender(tokenData.token, searchTerms, 50);
-    if (!emails || emails._error || emails.length === 0) return { moved: 0 };
+    // Search for matching emails — search each value separately and filter by match_type
+    const allMatching = [];
+    for (const value of (rule.match_values || [])) {
+      const results = await graphModule.getEmailsFromSender(tokenData.token, value, 50);
+      if (results && !results._error) {
+        for (const email of results) {
+          // Verify the match is actually on the right field
+          let isMatch = false;
+          const val = value.toLowerCase();
+          if (rule.match_type === "sender") {
+            isMatch = (email.from || "").toLowerCase().includes(val) ||
+                       (email.fromEmail || "").toLowerCase().includes(val);
+          } else if (rule.match_type === "subject") {
+            isMatch = (email.subject || "").toLowerCase().includes(val);
+          } else if (rule.match_type === "domain") {
+            isMatch = (email.fromEmail || "").toLowerCase().includes(val);
+          }
+          if (isMatch && !allMatching.find(e => e.id === email.id)) {
+            allMatching.push(email);
+          }
+        }
+      }
+    }
+
+    if (allMatching.length === 0) return { moved: 0 };
 
     let moved = 0;
-    for (const email of emails) {
+    for (const email of allMatching) {
       try {
         await graphModule.setCategories(tokenData.token, email.id, [rule.category]);
         await graphModule.moveToFolder(tokenData.token, email.id, rule.category);
