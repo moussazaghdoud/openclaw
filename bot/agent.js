@@ -293,6 +293,19 @@ function getTools() {
     });
   }
 
+  // AI-classified email search
+  tools.push({
+    name: "get_classified_emails",
+    description: "Get emails classified by AI using your custom rules (EMT, URGENT, ACTION, FYI, SYSTEM, NOISE). Use this when user asks for 'urgent emails', 'important emails', 'emails needing attention', or any request about email priority/classification. This is BETTER than search_emails for priority-based queries because it uses AI classification with custom rules.",
+    input_schema: {
+      type: "object",
+      properties: {
+        category: { type: "string", description: "Filter by category: EMT, URGENT, ACTION, FYI, SYSTEM, NOISE, or 'all' for full digest. Default: all." },
+        max_emails: { type: "number", description: "Max emails to classify (default 30)" },
+      },
+    },
+  });
+
   // Notification rules
   tools.push({
     name: "set_email_rule",
@@ -538,6 +551,63 @@ async function executeTool(toolName, input, userId, memory) {
           totalSent: sentEmails.length,
           totalAwaiting: awaitingReply.length,
           awaitingReply: awaitingReply.sort((a, b) => b.daysWaiting - a.daysWaiting),
+        };
+      }
+
+      case "get_classified_emails": {
+        const ep = await resolveEmailProvider(userId);
+        if (!ep) return { error: "No email account connected." };
+
+        let emailScheduler = null;
+        try { emailScheduler = require("./email-scheduler"); } catch {}
+
+        const max = Math.min(input.max_emails || 30, 50);
+        const emails = await ep.api.getUnreadEmails(ep.token, max);
+        if (!emails || emails._error || emails.length === 0) {
+          return { count: 0, message: "No unread emails found." };
+        }
+
+        // Classify using AI with user's custom rules
+        let classified;
+        if (emailScheduler && emailScheduler.classifyEmails) {
+          classified = await emailScheduler.classifyEmails(emails, userId);
+        } else {
+          // Fallback: use Outlook importance only
+          classified = emails.map(e => ({
+            ...e,
+            category: e.importance === "high" ? "URGENT" : "FYI",
+            action_needed: "",
+          }));
+        }
+
+        // Filter by category if requested
+        const filter = (input.category || "all").toUpperCase();
+        let filtered = classified;
+        if (filter !== "ALL") {
+          filtered = classified.filter(e => e.category === filter);
+        }
+
+        // Group by category for display
+        const groups = {};
+        for (const e of classified) {
+          if (!groups[e.category]) groups[e.category] = [];
+          groups[e.category].push(e);
+        }
+        const summary = Object.entries(groups).map(([cat, emails]) => `${cat}: ${emails.length}`).join(", ");
+
+        return {
+          total: classified.length,
+          summary,
+          filter: filter === "ALL" ? "all categories" : filter,
+          emails: filtered.slice(0, 15).map(e => ({
+            category: e.category,
+            from: e.from,
+            fromEmail: e.fromEmail,
+            subject: e.subject,
+            date: e.receivedAt,
+            action_needed: e.action_needed || "",
+            preview: (e.preview || "").substring(0, 100),
+          })),
         };
       }
 
@@ -1063,6 +1133,7 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
           read_thread: "Reading conversation thread...",
           summarize_thread: "Summarizing email thread...",
           check_followups: "Checking follow-ups...",
+          get_classified_emails: "Classifying emails...",
           get_followup_timing: "Checking follow-up timing...",
           manage_email_rules: "Managing email rules...",
           manage_email_digest: "Managing email digest...",
