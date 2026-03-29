@@ -4449,27 +4449,15 @@ async function start() {
           ];
         }
       }
-      // Smart suggestion detection based on response content
-      if (!suggestions && responseText) {
-        // Capability overview / "what can you do" → show top action buttons
-        if (/what.*would you like|what.*explore|how can I help|what can I do/i.test(responseText) &&
-            /email|pipeline|calendar|salesforce|crm/i.test(responseText)) {
-          suggestions = [
-            { title: "Urgent emails", value: "show me my urgent emails" },
-            { title: "Pipeline health", value: "pipeline health" },
-            { title: "Today's meetings", value: "what's on my calendar today?" },
-            { title: "Follow-ups", value: "show my follow-ups" },
-            { title: "Top deals", value: "show top 5 opportunities" },
-          ];
-        }
+      // Smart suggestion detection — only on SHORT responses (under 600 chars)
+      if (!suggestions && responseText && responseText.length < 600) {
         // Email-related response asking for next action
-        else if (/would you like.*read|want me to.*reply|shall I.*forward|want.*details/i.test(responseText) &&
-                 /email|message|thread/i.test(responseText)) {
+        if (/would you like.*read|want me to.*reply|shall I.*forward|want.*details/i.test(responseText) &&
+            /email|message|thread/i.test(responseText)) {
           suggestions = [
             { title: "Read it", value: "read that email" },
             { title: "Reply", value: "reply to that email" },
             { title: "Archive", value: "archive it" },
-            { title: "Skip", value: "no thanks" },
           ];
         }
         // Pipeline/deal response asking for next action
@@ -4479,7 +4467,6 @@ async function start() {
             { title: "More details", value: "tell me more" },
             { title: "Deals at risk", value: "deals at risk" },
             { title: "Stale deals", value: "stale deals" },
-            { title: "No thanks", value: "no thanks" },
           ];
         }
         // Generic yes/no question
