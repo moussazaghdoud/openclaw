@@ -573,7 +573,8 @@ function buildEmailDigest(classified, crmContext, prefs) {
       for (const email of catEmails) {
         counter++;
         const senderCRM = crmContext[email.fromEmail?.toLowerCase()];
-        lines.push(`${counter}. ${email.from} \u2014 "${email.subject}"${fmtDate(email.receivedAt)}`);
+        const openLink = email.webLink ? ` ${email.webLink}` : "";
+        lines.push(`${counter}. ${email.from} \u2014 "${email.subject}"${fmtDate(email.receivedAt)}${openLink}`);
         if (email.action_needed) {
           lines.push(`   \u2192 ${email.action_needed}`);
         }

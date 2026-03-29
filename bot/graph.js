@@ -19,7 +19,7 @@ async function getUnreadEmails(token, top = 20) {
     $filter: "isRead eq false",
     $orderby: "receivedDateTime desc",
     $top: String(top),
-    $select: "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId",
+    $select: "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId,webLink",
   });
   return fetchEmails(token, `/me/mailFolders/inbox/messages?${params}`);
 }
@@ -31,7 +31,7 @@ async function getRecentEmails(token, top = 20) {
   const params = new URLSearchParams({
     $orderby: "receivedDateTime desc",
     $top: String(top),
-    $select: "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId",
+    $select: "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId,webLink",
   });
   return fetchEmails(token, `/me/mailFolders/inbox/messages?${params}`);
 }
@@ -44,7 +44,7 @@ async function searchEmails(token, query, top = 20) {
     $search: `"${query}"`,
     $orderby: "receivedDateTime desc",
     $top: String(top),
-    $select: "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId",
+    $select: "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId,webLink",
   });
   return fetchEmails(token, `/me/messages?${params}`);
 }
@@ -249,7 +249,7 @@ async function getUnreadEmailsSince(token, sinceISO, top = 50) {
     $filter: `isRead eq false and receivedDateTime ge '${sinceISO}'`,
     $orderby: "receivedDateTime desc",
     $top: String(top),
-    $select: "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId",
+    $select: "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId,webLink",
   });
   return fetchEmails(token, `/me/mailFolders/inbox/messages?${params}`);
 }
@@ -391,6 +391,7 @@ function normalizeEmail(e, includeBody) {
     importance: e.importance,
     hasAttachments: e.hasAttachments,
     conversationId: e.conversationId,
+    webLink: e.webLink || "",
   };
   if (includeBody && e.body) {
     // Strip HTML tags for AI consumption
