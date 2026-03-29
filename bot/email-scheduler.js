@@ -537,6 +537,16 @@ async function enrichWithCRM(userId, classified) {
  * Build formatted digest message from classified emails and CRM context.
  */
 function buildEmailDigest(classified, crmContext, prefs) {
+  const fmtDate = (dateStr) => {
+    if (!dateStr) return "";
+    try {
+      const d = new Date(dateStr);
+      const day = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+      return ` (${day}, ${time})`;
+    } catch { return ""; }
+  };
+
   const lines = [];
   lines.push("\ud83d\udcec Morning Email Digest");
   lines.push("");
@@ -563,7 +573,7 @@ function buildEmailDigest(classified, crmContext, prefs) {
       for (const email of catEmails) {
         counter++;
         const senderCRM = crmContext[email.fromEmail?.toLowerCase()];
-        lines.push(`${counter}. ${email.from} \u2014 "${email.subject}"`);
+        lines.push(`${counter}. ${email.from} \u2014 "${email.subject}"${fmtDate(email.receivedAt)}`);
         if (email.action_needed) {
           lines.push(`   \u2192 ${email.action_needed}`);
         }
@@ -643,7 +653,7 @@ function buildEmailDigest(classified, crmContext, prefs) {
   if (groups.SYSTEM.length > 0) {
     lines.push(`\u2699\ufe0f SYSTEM (${groups.SYSTEM.length} \u2192 moved to System Emails)`);
     for (const email of groups.SYSTEM.slice(0, 3)) {
-      lines.push(`- ${email.from} \u2014 "${email.subject}"`);
+      lines.push(`- ${email.from} \u2014 "${email.subject}"${fmtDate(email.receivedAt)}`);
     }
     if (groups.SYSTEM.length > 3) lines.push(`- ...and ${groups.SYSTEM.length - 3} more`);
     lines.push("");
