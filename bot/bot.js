@@ -525,9 +525,67 @@ function stripMarkdown(text) {
     .trim();
 }
 
-function buildMessage(text) {
+function buildMessage(text, suggestions) {
   const cleanBody = stripMarkdown(text);
-  return { message: { body: cleanBody, lang: "en" } };
+  const msg = { message: { body: cleanBody, lang: "en" } };
+
+  // Add quick reply suggestions if provided
+  // suggestions: [{ title: "Yes", value: "yes" }, { title: "No", value: "no" }]
+  if (suggestions && suggestions.length > 0) {
+    const suggestData = suggestions.map(s => ({
+      title: s.title,
+      value: s.value || s.title.toLowerCase(),
+      ...(s.image ? { image: s.image } : {}),
+    }));
+    msg.message.alternativeContent = [
+      {
+        type: "rainbow/suggest",
+        content: JSON.stringify(suggestData),
+      },
+    ];
+  }
+
+  return msg;
+}
+
+/**
+ * Parse suggestion response from Rainbow.
+ * When user clicks a suggestion, the message contains alternativeContent
+ * with mimetype "rainbow/json" and the selected value.
+ */
+function parseSuggestionResponse(message) {
+  if (!message || !message.alternativeContent) return null;
+  for (const alt of message.alternativeContent) {
+    if (alt.type === "rainbow/json") {
+      try {
+        const data = JSON.parse(alt.content);
+        if (data?.rainbow?.value?.response) {
+          return data.rainbow.value.response;
+        }
+        if (data?.rainbow?.text) {
+          return data.rainbow.text;
+        }
+      } catch {}
+    }
+  }
+  return null;
+}
+
+/**
+ * Send a message with quick reply suggestions via S2S REST.
+ */
+async function sendWithSuggestions(convId, text, suggestions) {
+  if (!convId || !s2sConnectionId || !authToken) return false;
+  const host = rainbowHost || "openrainbow.com";
+  const msg = buildMessage(text, suggestions);
+  try {
+    const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(msg),
+    });
+    return resp.ok;
+  } catch { return false; }
 }
 
 /**
@@ -3445,7 +3503,9 @@ async function start() {
       const fromJid = message.fromJid || message.from?.jid_im || "";
       const fromId = message.fromUserId || message.from?.id || "";
       const fromName = message.from?.displayName || message.from?.loginEmail || fromJid;
-      const content = message.content || message.data || "";
+      // Check for suggestion/quick-reply response first
+      const suggestionValue = parseSuggestionResponse(message);
+      const content = suggestionValue || message.content || message.data || "";
       const conversationId = message.conversationId || "";
 
       // Skip bot's own messages (robust: check ID, JID, and login email)
@@ -4369,6 +4429,34 @@ async function start() {
         if (conversation) sdk.im.sendIsTypingStateInConversation(conversation, false);
       } catch {}
 
+      // Detect if suggestions should be added to the response
+      let suggestions = null;
+      if (redis) {
+        // Check for pending sales confirmation → add Yes/No buttons
+        const hasSalesPending = await redis.get(`sales:pending:${fromJid}`).catch(() => null);
+        if (hasSalesPending) {
+          suggestions = [
+            { title: "Yes, confirm", value: "yes" },
+            { title: "No, cancel", value: "no" },
+          ];
+        }
+        // Check for pending email send confirmation
+        const hasEmailPending = await redis.get(`pending:${fromJid}`).catch(() => null);
+        if (hasEmailPending) {
+          suggestions = [
+            { title: "Yes, send", value: "yes" },
+            { title: "No, cancel", value: "no" },
+          ];
+        }
+      }
+      // If response ends with a question, add helpful action buttons
+      if (!suggestions && responseText && /would you like|want me to|shall I|can I help/i.test(responseText)) {
+        suggestions = [
+          { title: "Yes", value: "yes" },
+          { title: "No thanks", value: "no" },
+        ];
+      }
+
       // Send response back
       try {
         let sent = false;
@@ -4385,7 +4473,7 @@ async function start() {
               const resp = await fetch(msgUrl, {
                 method: "POST",
                 headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                body: JSON.stringify(buildMessage(responseText)),
+                body: JSON.stringify(buildMessage(responseText, suggestions)),
               });
               if (resp.ok) {
                 sent = true;
@@ -4402,7 +4490,7 @@ async function start() {
           // Method 2: Use conversation.dbId via sdk.s2s.sendMessageInConversation
           if (!sent && conversation?.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
             try {
-              await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText));
+              await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText, suggestions));
               sent = true;
               console.log(`${LOG} Sent via sdk.s2s.sendMessageInConversation dbId=${conversation.dbId}`);
             } catch (err) {
@@ -4424,9 +4512,9 @@ async function start() {
             console.error(`${LOG} All bubble reply methods failed`);
           }
         } else {
-          // 1:1 reply via S2S or IM — with HTML formatting
+          // 1:1 reply via S2S or IM
           if (conversation.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
-            await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText));
+            await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText, suggestions));
           } else {
             await sdk.im.sendMessageToConversation(conversation, responseText);
           }
