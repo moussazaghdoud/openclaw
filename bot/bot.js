@@ -109,8 +109,8 @@ function validateConfig() {
   if (!config.appId) missing.push("RAINBOW_APP_ID");
   if (!config.appSecret) missing.push("RAINBOW_APP_SECRET");
   if (!config.hostCallback) missing.push("RAINBOW_HOST_CALLBACK");
-  // OpenClaw endpoint/apiKey no longer required — all AI calls go direct to Anthropic
-  if (!ANTHROPIC_API_KEY) missing.push("ANTHROPIC_API_KEY");
+  if (!config.endpoint) missing.push("OPENCLAW_ENDPOINT");
+  if (!config.apiKey) missing.push("OPENCLAW_API_KEY");
 
   if (missing.length > 0) {
     console.error(`${LOG} Missing required environment variables:`);
@@ -1454,9 +1454,9 @@ Start directly with the content.`;
 }
 
 async function callOpenClaw(userId, userMessage, attempt = 1) {
-  const OPUS = "claude-opus-4-20250514";
   const history = await getHistory(userId);
 
+  const messages = [];
   const fileNote = `When users share files, their content appears in conversation history. You can read and reference file contents directly.
 Do NOT upload files to tmpfiles.org, transfer.sh, or any external service. Do NOT reference paths like /.openclaw/workspace/.
 Do NOT mention tools, downloads, or file creation capabilities. Just answer naturally — the system handles file delivery automatically.
@@ -1475,33 +1475,32 @@ You are an AI assistant integrated with the user's calendar, email, and CRM. Whe
     }
   }
 
-  // Build messages for Anthropic API (system prompt is separate)
-  const apiMessages = [];
-  for (const msg of history) {
-    if (msg.role === "system") continue; // Anthropic uses system param, not messages
-    apiMessages.push({ role: msg.role, content: msg.content });
-  }
-  apiMessages.push({ role: "user", content: userMessage });
+  messages.push({ role: "system", content: sysPrompt });
+  messages.push(...history);
+  messages.push({ role: "user", content: userMessage });
+
+  const body = {
+    model: `openclaw:${config.agentId}`,
+    messages,
+    max_tokens: config.maxTokens,
+    stream: false,
+    user: userId,
+  };
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
 
   try {
-    console.log(`${LOG} -> Anthropic Opus request for ${userId}`);
+    const url = `${config.endpoint}/v1/chat/completions`;
+    console.log(`${LOG} -> OpenClaw request for ${userId}`);
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch(url, {
       method: "POST",
       headers: {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
+        Authorization: `Bearer ${config.apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: OPUS,
-        system: sysPrompt,
-        messages: apiMessages,
-        max_tokens: config.maxTokens || 4096,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
 
@@ -1509,11 +1508,12 @@ You are an AI assistant integrated with the user's calendar, email, and CRM. Whe
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Anthropic API returned ${response.status}: ${errorText}`);
+      throw new Error(`OpenClaw returned ${response.status}: ${errorText}`);
     }
 
     const data = await response.json();
-    const assistantMessage = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n") || "";
+    const choice = data.choices?.[0];
+    const assistantMessage = choice?.message?.content || "";
 
     await addMessage(userId, "user", userMessage);
     await addMessage(userId, "assistant", assistantMessage);
@@ -1527,14 +1527,14 @@ You are an AI assistant integrated with the user's calendar, email, and CRM. Whe
       }).catch(() => {});
     }
 
-    console.log(`${LOG} <- Anthropic Opus response (${assistantMessage.length} chars)`);
-    return { content: assistantMessage, model: OPUS, usage: data.usage };
+    console.log(`${LOG} <- OpenClaw response (${assistantMessage.length} chars)`);
+    return { content: assistantMessage, model: data.model, usage: data.usage };
   } catch (err) {
     clearTimeout(timeout);
-    console.error(`${LOG} Anthropic Opus error (attempt ${attempt}):`, err.message);
+    console.error(`${LOG} OpenClaw error (attempt ${attempt}):`, err.message);
     // Retry once on failure
     if (attempt < 2) {
-      console.log(`${LOG} Retrying in 3s...`);
+      console.log(`${LOG} Retrying OpenClaw request in 3s...`);
       await new Promise(r => setTimeout(r, 3000));
       return callOpenClaw(userId, userMessage, attempt + 1);
     }
@@ -1588,11 +1588,7 @@ async function callAIStandalone(userIdOrPrompt, promptOrUndefined) {
     }
   }
 
-  // No ANTHROPIC_API_KEY — cannot make AI calls
-  console.error(`${LOG} callAIStandalone: no ANTHROPIC_API_KEY set`);
-  clearTimeout(timeout);
-  return null;
-  /* Legacy OpenClaw fallback removed — all AI calls go direct to Anthropic
+  // Fallback: use OpenClaw if no direct API key
   try {
     const response = await fetch(`${config.endpoint}/v1/chat/completions`, {
       method: "POST",
@@ -1617,7 +1613,6 @@ async function callAIStandalone(userIdOrPrompt, promptOrUndefined) {
     console.error(`${LOG} callAIStandalone error:`, e.message);
     return null;
   }
-  */
 }
 
 /**
@@ -1643,18 +1638,20 @@ ${numberedParas}`;
     const timeout = setTimeout(() => controller.abort(), TRANSLATION_TIMEOUT);
 
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch(`${config.endpoint}/v1/chat/completions`, {
         method: "POST",
         headers: {
-          "x-api-key": ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
+          Authorization: `Bearer ${config.apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          system: "You are a professional translator. Return ONLY the JSON array of translated strings. No commentary.",
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: config.maxTokens || 4096,
+          model: `openclaw:${config.agentId}`,
+          messages: [
+            { role: "system", content: "You are a professional translator. Return ONLY the JSON array of translated strings. No commentary." },
+            { role: "user", content: prompt },
+          ],
+          max_tokens: config.maxTokens,
+          stream: false,
         }),
         signal: controller.signal,
       });
@@ -1667,7 +1664,7 @@ ${numberedParas}`;
       }
 
       const data = await response.json();
-      const content = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n") || "";
+      const content = data.choices?.[0]?.message?.content || "";
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       if (!jsonMatch) { console.error(`${LOG} No JSON array in translation response`); return null; }
       const parsed = JSON.parse(jsonMatch[0]);
@@ -2267,21 +2264,17 @@ Respond with ONLY "YES" or "NO". Nothing else.`
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    const url = `${config.endpoint}/v1/chat/completions`;
+    const resp = await fetch(url, {
       method: "POST",
-      headers: { "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        system: evalMessages.find(m => m.role === "system")?.content || "",
-        messages: evalMessages.filter(m => m.role !== "system"),
-        max_tokens: 5,
-      }),
+      headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: `openclaw:${config.agentId}`, messages: evalMessages, max_tokens: 5, stream: false }),
       signal: controller.signal,
     });
     clearTimeout(timeout);
     if (!resp.ok) return false;
     const data = await resp.json();
-    const answer = ((data.content || []).find(b => b.type === "text")?.text || "").trim().toUpperCase();
+    const answer = (data.choices?.[0]?.message?.content || "").trim().toUpperCase();
     console.log(`${LOG} Intent check for "${content.substring(0, 50)}": ${answer}`);
     return answer.startsWith("YES");
   } catch (err) {
