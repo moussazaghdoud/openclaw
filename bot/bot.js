@@ -110,7 +110,7 @@ function validateConfig() {
   if (!config.appSecret) missing.push("RAINBOW_APP_SECRET");
   if (!config.hostCallback) missing.push("RAINBOW_HOST_CALLBACK");
   // OpenClaw endpoint/apiKey no longer required — all AI calls go direct to Anthropic
-  if (!ANTHROPIC_API_KEY) missing.push("ANTHROPIC_API_KEY");
+  if (!process.env.ANTHROPIC_API_KEY) missing.push("ANTHROPIC_API_KEY");
 
   if (missing.length > 0) {
     console.error(`${LOG} Missing required environment variables:`);
