@@ -327,7 +327,7 @@ async function getActivationSsoUrl(inviteToken, baseUrl) {
   const M365_TENANT_ID = process.env.M365_TENANT_ID || "common";
   const redirectUri = `${baseUrl}/api/activate/callback`;
 
-  const scopes = "openid profile email offline_access Mail.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite Sites.Read.All Files.Read.All";
+  const scopes = "openid profile email offline_access Mail.Read Calendars.Read User.Read";
 
   const params = new URLSearchParams({
     client_id: M365_CLIENT_ID,
@@ -373,7 +373,7 @@ async function handleActivationCallback(code, state, baseUrl) {
         code,
         redirect_uri: redirectUri,
         grant_type: "authorization_code",
-        scope: "openid profile email offline_access Mail.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite Sites.Read.All Files.Read.All",
+        scope: "openid profile email offline_access Mail.Read Calendars.Read User.Read",
       }),
     });
 
