@@ -246,20 +246,17 @@ async function handleEmailIntent(userId, intent, userMessage) {
 
   const { provider, token, api } = resolved;
 
-  // Action intents that need specific handlers (write operations, confirmations)
+  // Write operations DISABLED — read-only mode (Stage 1)
+  const readOnlyMsg = "I'm currently in read-only mode. I can read and search your emails, but I cannot send, reply, archive, flag, or modify any emails.";
   switch (intent.type) {
     case "email_draft_reply":
-      return handleDraftReply(userId, token, api, provider, intent.target, intent.instructions);
     case "email_compose_new":
-      return handleComposeNew(userId, token, api, provider, intent.to, intent.instructions);
     case "email_send_confirm":
-      return handleSendConfirm(userId, token);
     case "email_archive":
-      return handleArchive(userId, token, intent.target);
-    case "email_mark_read":
-      return handleMarkRead(userId, token);
     case "email_flag":
-      return handleFlag(userId, token, intent.target);
+      return readOnlyMsg;
+    case "email_mark_read":
+      return readOnlyMsg;
   }
 
   // ALL read/query intents → AI agent: fetch emails, let AI answer the question

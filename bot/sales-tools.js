@@ -167,68 +167,8 @@ function getToolDefinitions() {
       },
     },
 
-    // ── Write tools (require confirmation) ──────────────────
-    {
-      name: "update_opportunity",
-      description: "Update stage, close date, amount, next step, or probability on an opportunity. REQUIRES CONFIRMATION — the change is staged and must be confirmed before it is applied.",
-      input_schema: {
-        type: "object",
-        properties: {
-          opportunity_id: { type: "string", description: "Salesforce Opportunity ID (18-char)" },
-          stage: { type: "string", description: "New stage name" },
-          close_date: { type: "string", description: "New close date (YYYY-MM-DD)" },
-          amount: { type: "number", description: "New amount" },
-          next_step: { type: "string", description: "New next step text" },
-          probability: { type: "number", description: "New probability (0-100)" },
-        },
-        required: ["opportunity_id"],
-      },
-    },
-    {
-      name: "create_task",
-      description: "Create a follow-up task linked to an opportunity or contact. Executes immediately (no confirmation needed).",
-      input_schema: {
-        type: "object",
-        properties: {
-          subject: { type: "string", description: "Task subject / title" },
-          opportunity_id: { type: "string", description: "Link to opportunity (optional)" },
-          contact_id: { type: "string", description: "Link to contact (optional)" },
-          due_date: { type: "string", description: "Due date (YYYY-MM-DD)" },
-          priority: { type: "string", enum: ["High", "Normal", "Low"], description: "Task priority (default Normal)" },
-          description: { type: "string", description: "Task description / notes" },
-        },
-        required: ["subject"],
-      },
-    },
-    {
-      name: "log_activity",
-      description: "Log a call, email, or note as a completed activity. Executes immediately (no confirmation needed).",
-      input_schema: {
-        type: "object",
-        properties: {
-          subject: { type: "string", description: "Activity subject" },
-          type: { type: "string", enum: ["Call", "Email", "Note"], description: "Activity type (default Note)" },
-          account_id: { type: "string", description: "Link to account (optional)" },
-          opportunity_id: { type: "string", description: "Link to opportunity (optional)" },
-          description: { type: "string", description: "Activity details / notes" },
-        },
-        required: ["subject"],
-      },
-    },
-    {
-      name: "close_deal",
-      description: "Close a deal as won or lost. REQUIRES CONFIRMATION — the change is staged and must be confirmed before it is applied.",
-      input_schema: {
-        type: "object",
-        properties: {
-          opportunity_id: { type: "string", description: "Salesforce Opportunity ID (18-char)" },
-          won: { type: "boolean", description: "true = Closed Won, false = Closed Lost" },
-          amount: { type: "number", description: "Final deal amount (optional override)" },
-          close_reason: { type: "string", description: "Reason for closing (especially if lost)" },
-        },
-        required: ["opportunity_id", "won"],
-      },
-    },
+    // ── Write tools DISABLED — read-only mode (Stage 1) ──────────────────
+    // update_opportunity, create_task, log_activity, close_deal removed
 
     // ── Forecast tools ──────────────────────────────────────
     {
@@ -242,18 +182,7 @@ function getToolDefinitions() {
         },
       },
     },
-    {
-      name: "set_quota",
-      description: "Set the sales quota for a specific quarter or annual target. Stored persistently for forecast calculations.",
-      input_schema: {
-        type: "object",
-        properties: {
-          annual: { type: "number", description: "Annual quota amount" },
-          quarter: { type: "string", description: "Quarter label (e.g. 'Q1 2026')" },
-          amount: { type: "number", description: "Quarterly quota amount" },
-        },
-      },
-    },
+    // set_quota REMOVED — read-only mode (Stage 1)
 
     // ── Competitor tools ────────────────────────────────────
     {
@@ -267,20 +196,7 @@ function getToolDefinitions() {
         },
       },
     },
-    {
-      name: "add_competitor",
-      description: "Add a competitor to a deal. REQUIRES CONFIRMATION — the change is staged and must be confirmed before it is applied.",
-      input_schema: {
-        type: "object",
-        properties: {
-          opportunity_id: { type: "string", description: "Salesforce Opportunity ID (18-char)" },
-          competitor_name: { type: "string", description: "Competitor company name" },
-          strengths: { type: "string", description: "Competitor strengths on this deal" },
-          weaknesses: { type: "string", description: "Competitor weaknesses on this deal" },
-        },
-        required: ["opportunity_id", "competitor_name"],
-      },
-    },
+    // add_competitor REMOVED — read-only mode (Stage 1)
     {
       name: "search_deals_by_competitor",
       description: "Find all deals where a specific competitor is present. Use to understand competitive landscape across pipeline.",
@@ -632,9 +548,28 @@ async function executeToolInner(toolName, input, token, instanceUrl, userId) {
         };
       }
 
-      // ── Write tools (confirmation pattern) ──────────────────
+      // ── Write tools DISABLED — read-only mode (Stage 1) ──────────────────
 
       case "update_opportunity": {
+        return { error: "Read-only mode: Salesforce writes are disabled." };
+      }
+      case "create_task": {
+        return { error: "Read-only mode: Salesforce writes are disabled." };
+      }
+      case "log_activity": {
+        return { error: "Read-only mode: Salesforce writes are disabled." };
+      }
+      case "close_deal": {
+        return { error: "Read-only mode: Salesforce writes are disabled." };
+      }
+      case "add_competitor": {
+        return { error: "Read-only mode: Salesforce writes are disabled." };
+      }
+      case "set_quota": {
+        return { error: "Read-only mode: Salesforce writes are disabled." };
+      }
+
+      case "_disabled_update_opportunity": {
         if (!input.opportunity_id) return { error: "opportunity_id is required" };
         const updates = {};
         if (input.stage !== undefined) updates.StageName = input.stage;

@@ -172,16 +172,13 @@ async function handleCalendarIntent(userId, intent, originalMessage) {
         return await handleWeekEvents(api, token, providerLabel);
       case "calendar_free_slots":
         return await handleFreeSlots(api, token, intent, providerLabel);
+      // Write operations DISABLED — read-only mode (Stage 1)
       case "calendar_create":
-        return await handleCreateEvent(api, token, userId, intent, providerLabel);
       case "calendar_reschedule":
-        return await handleRescheduleEvent(api, token, userId, intent, providerLabel);
       case "calendar_cancel":
-        return await handleCancelEvent(api, token, userId, intent, providerLabel);
       case "calendar_accept":
-        return await handleAcceptEvent(api, token, userId, intent, providerLabel);
       case "calendar_decline":
-        return await handleDeclineEvent(api, token, userId, intent, providerLabel);
+        return "I'm currently in read-only mode. I can read your calendar, but I cannot create, modify, cancel, or RSVP to any events.";
       case "calendar_next":
         return await handleNextMeeting(api, token, userId, intent, providerLabel);
       case "calendar_details":
@@ -189,9 +186,8 @@ async function handleCalendarIntent(userId, intent, originalMessage) {
       case "calendar_smart_query":
         return await handleSmartQuery(api, token, userId, intent, providerLabel);
       case "calendar_confirm_create":
-        return await handleConfirmCreate(api, token, userId, providerLabel);
       case "calendar_confirm_cancel":
-        return await handleConfirmCancel(api, token, userId, providerLabel);
+        return "I'm currently in read-only mode. Calendar modifications are disabled.";
       default:
         return "I didn't understand that calendar request. Try asking about today's meetings, free slots, or scheduling a meeting.";
     }
