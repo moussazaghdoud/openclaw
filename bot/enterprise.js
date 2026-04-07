@@ -935,7 +935,7 @@ async function loadUsers() {
   tbody.innerHTML = data.users.map(u => {
     const services = [u.microsoftId?'M365':'', u.salesforceId?'SF':'', u.rainbowJid?'Rainbow':''].filter(Boolean).join(', ') || '-';
     const badge = '<span class="badge '+u.status.toLowerCase()+'">'+u.status+'</span>';
-    return '<tr><td>'+u.firstName+' '+u.lastName+'</td><td>'+u.email+'</td><td>'+badge+'</td><td>'+(u.activatedAt?new Date(u.activatedAt).toLocaleDateString():'-')+'</td><td>'+services+'</td><td class="actions"><button class="secondary" onclick="invite(\\''+u.id+'\\')">Invite</button>'+(u.status==='ACTIVE'?'<button class="secondary" onclick="deactivate(\\''+u.id+'\\')">Deactivate</button>':'')+'</td></tr>';
+    return '<tr><td>'+u.firstName+' '+u.lastName+'</td><td>'+u.email+'</td><td>'+badge+'</td><td>'+(u.activatedAt?new Date(u.activatedAt).toLocaleDateString():'-')+'</td><td>'+services+'</td><td class="actions"><button class="secondary" onclick="invite(\\''+u.id+'\\')">Invite</button>'+(u.status==='ACTIVE'?'<button class="secondary" onclick="deactivate(\\''+u.id+'\\')">Deactivate</button>':'')+'<button class="danger" onclick="deleteUser(\\''+u.id+'\\',\\''+u.firstName+' '+u.lastName+'\\')">Delete</button></td></tr>';
   }).join('');
 }
 
@@ -967,6 +967,13 @@ async function deactivate(userId) {
   if (!confirm('Deactivate this user?')) return;
   await api('/api/admin/users/'+userId, {method:'PATCH', body:{status:'INACTIVE'}});
   notify('User deactivated'); await loadUsers(); await loadStats();
+}
+
+async function deleteUser(userId, name) {
+  if (!confirm('Delete user ' + name + '? This cannot be undone.')) return;
+  const result = await api('/api/admin/users/'+userId, {method:'DELETE'});
+  if (result && result.success) { notify('User deleted'); await loadUsers(); await loadStats(); }
+  else notify('Failed to delete user', true);
 }
 
 async function importCsv() {
