@@ -352,31 +352,41 @@ function buildDailyDigest(report) {
   }
   lines.push("");
 
-  // Stale deals (no activity 14+ days)
+  // Stale deals — top 5 by amount (highest value at risk)
   const staleDeals = deals.filter(d =>
     d.daysSinceActivity >= cfg.STALE_DEAL_DAYS
-  ).sort((a, b) => b.daysSinceActivity - a.daysSinceActivity);
+  ).sort((a, b) => b.amount - a.amount);
 
   lines.push(`\u26a0\ufe0f Stale deals (no activity ${cfg.STALE_DEAL_DAYS}+ days): ${staleDeals.length}`);
   if (staleDeals.length > 0) {
-    for (const d of staleDeals) {
+    const totalStaleValue = staleDeals.reduce((s, d) => s + (d.amount || 0), 0);
+    lines.push(`Total at-risk value: ${formatAmount(totalStaleValue)}`);
+    const top5 = staleDeals.slice(0, 5);
+    for (const d of top5) {
       const amountStr = formatAmount(d.amount);
       lines.push(`- ${d.name} (${amountStr}) \u2014 ${d.daysSinceActivity} days inactive`);
+    }
+    if (staleDeals.length > 5) {
+      lines.push(`...and ${staleDeals.length - 5} more stale deals`);
     }
   }
   lines.push("");
 
-  // Past close date
+  // Past close date — top 5 by amount
   const pastClose = deals.filter(d =>
     d.daysUntilClose < 0
-  ).sort((a, b) => a.daysUntilClose - b.daysUntilClose);
+  ).sort((a, b) => b.amount - a.amount);
 
   lines.push(`\ud83d\udd34 Past close date: ${pastClose.length}`);
   if (pastClose.length > 0) {
-    for (const d of pastClose) {
+    const top5 = pastClose.slice(0, 5);
+    for (const d of top5) {
       const amountStr = formatAmount(d.amount);
       const overdueDays = Math.abs(d.daysUntilClose);
       lines.push(`- ${d.name} (${amountStr}) \u2014 ${overdueDays} days overdue`);
+    }
+    if (pastClose.length > 5) {
+      lines.push(`...and ${pastClose.length - 5} more overdue deals`);
     }
   }
 
