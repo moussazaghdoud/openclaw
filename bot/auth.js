@@ -93,7 +93,7 @@ async function getAuthUrl(rainbowUserId, conversationContext) {
     scope: SCOPES,
     state,
     response_mode: "query",
-    prompt: "consent", // always show consent screen
+    prompt: "select_account",
   });
 
   return `${AUTH_BASE}/authorize?${params.toString()}`;

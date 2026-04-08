@@ -336,7 +336,7 @@ async function getActivationSsoUrl(inviteToken, baseUrl) {
     scope: scopes,
     state,
     response_mode: "query",
-    prompt: "consent",
+    prompt: "select_account",
     login_hint: invite.email, // Pre-fill email
   });
 
