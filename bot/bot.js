@@ -654,18 +654,37 @@ function buildCardMessage(text, card) {
  */
 async function sendAdaptiveCard(convId, text, card, conversation) {
   const fallbackText = stripMarkdown(text);
-  const cardContent = { type: "form/json", message: JSON.stringify(card) };
+  const cardStr = JSON.stringify(card);
 
-  // Use sdk.im.sendMessageToConversation — this correctly wraps content for S2S
-  // (ImsService.js line 394-408: puts content as "contents" field in the S2S message)
-  if (conversation && sdk && sdk.im && typeof sdk.im.sendMessageToConversation === "function") {
+  // Use SDK's internal REST helper directly — bypasses SDK wrappers
+  // Format matches ImsService.js S2S path: { message: { body, lang, contents: { type, message } } }
+  if (sdk && sdk._core && sdk._core._rest) {
+    const dbId = conversation ? conversation.dbId : convId;
     try {
-      console.log(`${LOG} Sending Adaptive Card via sdk.im.sendMessageToConversation`);
-      await sdk.im.sendMessageToConversation(conversation, fallbackText, "en", cardContent);
-      console.log(`${LOG} Adaptive Card sent OK`);
-      return true;
+      const cnxId = sdk._core._rest.connectionS2SInfo?.id;
+      if (cnxId && dbId) {
+        const msg = {
+          message: {
+            body: fallbackText,
+            lang: "en",
+            contents: {
+              type: "form/json",
+              message: cardStr,
+            },
+          },
+        };
+        console.log(`${LOG} Sending Adaptive Card via SDK REST helper (cnxId=${cnxId}, dbId=${dbId})`);
+        const result = await sdk._core._rest.http.post(
+          `/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${dbId}/messages`,
+          sdk._core._rest.getRequestHeader(),
+          msg,
+          undefined
+        );
+        console.log(`${LOG} Adaptive Card sent OK via SDK REST`);
+        return true;
+      }
     } catch (err) {
-      console.error(`${LOG} Adaptive Card failed:`, err.message);
+      console.error(`${LOG} Adaptive Card SDK REST failed:`, err.message || err);
     }
   }
 
