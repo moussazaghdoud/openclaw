@@ -655,21 +655,54 @@ function buildCardMessage(text, card) {
 async function sendAdaptiveCard(convId, text, card) {
   if (!convId || !s2sConnectionId || !authToken) return false;
   const host = rainbowHost || "openrainbow.com";
-  const msg = buildCardMessage(text, card);
+  const url = `https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`;
+
+  // Try approach 1: alternativeContent with form/json
+  const msg1 = buildCardMessage(text, card);
   try {
-    const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+    console.log(`${LOG} Sending Adaptive Card (approach 1: alternativeContent) to ${convId}`);
+    const resp = await fetch(url, {
       method: "POST",
       headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(msg),
+      body: JSON.stringify(msg1),
     });
-    if (!resp.ok) {
-      console.error(`${LOG} Adaptive Card send failed: ${resp.status}`);
+    if (resp.ok) {
+      console.log(`${LOG} Adaptive Card sent OK (approach 1)`);
+      return true;
     }
-    return resp.ok;
+    const errText = await resp.text().catch(() => "");
+    console.error(`${LOG} Adaptive Card approach 1 failed: ${resp.status} ${errText.substring(0, 300)}`);
   } catch (err) {
-    console.error(`${LOG} Adaptive Card send error:`, err.message);
-    return false;
+    console.error(`${LOG} Adaptive Card approach 1 error:`, err.message);
   }
+
+  // Try approach 2: content field with type
+  try {
+    console.log(`${LOG} Sending Adaptive Card (approach 2: content field)`);
+    const msg2 = {
+      message: {
+        body: stripMarkdown(text),
+        lang: "en",
+        content: JSON.stringify(card),
+        type: "form/json",
+      },
+    };
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(msg2),
+    });
+    if (resp.ok) {
+      console.log(`${LOG} Adaptive Card sent OK (approach 2)`);
+      return true;
+    }
+    const errText = await resp.text().catch(() => "");
+    console.error(`${LOG} Adaptive Card approach 2 failed: ${resp.status} ${errText.substring(0, 300)}`);
+  } catch (err) {
+    console.error(`${LOG} Adaptive Card approach 2 error:`, err.message);
+  }
+
+  return false;
 }
 
 /**
