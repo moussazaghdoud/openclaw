@@ -323,32 +323,6 @@ function getTools() {
     },
   });
 
-  // Present choices to user via Adaptive Card
-  tools.push({
-    name: "present_choices",
-    description: "Present a choice card to the user when you need them to pick from options. Use when: (1) multiple emails/meetings/deals match and you need disambiguation, (2) the user's request is ambiguous and you can reformulate it as 2-5 clear interpretations, (3) you don't understand the request but can propose likely meanings, (4) a search returned too many results and you want the user to narrow down. Do NOT use for yes/no questions (use plain text). When you don't understand a request, reformulate it as choices instead of saying 'I don't understand'.",
-    input_schema: {
-      type: "object",
-      properties: {
-        question: { type: "string", description: "The question to ask the user" },
-        choices: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              title: { type: "string", description: "Display label for this option" },
-              value: { type: "string", description: "Value returned when selected" },
-            },
-            required: ["title", "value"],
-          },
-          description: "2-6 choices to present",
-        },
-        context: { type: "string", description: "Optional subtitle or context shown below the question" },
-      },
-      required: ["question", "choices"],
-    },
-  });
-
   // ── Sales Pipeline Tools (from sales-agent module) ────
   if (salesAgentModule && salesAgentModule.isAvailable()) {
     const salesTools = salesAgentModule.getToolDefinitions();
@@ -854,26 +828,6 @@ async function executeTool(toolName, input, userId, memory) {
         return { success: true, message: `Stored: "${input.entity_name}" = ${input.resolved_value}` };
       }
 
-      // ── Present Choices (Adaptive Card) ────────────────
-      case "present_choices": {
-        const cardId = `choice_${Date.now()}`;
-        // Store the card context so we can handle the response
-        if (redisClient) {
-          await redisClient.set(`card:${userId}:${cardId}`, JSON.stringify({
-            question: input.question,
-            choices: input.choices,
-            createdAt: new Date().toISOString(),
-          }), { EX: 600 }); // 10 min TTL
-        }
-        return {
-          _adaptive_card: true,
-          cardId,
-          question: input.question,
-          choices: input.choices,
-          context: input.context || "",
-        };
-      }
-
       // ── Sales Pipeline Tools ──────────────────────────
       case "analyze_pipeline":
       case "get_deal_risks":
@@ -993,12 +947,10 @@ NEVER ignore part of a multi-action request. Execute all parts.
 
 CLARIFICATION STRATEGY:
 When you don't understand a request or it's ambiguous:
-- Do NOT reply "I don't understand" or "Could you clarify?"
-- Instead, use present_choices to reformulate the request as 2-5 likely interpretations
-- Example: user says "check the thing" → present choices: "What would you like me to check?" with options like "Your unread emails", "Today's calendar", "Pipeline status", "Recent CRM activity"
-- Example: user says "what about the project" → present choices based on recent context: "Show emails about [project]", "Show CRM account for [project]", "Search web for [project] news"
-- If the request is truly incomprehensible, ask a short clarifying question in plain text
-- Always prefer structured choices over open-ended clarification questions
+- Reformulate the request as a short list of 2-5 likely interpretations as a numbered list
+- Example: user says "check the thing" → respond with "What would you like me to check?\n1. Your unread emails\n2. Today's calendar\n3. Pipeline status"
+- If the request is truly incomprehensible, ask a short clarifying question
+- Always prefer structured numbered options over open-ended questions
 
 FOLLOW-UP CONTINUITY:
 Short follow-ups are continuations of the latest active task. Give strong priority to recent conversation context.
@@ -1285,15 +1237,6 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
           if (result.events && result.events.length > 0) {
             memory.lastEvents = result.events.slice(0, 5);
           }
-        }
-
-        // If tool returned an Adaptive Card, save memory and return it for the bot to send
-        if (result && result._adaptive_card) {
-          await saveWorkingMemory(userId, memory);
-          trace.finalResponse = `[Adaptive Card: ${result.question}]`;
-          trace.loops = loop + 1;
-          trace.duration = Date.now() - startTime;
-          return { _adaptive_card: true, ...result };
         }
 
         toolResults.push({
