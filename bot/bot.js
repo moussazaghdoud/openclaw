@@ -643,7 +643,7 @@ function buildCardMessage(text, card) {
       lang: "en",
       alternativeContent: [{
         type: "form/json",
-        content: JSON.stringify(card),
+        content: JSON.stringify({ adaptiveCard: card }),
       }],
     },
   };
@@ -4440,11 +4440,19 @@ async function start() {
               agentResponse.context
             );
             const convId = rawConversationId || conversationId;
+            let cardSent = false;
             if (convId) {
-              await sendAdaptiveCard(convId, agentResponse.question, card);
+              cardSent = await sendAdaptiveCard(convId, agentResponse.question, card);
             }
-            if (typingInterval) clearInterval(typingInterval);
-            return; // Card sent, wait for user response
+            // Fallback: if card failed to send, send as plain text with numbered options
+            if (!cardSent) {
+              const lines = [agentResponse.question, ""];
+              agentResponse.choices.forEach((c, i) => lines.push(`${i + 1}. ${c.title}`));
+              responseText = lines.join("\n");
+            } else {
+              if (typingInterval) clearInterval(typingInterval);
+              return; // Card sent, wait for user response
+            }
           }
 
           responseText = agentResponse;
