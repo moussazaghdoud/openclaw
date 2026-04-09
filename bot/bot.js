@@ -652,41 +652,28 @@ function buildCardMessage(text, card) {
 /**
  * Send an Adaptive Card via S2S REST.
  */
-async function sendAdaptiveCard(convId, text, card, conversation, userJid) {
+async function sendAdaptiveCard(convId, text, card, conversation) {
   const fallbackText = stripMarkdown(text);
-  const content = {
-    type: "form/json",
-    message: JSON.stringify(card),
-  };
 
-  // Approach 1: SDK im.sendMessageToJid with content parameter (official Rainbow Adaptive Card method)
-  if (userJid && sdk && sdk.im && typeof sdk.im.sendMessageToJid === "function") {
-    try {
-      console.log(`${LOG} Sending Adaptive Card via sdk.im.sendMessageToJid to ${userJid}`);
-      await sdk.im.sendMessageToJid(fallbackText, userJid, "en", content);
-      console.log(`${LOG} Adaptive Card sent OK via SDK im.sendMessageToJid`);
-      return true;
-    } catch (err) {
-      console.error(`${LOG} Adaptive Card sdk.im.sendMessageToJid failed:`, err.message);
-    }
-  }
-
-  // Approach 2: SDK s2s.sendMessageInConversation with alternativeContent
+  // S2S mode: send via s2s.sendMessageInConversation with contents field
+  // (matching the format from Rainbow SDK S2SService.js line 472)
   if (conversation && sdk && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
     try {
-      console.log(`${LOG} Sending Adaptive Card via s2s.sendMessageInConversation (dbId=${conversation.dbId})`);
       const msg = {
         message: {
           body: fallbackText,
           lang: "en",
-          alternativeContent: [content],
+          contents: {
+            type: "form/json",
+            message: JSON.stringify(card),
+          },
         },
       };
       await sdk.s2s.sendMessageInConversation(conversation.dbId, msg);
-      console.log(`${LOG} Adaptive Card sent OK via s2s`);
+      console.log(`${LOG} Adaptive Card sent (dbId=${conversation.dbId})`);
       return true;
     } catch (err) {
-      console.error(`${LOG} Adaptive Card s2s failed:`, err.message);
+      console.error(`${LOG} Adaptive Card send failed:`, err.message);
     }
   }
 
