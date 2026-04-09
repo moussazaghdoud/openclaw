@@ -643,7 +643,7 @@ function buildCardMessage(text, card) {
       lang: "en",
       alternativeContent: [{
         type: "form/json",
-        content: JSON.stringify({ adaptiveCard: card }),
+        content: JSON.stringify(card),
       }],
     },
   };
