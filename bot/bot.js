@@ -652,40 +652,41 @@ function buildCardMessage(text, card) {
 /**
  * Send an Adaptive Card via S2S REST.
  */
-async function sendAdaptiveCard(convId, text, card, conversation) {
-  const msg = buildCardMessage(text, card);
+async function sendAdaptiveCard(convId, text, card, conversation, userJid) {
+  const fallbackText = stripMarkdown(text);
+  const content = {
+    type: "form/json",
+    message: JSON.stringify(card),
+  };
 
-  // Approach 1: SDK s2s.sendMessageInConversation (same as regular replies)
-  if (conversation && sdk && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
+  // Approach 1: SDK im.sendMessageToJid with content parameter (official Rainbow Adaptive Card method)
+  if (userJid && sdk && sdk.im && typeof sdk.im.sendMessageToJid === "function") {
     try {
-      console.log(`${LOG} Sending Adaptive Card via SDK (dbId=${conversation.dbId})`);
-      await sdk.s2s.sendMessageInConversation(conversation.dbId, msg);
-      console.log(`${LOG} Adaptive Card sent OK via SDK`);
+      console.log(`${LOG} Sending Adaptive Card via sdk.im.sendMessageToJid to ${userJid}`);
+      await sdk.im.sendMessageToJid(fallbackText, userJid, "en", content);
+      console.log(`${LOG} Adaptive Card sent OK via SDK im.sendMessageToJid`);
       return true;
     } catch (err) {
-      console.error(`${LOG} Adaptive Card SDK send failed:`, err.message);
+      console.error(`${LOG} Adaptive Card sdk.im.sendMessageToJid failed:`, err.message);
     }
   }
 
-  // Approach 2: S2S REST with raw conversation ID
-  if (convId && s2sConnectionId && authToken) {
-    const host = rainbowHost || "openrainbow.com";
-    const url = `https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`;
+  // Approach 2: SDK s2s.sendMessageInConversation with alternativeContent
+  if (conversation && sdk && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
     try {
-      console.log(`${LOG} Sending Adaptive Card via REST to ${convId}`);
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify(msg),
-      });
-      if (resp.ok) {
-        console.log(`${LOG} Adaptive Card sent OK via REST`);
-        return true;
-      }
-      const errText = await resp.text().catch(() => "");
-      console.error(`${LOG} Adaptive Card REST failed: ${resp.status} ${errText.substring(0, 300)}`);
+      console.log(`${LOG} Sending Adaptive Card via s2s.sendMessageInConversation (dbId=${conversation.dbId})`);
+      const msg = {
+        message: {
+          body: fallbackText,
+          lang: "en",
+          alternativeContent: [content],
+        },
+      };
+      await sdk.s2s.sendMessageInConversation(conversation.dbId, msg);
+      console.log(`${LOG} Adaptive Card sent OK via s2s`);
+      return true;
     } catch (err) {
-      console.error(`${LOG} Adaptive Card REST error:`, err.message);
+      console.error(`${LOG} Adaptive Card s2s failed:`, err.message);
     }
   }
 
@@ -4461,7 +4462,7 @@ async function start() {
             );
             const convId = rawConversationId || conversationId;
             let cardSent = false;
-            cardSent = await sendAdaptiveCard(convId, agentResponse.question, card, conversation);
+            cardSent = await sendAdaptiveCard(convId, agentResponse.question, card, conversation, fromJid);
             // Fallback: if card failed to send, send as plain text with numbered options
             if (!cardSent) {
               const lines = [agentResponse.question, ""];
