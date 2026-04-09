@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 require("dotenv").config();
 /**
- * OpenClaw Rainbow Bot — S2S mode with real Express server
+ * Juju AI Assistant — Rainbow S2S bot with real Express server
  *
  * Rainbow sends webhook callbacks to our Express server.
- * We forward user messages to OpenClaw AI and reply via S2S REST API.
+ * We forward user messages to Claude AI and reply via S2S REST API.
  */
 
 const express = require("express");
@@ -16,62 +16,62 @@ try { JSZip = require("jszip"); } catch (_) { JSZip = null; }
 let pdfParse;
 try { pdfParse = require("pdf-parse"); } catch (_) { pdfParse = null; }
 let pii;
-try { pii = require("./pii"); console.log("[OpenClawBot] PII module loaded OK"); } catch (e) { pii = null; console.warn("[OpenClawBot] PII module failed to load:", e.message); }
+try { pii = require("./pii"); console.log("[JujuBot] PII module loaded OK"); } catch (e) { pii = null; console.warn("[JujuBot] PII module failed to load:", e.message); }
 let m365Auth;
-try { m365Auth = require("./auth"); console.log("[OpenClawBot] M365 auth module loaded OK"); } catch (e) { m365Auth = null; console.warn("[OpenClawBot] M365 auth module failed to load:", e.message); }
+try { m365Auth = require("./auth"); console.log("[JujuBot] M365 auth module loaded OK"); } catch (e) { m365Auth = null; console.warn("[JujuBot] M365 auth module failed to load:", e.message); }
 let m365Graph;
-try { m365Graph = require("./graph"); console.log("[OpenClawBot] M365 graph module loaded OK"); } catch (e) { m365Graph = null; console.warn("[OpenClawBot] M365 graph module failed to load:", e.message); }
+try { m365Graph = require("./graph"); console.log("[JujuBot] M365 graph module loaded OK"); } catch (e) { m365Graph = null; console.warn("[JujuBot] M365 graph module failed to load:", e.message); }
 let gmailAuth;
-try { gmailAuth = require("./gmail-auth"); console.log("[OpenClawBot] Gmail auth module loaded OK"); } catch (e) { gmailAuth = null; console.warn("[OpenClawBot] Gmail auth module failed to load:", e.message); }
+try { gmailAuth = require("./gmail-auth"); console.log("[JujuBot] Gmail auth module loaded OK"); } catch (e) { gmailAuth = null; console.warn("[JujuBot] Gmail auth module failed to load:", e.message); }
 let gmailApi;
-try { gmailApi = require("./gmail-api"); console.log("[OpenClawBot] Gmail API module loaded OK"); } catch (e) { gmailApi = null; console.warn("[OpenClawBot] Gmail API module failed to load:", e.message); }
+try { gmailApi = require("./gmail-api"); console.log("[JujuBot] Gmail API module loaded OK"); } catch (e) { gmailApi = null; console.warn("[JujuBot] Gmail API module failed to load:", e.message); }
 let emailIntents;
-try { emailIntents = require("./email-intents"); console.log("[OpenClawBot] Email intents module loaded OK"); } catch (e) { emailIntents = null; console.warn("[OpenClawBot] Email intents module failed to load:", e.message); }
+try { emailIntents = require("./email-intents"); console.log("[JujuBot] Email intents module loaded OK"); } catch (e) { emailIntents = null; console.warn("[JujuBot] Email intents module failed to load:", e.message); }
 let calendarGraph;
-try { calendarGraph = require("./calendar-graph"); console.log("[OpenClawBot] Calendar Graph module loaded OK"); } catch (e) { calendarGraph = null; console.warn("[OpenClawBot] Calendar Graph module failed to load:", e.message); }
+try { calendarGraph = require("./calendar-graph"); console.log("[JujuBot] Calendar Graph module loaded OK"); } catch (e) { calendarGraph = null; console.warn("[JujuBot] Calendar Graph module failed to load:", e.message); }
 let calendarGoogle;
-try { calendarGoogle = require("./calendar-google"); console.log("[OpenClawBot] Calendar Google module loaded OK"); } catch (e) { calendarGoogle = null; console.warn("[OpenClawBot] Calendar Google module failed to load:", e.message); }
+try { calendarGoogle = require("./calendar-google"); console.log("[JujuBot] Calendar Google module loaded OK"); } catch (e) { calendarGoogle = null; console.warn("[JujuBot] Calendar Google module failed to load:", e.message); }
 let calendarIntents;
-try { calendarIntents = require("./calendar-intents"); console.log("[OpenClawBot] Calendar intents module loaded OK"); } catch (e) { calendarIntents = null; console.warn("[OpenClawBot] Calendar intents module failed to load:", e.message); }
+try { calendarIntents = require("./calendar-intents"); console.log("[JujuBot] Calendar intents module loaded OK"); } catch (e) { calendarIntents = null; console.warn("[JujuBot] Calendar intents module failed to load:", e.message); }
 let sfAuth;
-try { sfAuth = require("./salesforce-auth"); console.log("[OpenClawBot] Salesforce auth module loaded OK"); } catch (e) { sfAuth = null; console.warn("[OpenClawBot] Salesforce auth module failed to load:", e.message); }
+try { sfAuth = require("./salesforce-auth"); console.log("[JujuBot] Salesforce auth module loaded OK"); } catch (e) { sfAuth = null; console.warn("[JujuBot] Salesforce auth module failed to load:", e.message); }
 let sfApi;
-try { sfApi = require("./salesforce-api"); console.log("[OpenClawBot] Salesforce API module loaded OK"); } catch (e) { sfApi = null; console.warn("[OpenClawBot] Salesforce API module failed to load:", e.message); }
+try { sfApi = require("./salesforce-api"); console.log("[JujuBot] Salesforce API module loaded OK"); } catch (e) { sfApi = null; console.warn("[JujuBot] Salesforce API module failed to load:", e.message); }
 let sfIntents;
-try { sfIntents = require("./salesforce-intents"); console.log("[OpenClawBot] Salesforce intents module loaded OK"); } catch (e) { sfIntents = null; console.warn("[OpenClawBot] Salesforce intents module failed to load:", e.message); }
+try { sfIntents = require("./salesforce-intents"); console.log("[JujuBot] Salesforce intents module loaded OK"); } catch (e) { sfIntents = null; console.warn("[JujuBot] Salesforce intents module failed to load:", e.message); }
 let spApi;
-try { spApi = require("./sharepoint-api"); console.log("[OpenClawBot] SharePoint API module loaded OK"); } catch (e) { spApi = null; console.warn("[OpenClawBot] SharePoint API module failed to load:", e.message); }
+try { spApi = require("./sharepoint-api"); console.log("[JujuBot] SharePoint API module loaded OK"); } catch (e) { spApi = null; console.warn("[JujuBot] SharePoint API module failed to load:", e.message); }
 let spIntents;
-try { spIntents = require("./sharepoint-intents"); console.log("[OpenClawBot] SharePoint intents module loaded OK"); } catch (e) { spIntents = null; console.warn("[OpenClawBot] SharePoint intents module failed to load:", e.message); }
+try { spIntents = require("./sharepoint-intents"); console.log("[JujuBot] SharePoint intents module loaded OK"); } catch (e) { spIntents = null; console.warn("[JujuBot] SharePoint intents module failed to load:", e.message); }
 let briefing;
-try { briefing = require("./briefing"); console.log("[OpenClawBot] Briefing module loaded OK"); } catch (e) { briefing = null; console.warn("[OpenClawBot] Briefing module failed to load:", e.message); }
+try { briefing = require("./briefing"); console.log("[JujuBot] Briefing module loaded OK"); } catch (e) { briefing = null; console.warn("[JujuBot] Briefing module failed to load:", e.message); }
 let enterprise;
-try { enterprise = require("./enterprise"); console.log("[OpenClawBot] Enterprise module loaded OK"); } catch (e) { enterprise = null; console.warn("[OpenClawBot] Enterprise module failed to load:", e.message); }
+try { enterprise = require("./enterprise"); console.log("[JujuBot] Enterprise module loaded OK"); } catch (e) { enterprise = null; console.warn("[JujuBot] Enterprise module failed to load:", e.message); }
 let agent;
-try { agent = require("./agent"); console.log("[OpenClawBot] Agent module loaded OK"); } catch (e) { agent = null; console.warn("[OpenClawBot] Agent module failed to load:", e.message); }
+try { agent = require("./agent"); console.log("[JujuBot] Agent module loaded OK"); } catch (e) { agent = null; console.warn("[JujuBot] Agent module failed to load:", e.message); }
 let salesAgent;
-try { salesAgent = require("./sales-agent"); console.log("[OpenClawBot] Sales agent module loaded OK"); } catch (e) { salesAgent = null; console.warn("[OpenClawBot] Sales agent module failed to load:", e.message); }
+try { salesAgent = require("./sales-agent"); console.log("[JujuBot] Sales agent module loaded OK"); } catch (e) { salesAgent = null; console.warn("[JujuBot] Sales agent module failed to load:", e.message); }
 let salesDashboard;
-try { salesDashboard = require("./sales-dashboard"); console.log("[OpenClawBot] Sales dashboard module loaded OK"); } catch (e) { salesDashboard = null; console.warn("[OpenClawBot] Sales dashboard module failed to load:", e.message); }
+try { salesDashboard = require("./sales-dashboard"); console.log("[JujuBot] Sales dashboard module loaded OK"); } catch (e) { salesDashboard = null; console.warn("[JujuBot] Sales dashboard module failed to load:", e.message); }
 let salesScheduler;
-try { salesScheduler = require("./sales-scheduler"); console.log("[OpenClawBot] Sales scheduler module loaded OK"); } catch (e) { salesScheduler = null; console.warn("[OpenClawBot] Sales scheduler module failed to load:", e.message); }
+try { salesScheduler = require("./sales-scheduler"); console.log("[JujuBot] Sales scheduler module loaded OK"); } catch (e) { salesScheduler = null; console.warn("[JujuBot] Sales scheduler module failed to load:", e.message); }
 let emailScheduler;
-try { emailScheduler = require("./email-scheduler"); console.log("[OpenClawBot] Email scheduler module loaded OK"); } catch (e) { emailScheduler = null; console.warn("[OpenClawBot] Email scheduler module failed to load:", e.message); }
+try { emailScheduler = require("./email-scheduler"); console.log("[JujuBot] Email scheduler module loaded OK"); } catch (e) { emailScheduler = null; console.warn("[JujuBot] Email scheduler module failed to load:", e.message); }
 let emailIntelligence;
-try { emailIntelligence = require("./email-intelligence"); console.log("[OpenClawBot] Email intelligence module loaded OK"); } catch (e) { emailIntelligence = null; console.warn("[OpenClawBot] Email intelligence module failed to load:", e.message); }
+try { emailIntelligence = require("./email-intelligence"); console.log("[JujuBot] Email intelligence module loaded OK"); } catch (e) { emailIntelligence = null; console.warn("[JujuBot] Email intelligence module failed to load:", e.message); }
 let userDefaults;
-try { userDefaults = require("./user-defaults"); console.log("[OpenClawBot] User defaults module loaded OK"); } catch (e) { userDefaults = null; console.warn("[OpenClawBot] User defaults module failed to load:", e.message); }
+try { userDefaults = require("./user-defaults"); console.log("[JujuBot] User defaults module loaded OK"); } catch (e) { userDefaults = null; console.warn("[JujuBot] User defaults module failed to load:", e.message); }
 let contextManager;
-try { contextManager = require("./context-manager"); console.log("[OpenClawBot] Context manager loaded OK"); } catch (e) { contextManager = null; console.warn("[OpenClawBot] Context manager failed to load:", e.message); }
+try { contextManager = require("./context-manager"); console.log("[JujuBot] Context manager loaded OK"); } catch (e) { contextManager = null; console.warn("[JujuBot] Context manager failed to load:", e.message); }
 let tenant;
-try { tenant = require("./tenant"); console.log("[OpenClawBot] Tenant module loaded OK"); } catch (e) { tenant = null; console.warn("[OpenClawBot] Tenant module failed to load:", e.message); }
+try { tenant = require("./tenant"); console.log("[JujuBot] Tenant module loaded OK"); } catch (e) { tenant = null; console.warn("[JujuBot] Tenant module failed to load:", e.message); }
 let tenantResolver;
-try { tenantResolver = require("./tenant-resolver"); console.log("[OpenClawBot] Tenant resolver module loaded OK"); } catch (e) { tenantResolver = null; console.warn("[OpenClawBot] Tenant resolver module failed to load:", e.message); }
+try { tenantResolver = require("./tenant-resolver"); console.log("[JujuBot] Tenant resolver module loaded OK"); } catch (e) { tenantResolver = null; console.warn("[JujuBot] Tenant resolver module failed to load:", e.message); }
 let superAdmin;
-try { superAdmin = require("./super-admin"); console.log("[OpenClawBot] Super-admin module loaded OK"); } catch (e) { superAdmin = null; console.warn("[OpenClawBot] Super-admin module failed to load:", e.message); }
+try { superAdmin = require("./super-admin"); console.log("[JujuBot] Super-admin module loaded OK"); } catch (e) { superAdmin = null; console.warn("[JujuBot] Super-admin module failed to load:", e.message); }
 let emailWebhook;
-try { emailWebhook = require("./email-webhook"); console.log("[OpenClawBot] Email webhook module loaded OK"); } catch (e) { emailWebhook = null; console.warn("[OpenClawBot] Email webhook module failed to load:", e.message); }
-const LOG = "[OpenClawBot]";
+try { emailWebhook = require("./email-webhook"); console.log("[JujuBot] Email webhook module loaded OK"); } catch (e) { emailWebhook = null; console.warn("[JujuBot] Email webhook module failed to load:", e.message); }
+const LOG = "[JujuBot]";
 
 // ── Configuration ────────────────────────────────────────
 
@@ -3507,7 +3507,7 @@ async function start() {
   }
 
   console.log(`${LOG} ================================================`);
-  console.log(`${LOG} OpenClaw Rainbow Bot starting (S2S mode) [attempt ${restartCount}]...`);
+  console.log(`${LOG} Juju AI Bot starting (S2S mode) [attempt ${restartCount}]...`);
   console.log(`${LOG} Rainbow host    : ${config.host}`);
   console.log(`${LOG} Bot account     : ${config.login}`);
   console.log(`${LOG} Host callback   : ${config.hostCallback}`);
