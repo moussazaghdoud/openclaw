@@ -4455,8 +4455,10 @@ async function start() {
             }
           }
 
-          responseText = agentResponse;
-          console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
+          if (!responseText) {
+            responseText = agentResponse;
+          }
+          console.log(`${LOG} Agent returned: ${responseText ? (typeof responseText === "string" ? responseText.substring(0, 100) : JSON.stringify(responseText).substring(0, 100)) : "NULL"}`);
 
           // Write to unified context + sync agent memory
           if (contextManager && responseText) {
