@@ -326,7 +326,7 @@ function getTools() {
   // Present choices to user via Adaptive Card
   tools.push({
     name: "present_choices",
-    description: "Present a choice card to the user when you need them to pick from multiple options. Use when: multiple emails/meetings/deals match and you need disambiguation, or when the user's request is ambiguous and you have 2-5 clear interpretations. Do NOT use for yes/no questions (use plain text instead).",
+    description: "Present a choice card to the user when you need them to pick from options. Use when: (1) multiple emails/meetings/deals match and you need disambiguation, (2) the user's request is ambiguous and you can reformulate it as 2-5 clear interpretations, (3) you don't understand the request but can propose likely meanings, (4) a search returned too many results and you want the user to narrow down. Do NOT use for yes/no questions (use plain text). When you don't understand a request, reformulate it as choices instead of saying 'I don't understand'.",
     input_schema: {
       type: "object",
       properties: {
@@ -990,6 +990,15 @@ Examples:
 - "prepare me for my SNCF meeting and check the latest news" → 1) identify SNCF meeting, 2) gather meeting context from emails, 3) web search SNCF news, 4) combine into briefing
 - "show my pipeline and search the latest news on this customer" → 1) get pipeline data, 2) web search customer news, 3) present combined
 NEVER ignore part of a multi-action request. Execute all parts.
+
+CLARIFICATION STRATEGY:
+When you don't understand a request or it's ambiguous:
+- Do NOT reply "I don't understand" or "Could you clarify?"
+- Instead, use present_choices to reformulate the request as 2-5 likely interpretations
+- Example: user says "check the thing" → present choices: "What would you like me to check?" with options like "Your unread emails", "Today's calendar", "Pipeline status", "Recent CRM activity"
+- Example: user says "what about the project" → present choices based on recent context: "Show emails about [project]", "Show CRM account for [project]", "Search web for [project] news"
+- If the request is truly incomprehensible, ask a short clarifying question in plain text
+- Always prefer structured choices over open-ended clarification questions
 
 FOLLOW-UP CONTINUITY:
 Short follow-ups are continuations of the latest active task. Give strong priority to recent conversation context.
