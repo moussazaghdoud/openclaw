@@ -652,54 +652,41 @@ function buildCardMessage(text, card) {
 /**
  * Send an Adaptive Card via S2S REST.
  */
-async function sendAdaptiveCard(convId, text, card) {
-  if (!convId || !s2sConnectionId || !authToken) return false;
-  const host = rainbowHost || "openrainbow.com";
-  const url = `https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`;
+async function sendAdaptiveCard(convId, text, card, conversation) {
+  const msg = buildCardMessage(text, card);
 
-  // Try approach 1: alternativeContent with form/json
-  const msg1 = buildCardMessage(text, card);
-  try {
-    console.log(`${LOG} Sending Adaptive Card (approach 1: alternativeContent) to ${convId}`);
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(msg1),
-    });
-    if (resp.ok) {
-      console.log(`${LOG} Adaptive Card sent OK (approach 1)`);
+  // Approach 1: SDK s2s.sendMessageInConversation (same as regular replies)
+  if (conversation && sdk && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
+    try {
+      console.log(`${LOG} Sending Adaptive Card via SDK (dbId=${conversation.dbId})`);
+      await sdk.s2s.sendMessageInConversation(conversation.dbId, msg);
+      console.log(`${LOG} Adaptive Card sent OK via SDK`);
       return true;
+    } catch (err) {
+      console.error(`${LOG} Adaptive Card SDK send failed:`, err.message);
     }
-    const errText = await resp.text().catch(() => "");
-    console.error(`${LOG} Adaptive Card approach 1 failed: ${resp.status} ${errText.substring(0, 300)}`);
-  } catch (err) {
-    console.error(`${LOG} Adaptive Card approach 1 error:`, err.message);
   }
 
-  // Try approach 2: content field with type
-  try {
-    console.log(`${LOG} Sending Adaptive Card (approach 2: content field)`);
-    const msg2 = {
-      message: {
-        body: stripMarkdown(text),
-        lang: "en",
-        content: JSON.stringify(card),
-        type: "form/json",
-      },
-    };
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(msg2),
-    });
-    if (resp.ok) {
-      console.log(`${LOG} Adaptive Card sent OK (approach 2)`);
-      return true;
+  // Approach 2: S2S REST with raw conversation ID
+  if (convId && s2sConnectionId && authToken) {
+    const host = rainbowHost || "openrainbow.com";
+    const url = `https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`;
+    try {
+      console.log(`${LOG} Sending Adaptive Card via REST to ${convId}`);
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(msg),
+      });
+      if (resp.ok) {
+        console.log(`${LOG} Adaptive Card sent OK via REST`);
+        return true;
+      }
+      const errText = await resp.text().catch(() => "");
+      console.error(`${LOG} Adaptive Card REST failed: ${resp.status} ${errText.substring(0, 300)}`);
+    } catch (err) {
+      console.error(`${LOG} Adaptive Card REST error:`, err.message);
     }
-    const errText = await resp.text().catch(() => "");
-    console.error(`${LOG} Adaptive Card approach 2 failed: ${resp.status} ${errText.substring(0, 300)}`);
-  } catch (err) {
-    console.error(`${LOG} Adaptive Card approach 2 error:`, err.message);
   }
 
   return false;
@@ -4474,9 +4461,7 @@ async function start() {
             );
             const convId = rawConversationId || conversationId;
             let cardSent = false;
-            if (convId) {
-              cardSent = await sendAdaptiveCard(convId, agentResponse.question, card);
-            }
+            cardSent = await sendAdaptiveCard(convId, agentResponse.question, card, conversation);
             // Fallback: if card failed to send, send as plain text with numbered options
             if (!cardSent) {
               const lines = [agentResponse.question, ""];
