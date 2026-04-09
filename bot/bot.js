@@ -654,26 +654,18 @@ function buildCardMessage(text, card) {
  */
 async function sendAdaptiveCard(convId, text, card, conversation) {
   const fallbackText = stripMarkdown(text);
+  const cardContent = { type: "form/json", message: JSON.stringify(card) };
 
-  // S2S mode: send via s2s.sendMessageInConversation with contents field
-  // (matching the format from Rainbow SDK S2SService.js line 472)
-  if (conversation && sdk && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
+  // Use sdk.im.sendMessageToConversation — this correctly wraps content for S2S
+  // (ImsService.js line 394-408: puts content as "contents" field in the S2S message)
+  if (conversation && sdk && sdk.im && typeof sdk.im.sendMessageToConversation === "function") {
     try {
-      const msg = {
-        message: {
-          body: fallbackText,
-          lang: "en",
-          contents: {
-            type: "form/json",
-            message: JSON.stringify(card),
-          },
-        },
-      };
-      await sdk.s2s.sendMessageInConversation(conversation.dbId, msg);
-      console.log(`${LOG} Adaptive Card sent (dbId=${conversation.dbId})`);
+      console.log(`${LOG} Sending Adaptive Card via sdk.im.sendMessageToConversation`);
+      await sdk.im.sendMessageToConversation(conversation, fallbackText, "en", cardContent);
+      console.log(`${LOG} Adaptive Card sent OK`);
       return true;
     } catch (err) {
-      console.error(`${LOG} Adaptive Card send failed:`, err.message);
+      console.error(`${LOG} Adaptive Card failed:`, err.message);
     }
   }
 
