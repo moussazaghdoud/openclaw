@@ -559,6 +559,10 @@ function parseSuggestionResponse(message) {
     if (alt.type === "rainbow/json") {
       try {
         const data = JSON.parse(alt.content);
+        // Adaptive Card submit response
+        if (data?.questionId || data?.cardId) {
+          return data;
+        }
         if (data?.rainbow?.value?.response) {
           return data.rainbow.value.response;
         }
@@ -569,6 +573,103 @@ function parseSuggestionResponse(message) {
     }
   }
   return null;
+}
+
+/**
+ * Build an Adaptive Card with choices for the user.
+ * @param {string} title - Card title / question
+ * @param {Array} choices - [{title: "Option A", value: "a"}, ...]
+ * @param {string} cardId - Unique ID to track this card's response
+ * @param {string} [subtitle] - Optional subtitle/context
+ */
+function buildAdaptiveCard(title, choices, cardId, subtitle) {
+  const card = {
+    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+    type: "AdaptiveCard",
+    version: "1.5",
+    body: [
+      {
+        type: "TextBlock",
+        size: "medium",
+        weight: "bolder",
+        text: title,
+        wrap: true,
+        style: "heading",
+      },
+    ],
+  };
+
+  if (subtitle) {
+    card.body.push({
+      type: "TextBlock",
+      size: "small",
+      text: subtitle,
+      wrap: true,
+      color: "dark",
+    });
+  }
+
+  card.body.push({
+    type: "Input.ChoiceSet",
+    id: "selection",
+    label: "",
+    value: "",
+    style: "expanded",
+    isRequired: true,
+    errorMessage: "Please select an option",
+    choices: choices.map(c => ({ title: c.title, value: c.value || c.title })),
+  });
+
+  card.actions = [{
+    type: "Action.Submit",
+    title: "Submit",
+    data: {
+      rainbow: { type: "messageBack", value: {}, text: "" },
+      cardId,
+    },
+  }];
+
+  return card;
+}
+
+/**
+ * Build a Rainbow message containing an Adaptive Card.
+ */
+function buildCardMessage(text, card) {
+  const cleanBody = stripMarkdown(text);
+  return {
+    message: {
+      body: cleanBody,
+      lang: "en",
+      alternativeContent: [{
+        type: "form/json",
+        content: JSON.stringify(card),
+      }],
+    },
+  };
+}
+
+/**
+ * Send an Adaptive Card via S2S REST.
+ */
+async function sendAdaptiveCard(convId, text, card) {
+  if (!convId || !s2sConnectionId || !authToken) return false;
+  const host = rainbowHost || "openrainbow.com";
+  const msg = buildCardMessage(text, card);
+  try {
+    const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(msg),
+    });
+    if (!resp.ok) {
+      console.error(`${LOG} Adaptive Card send failed: ${resp.status}`);
+    }
+    return resp.ok;
+  } catch (err) {
+    console.error(`${LOG} Adaptive Card send error:`, err.message);
+    return false;
+  }
 }
 
 /**
@@ -4325,10 +4426,28 @@ async function start() {
             patienceTimers.push(setTimeout(() => sendPatienceMsg("Almost there, just a moment..."), 14000));
           }
 
-          responseText = await agent.run(fromJid, content, history, sendProgress);
+          const agentResponse = await agent.run(fromJid, content, history, sendProgress);
 
           // Clear any pending patience messages
           for (const t of patienceTimers) clearTimeout(t);
+
+          // Handle Adaptive Card response from agent
+          if (agentResponse && typeof agentResponse === "object" && agentResponse._adaptive_card) {
+            const card = buildAdaptiveCard(
+              agentResponse.question,
+              agentResponse.choices,
+              agentResponse.cardId,
+              agentResponse.context
+            );
+            const convId = rawConversationId || conversationId;
+            if (convId) {
+              await sendAdaptiveCard(convId, agentResponse.question, card);
+            }
+            if (typingInterval) clearInterval(typingInterval);
+            return; // Card sent, wait for user response
+          }
+
+          responseText = agentResponse;
           console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
 
           // Write to unified context + sync agent memory
