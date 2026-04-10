@@ -420,7 +420,8 @@ async function executeTool(toolName, input, userId, memory) {
         if (!ep) return { error: "No email account connected." };
         const email = await ep.api.getEmailById(ep.token, input.email_id);
         if (!email || email._error) return { error: "Failed to read email." };
-        // Mark as read DISABLED — read-only mode (Stage 1)
+        // Mark as read
+        ep.api.markAsRead(ep.token, input.email_id).catch(() => {});
         // Track interaction for priority learning
         if (emailIntelligenceModule) {
           emailIntelligenceModule.recordInteraction(userId, "read", {
@@ -662,8 +663,11 @@ async function executeTool(toolName, input, userId, memory) {
             const success = await scheduler.addClassificationRule(userId, rule);
             if (!success) return { error: "Failed to save rule." };
 
-            // Retroactive folder/move DISABLED — read-only mode (Stage 1)
+            // Create folder and move existing matching emails
             let retroResult = { moved: 0 };
+            if (scheduler.applyRuleRetroactively) {
+              retroResult = await scheduler.applyRuleRetroactively(userId, rule);
+            }
 
             return {
               success: true,
