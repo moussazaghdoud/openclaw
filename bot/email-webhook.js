@@ -198,10 +198,9 @@ async function processNotification(notification) {
             if (rule.match_type === "subject") return subjectStr.includes(v);
             return senderStr.includes(v) || subjectStr.includes(v);
           });
-          if (matched && graphModule.resolveOrCreateFolder && graphModule.moveToFolder) {
-            const folderId = await graphModule.resolveOrCreateFolder(tokenResult.token, rule.category);
-            if (folderId) {
-              await graphModule.moveToFolder(tokenResult.token, emailId, folderId);
+          if (matched && graphModule.moveToFolder) {
+            const moved = await graphModule.moveToFolder(tokenResult.token, emailId, rule.category);
+            if (moved) {
               console.log(`${LOG} Auto-moved email ${emailId} to folder "${rule.category}" for user ${userId}`);
             }
             break;
