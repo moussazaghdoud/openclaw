@@ -4259,18 +4259,6 @@ async function start() {
       if (!intent) intent = { type: "chat" };
       console.log(`${LOG} Intent: ${intent.type} for ${fromName}`);
 
-      // Send short confirmation before starting the task
-      const confirmation = describeIntent(intent);
-      if (confirmation) {
-        try {
-          if (isBubble && targetBubble) {
-            sendMessageToBubble(targetBubble, confirmation).catch(() => {});
-          } else if (conversation) {
-            sdk.im.sendMessageToConversation(conversation, confirmation).catch(() => {});
-          }
-        } catch {}
-      }
-
       let responseText = null;
 
       // ── FAST PATH DETECTION — skip history for simple direct queries ──
@@ -4329,16 +4317,18 @@ async function start() {
             }
           };
 
-          // Send first message immediately (await to ensure it arrives before agent starts)
-          await sendPatienceMsg("Let me check...");
+          // Only send patience message for complex queries (not simple direct lookups)
+          if (!isSimpleQuery) {
+            await sendPatienceMsg("Let me check...");
+          }
 
-          // Schedule follow-up patience messages
-          if (progressConvId && s2sConnectionId && authToken) {
+          // Schedule follow-up patience messages (only for complex queries)
+          if (!isSimpleQuery && progressConvId && s2sConnectionId && authToken) {
             patienceTimers.push(setTimeout(() => sendPatienceMsg("Working on it..."), 6000));
             patienceTimers.push(setTimeout(() => sendPatienceMsg("Almost there, just a moment..."), 14000));
           }
 
-          responseText = await agent.run(fromJid, content, history, sendProgress);
+          responseText = await agent.run(fromJid, content, history, isSimpleQuery ? null : sendProgress);
 
           // Clear any pending patience messages
           for (const t of patienceTimers) clearTimeout(t);
