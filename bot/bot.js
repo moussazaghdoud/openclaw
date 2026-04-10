@@ -2929,6 +2929,83 @@ app.get("/api/agent-debug", (req, res) => {
   });
 });
 
+// Adaptive Card test endpoint — bypasses all bot logic
+app.get("/api/card-test", async (req, res) => {
+  const convId = req.query.conv;
+  if (!convId) return res.json({ error: "Missing conv parameter. Use conversation dbId from logs." });
+
+  const card = {
+    type: "AdaptiveCard",
+    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+    version: "1.5",
+    body: [
+      { type: "Container", items: [{ type: "TextBlock", text: "Test card from Juju", wrap: true, weight: "bolder" }] },
+      {
+        type: "ActionSet",
+        actions: [
+          { type: "Action.Submit", title: "Option A", data: { rainbow: { type: "messageBack", value: { response: "option_a" }, text: "Option A" } } },
+          { type: "Action.Submit", title: "Option B", data: { rainbow: { type: "messageBack", value: { response: "option_b" }, text: "Option B" } } },
+        ],
+      },
+    ],
+  };
+
+  const payload = {
+    message: {
+      subject: "Test card",
+      body: "Test card: Option A / Option B",
+      contents: [
+        { type: "text/markdown", data: "Test card: **Option A** / **Option B**" },
+        { type: "form/json", data: JSON.stringify(card) },
+      ],
+      lang: "en",
+    },
+  };
+
+  const results = {};
+
+  // Method 1: SDK s2s.sendMessageInConversation (passes raw JSON)
+  try {
+    console.log(`${LOG} [card-test] Method 1: s2s.sendMessageInConversation(${convId})`);
+    console.log(`${LOG} [card-test] Payload: ${JSON.stringify(payload).substring(0, 500)}`);
+    await sdk.s2s.sendMessageInConversation(convId, payload);
+    results.method1 = "OK";
+  } catch (e) { results.method1 = `FAIL: ${e.message || e}`; }
+
+  // Method 2: SDK internal REST
+  try {
+    const cnxId = sdk._core._rest.connectionS2SInfo?.id;
+    const url = `/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${convId}/messages`;
+    console.log(`${LOG} [card-test] Method 2: SDK REST POST ${url}`);
+    await sdk._core._rest.http.post(url, sdk._core._rest.getRequestHeader(), payload, undefined);
+    results.method2 = "OK";
+  } catch (e) { results.method2 = `FAIL: ${e.message || e}`; }
+
+  // Method 3: Direct fetch with our auth
+  try {
+    const host = rainbowHost || "openrainbow.com";
+    const url = `https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`;
+    console.log(`${LOG} [card-test] Method 3: Direct fetch POST ${url}`);
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await resp.text();
+    results.method3 = resp.ok ? "OK" : `FAIL: ${resp.status} ${body.substring(0, 200)}`;
+  } catch (e) { results.method3 = `FAIL: ${e.message}`; }
+
+  // Method 4: SDK REST with serverURL (full URL)
+  try {
+    const cnxId = sdk._core._rest.connectionS2SInfo?.id;
+    const serverURL = sdk._core._rest.http?.serverURL || "unknown";
+    console.log(`${LOG} [card-test] Method 4: SDK serverURL=${serverURL}, cnxId=${cnxId}`);
+    results.method4_info = { serverURL, cnxId, s2sConnectionId, authTokenLen: authToken?.length };
+  } catch (e) { results.method4_info = `FAIL: ${e.message}`; }
+
+  res.json({ convId, results, payloadPreview: JSON.stringify(payload).substring(0, 500) });
+});
+
 // Sales alert test endpoint
 app.get("/api/sales-alert-test", async (req, res) => {
   const uid = req.query.uid;
