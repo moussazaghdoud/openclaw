@@ -609,9 +609,7 @@ function buildChoiceCard(question, choices, cardId) {
  * Send an Adaptive Card via S2S REST API.
  * Uses contents[] array with form/json type and data field per Rainbow S2S docs.
  */
-async function sendAdaptiveCard(convId, text, card) {
-  if (!s2sConnectionId || !authToken) return false;
-  const host = rainbowHost || "openrainbow.com";
+async function sendAdaptiveCard(convId, text, card, conversation) {
   const fallback = stripMarkdown(text);
   const payload = {
     message: {
@@ -625,22 +623,27 @@ async function sendAdaptiveCard(convId, text, card) {
     },
   };
 
-  try {
-    console.log(`${LOG} Sending Adaptive Card via S2S REST (convId=${convId})`);
-    const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (resp.ok) {
-      console.log(`${LOG} Adaptive Card sent OK`);
-      return true;
+  // Use SDK internal REST helper (same transport as regular messages)
+  if (conversation && sdk && sdk._core && sdk._core._rest) {
+    try {
+      const cnxId = sdk._core._rest.connectionS2SInfo?.id;
+      const dbId = conversation.dbId;
+      if (cnxId && dbId) {
+        console.log(`${LOG} Sending Adaptive Card via SDK REST (cnxId=${cnxId}, dbId=${dbId})`);
+        await sdk._core._rest.http.post(
+          `/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${dbId}/messages`,
+          sdk._core._rest.getRequestHeader(),
+          payload,
+          undefined
+        );
+        console.log(`${LOG} Adaptive Card sent OK`);
+        return true;
+      }
+    } catch (err) {
+      console.error(`${LOG} Adaptive Card SDK REST failed:`, err.message || err);
     }
-    const errText = await resp.text().catch(() => "");
-    console.error(`${LOG} Adaptive Card failed: ${resp.status} ${errText.substring(0, 300)}`);
-  } catch (err) {
-    console.error(`${LOG} Adaptive Card error:`, err.message);
   }
+
   return false;
 }
 
@@ -4409,7 +4412,7 @@ async function start() {
           if (agentResult && typeof agentResult === "object" && agentResult._adaptive_card) {
             const card = buildChoiceCard(agentResult.question, agentResult.choices, `card_${Date.now()}`);
             const convId = rawConversationId || conversationId;
-            const cardSent = convId ? await sendAdaptiveCard(convId, agentResult.question, card) : false;
+            const cardSent = await sendAdaptiveCard(convId, agentResult.question, card, conversation);
             if (cardSent) {
               if (typingInterval) clearInterval(typingInterval);
               return;
