@@ -323,6 +323,30 @@ function getTools() {
     },
   });
 
+  // Present choices to user as interactive buttons
+  tools.push({
+    name: "present_choices",
+    description: "Present clickable choice buttons to the user. Use when: ambiguous request with 2-6 clear interpretations, multiple matches needing disambiguation, or you don't understand and can propose likely meanings. Do NOT use for yes/no.",
+    input_schema: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "The question to ask" },
+        choices: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string", description: "Button label" },
+              value: { type: "string", description: "Value sent back when clicked" },
+            },
+            required: ["title", "value"],
+          },
+        },
+      },
+      required: ["question", "choices"],
+    },
+  });
+
   // ── Sales Pipeline Tools (from sales-agent module) ────
   if (salesAgentModule && salesAgentModule.isAvailable()) {
     const salesTools = salesAgentModule.getToolDefinitions();
@@ -828,6 +852,15 @@ async function executeTool(toolName, input, userId, memory) {
         return { success: true, message: `Stored: "${input.entity_name}" = ${input.resolved_value}` };
       }
 
+      // ── Present Choices (Adaptive Card buttons) ──────
+      case "present_choices": {
+        return {
+          _adaptive_card: true,
+          question: input.question,
+          choices: input.choices,
+        };
+      }
+
       // ── Sales Pipeline Tools ──────────────────────────
       case "analyze_pipeline":
       case "get_deal_risks":
@@ -1172,6 +1205,15 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
           if (result.events && result.events.length > 0) {
             memory.lastEvents = result.events.slice(0, 5);
           }
+        }
+
+        // Adaptive Card: return immediately for the bot to send
+        if (result && result._adaptive_card) {
+          await saveWorkingMemory(userId, memory);
+          trace.finalResponse = `[Card: ${result.question}]`;
+          trace.loops = loop + 1;
+          trace.duration = Date.now() - startTime;
+          return result;
         }
 
         toolResults.push({

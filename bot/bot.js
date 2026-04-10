@@ -573,6 +573,78 @@ function parseSuggestionResponse(message) {
 
 
 /**
+ * Build an Adaptive Card with choice buttons for disambiguation.
+ * Uses Pattern C from Rainbow S2S docs: Text + Action.Submit buttons with messageBack.
+ */
+function buildChoiceCard(question, choices, cardId) {
+  const card = {
+    type: "AdaptiveCard",
+    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+    version: "1.5",
+    body: [
+      {
+        type: "Container",
+        items: [{ type: "TextBlock", text: question, wrap: true, weight: "bolder" }],
+      },
+      {
+        type: "ActionSet",
+        actions: choices.map(c => ({
+          type: "Action.Submit",
+          title: c.title,
+          data: {
+            rainbow: {
+              type: "messageBack",
+              value: { response: c.value || c.title },
+              text: c.title,
+            },
+          },
+        })),
+      },
+    ],
+  };
+  return card;
+}
+
+/**
+ * Send an Adaptive Card via S2S REST API.
+ * Uses contents[] array with form/json type and data field per Rainbow S2S docs.
+ */
+async function sendAdaptiveCard(convId, text, card) {
+  if (!s2sConnectionId || !authToken) return false;
+  const host = rainbowHost || "openrainbow.com";
+  const fallback = stripMarkdown(text);
+  const payload = {
+    message: {
+      subject: fallback.substring(0, 20),
+      body: fallback,
+      contents: [
+        { type: "text/markdown", data: fallback },
+        { type: "form/json", data: JSON.stringify(card) },
+      ],
+      lang: "en",
+    },
+  };
+
+  try {
+    console.log(`${LOG} Sending Adaptive Card via S2S REST (convId=${convId})`);
+    const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (resp.ok) {
+      console.log(`${LOG} Adaptive Card sent OK`);
+      return true;
+    }
+    const errText = await resp.text().catch(() => "");
+    console.error(`${LOG} Adaptive Card failed: ${resp.status} ${errText.substring(0, 300)}`);
+  } catch (err) {
+    console.error(`${LOG} Adaptive Card error:`, err.message);
+  }
+  return false;
+}
+
+/**
  * Send a message with quick reply suggestions via S2S REST.
  */
 async function sendWithSuggestions(convId, text, suggestions) {
@@ -4328,11 +4400,28 @@ async function start() {
             patienceTimers.push(setTimeout(() => sendPatienceMsg("Almost there, just a moment..."), 14000));
           }
 
-          responseText = await agent.run(fromJid, content, history, isSimpleQuery ? null : sendProgress);
+          const agentResult = await agent.run(fromJid, content, history, isSimpleQuery ? null : sendProgress);
 
           // Clear any pending patience messages
           for (const t of patienceTimers) clearTimeout(t);
-          console.log(`${LOG} Agent returned: ${responseText ? responseText.substring(0, 100) : "NULL"}`);
+
+          // Handle Adaptive Card response
+          if (agentResult && typeof agentResult === "object" && agentResult._adaptive_card) {
+            const card = buildChoiceCard(agentResult.question, agentResult.choices, `card_${Date.now()}`);
+            const convId = rawConversationId || conversationId;
+            const cardSent = convId ? await sendAdaptiveCard(convId, agentResult.question, card) : false;
+            if (cardSent) {
+              if (typingInterval) clearInterval(typingInterval);
+              return;
+            }
+            // Fallback: plain text numbered list
+            const lines = [agentResult.question, ""];
+            agentResult.choices.forEach((c, i) => lines.push(`${i + 1}. ${c.title}`));
+            responseText = lines.join("\n");
+          } else {
+            responseText = agentResult;
+          }
+          console.log(`${LOG} Agent returned: ${responseText ? (typeof responseText === "string" ? responseText.substring(0, 100) : "card") : "NULL"}`);
 
           // Write to unified context + sync agent memory
           if (contextManager && responseText) {
