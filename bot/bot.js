@@ -4268,6 +4268,11 @@ async function start() {
 
       let responseText = null;
 
+      // ── FAST PATH DETECTION — skip history for simple direct queries ──
+      const lowerContent = (content || "").toLowerCase().trim();
+      const isSimpleQuery = /^(?:show|what(?:'s| is| are)|list|get|check|any)\s+(?:my\s+)?(?:meetings?|calendar|events?|schedule|agenda|unread|emails?|inbox|pipeline|deals?|opportunities)/i.test(lowerContent);
+      const isFollowUp = /^(?:and\s+|also\s+|same\s+|do\s+both|what about|him|her|that|this|the\s+\w+\s+one)/i.test(lowerContent);
+
       // Force agent for email/calendar when available — bypass detectIntent result
       // Route through the AI agent by default — let the agent decide which tools to use.
       // Only skip the agent for document processing (translate/anonymize/create_file)
@@ -4288,9 +4293,11 @@ async function start() {
       console.log(`${LOG} useAgent=${useAgent}, content="${(content||"").substring(0,50)}", agentLoaded=${!!agent}, agentAvail=${agent?agent.isAvailable():false}`);
 
       if (useAgent) {
-        console.log(`${LOG} >>> AGENT FORCED for: "${content.substring(0, 80)}"`);
+        const mode = isSimpleQuery && !isFollowUp ? "fast" : "full";
+        console.log(`${LOG} >>> AGENT (${mode}): "${content.substring(0, 80)}"`);
         try {
-          const history = await getHistory(historyKey);
+          // Fast mode: skip history for simple direct queries (saves ~100ms + smaller payload)
+          const history = isSimpleQuery && !isFollowUp ? [] : await getHistory(historyKey);
           // Progress callback: send status updates to user while agent works
           const sendProgress = async (msg) => {
             const convId = rawConversationId || conversationId;
