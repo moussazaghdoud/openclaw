@@ -183,6 +183,36 @@ async function processNotification(notification) {
     return;
   }
 
+  // Auto-move: check classification rules and move email to folder if matched
+  try {
+    const emailScheduler = require("./email-scheduler");
+    if (emailScheduler && emailScheduler.getClassificationRules) {
+      const classRules = await emailScheduler.getClassificationRules(userId);
+      if (classRules.length > 0) {
+        const senderStr = ((email.from || "") + " " + senderEmail).toLowerCase();
+        const subjectStr = (email.subject || "").toLowerCase();
+        for (const rule of classRules) {
+          const values = (rule.match_values || []).map(v => v.toLowerCase());
+          const matched = values.some(v => {
+            if (rule.match_type === "sender") return senderStr.includes(v);
+            if (rule.match_type === "subject") return subjectStr.includes(v);
+            return senderStr.includes(v) || subjectStr.includes(v);
+          });
+          if (matched && graphModule.resolveOrCreateFolder && graphModule.moveToFolder) {
+            const folderId = await graphModule.resolveOrCreateFolder(tokenResult.token, rule.category);
+            if (folderId) {
+              await graphModule.moveToFolder(tokenResult.token, emailId, folderId);
+              console.log(`${LOG} Auto-moved email ${emailId} to folder "${rule.category}" for user ${userId}`);
+            }
+            break;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`${LOG} Auto-move check failed:`, err.message);
+  }
+
   // Build the notification message
   const sender = email.from || "Unknown";
   const subject = email.subject || "(no subject)";
