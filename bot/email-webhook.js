@@ -11,7 +11,7 @@ const crypto = require("crypto");
 const LOG = "[EmailWebhook]";
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
-const SUBSCRIPTION_RESOURCE = "me/messages";
+const SUBSCRIPTION_RESOURCE = "me/mailFolders('Inbox')/messages";
 const CHANGE_TYPE = "created";
 // Graph max for mail resources is 4230 minutes (~2.94 days)
 const MAX_EXPIRY_MINUTES = 4230;
