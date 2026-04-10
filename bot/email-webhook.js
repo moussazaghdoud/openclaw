@@ -138,6 +138,17 @@ async function processNotification(notification) {
 
   console.log(`${LOG} New email for user ${userId}: ${emailId}`);
 
+  // Deduplicate: skip if we already notified about this email (e.g. moved between folders)
+  if (redisClient) {
+    const dedupeKey = `email_notified:${userId}:${emailId}`;
+    const alreadySeen = await redisClient.get(dedupeKey).catch(() => null);
+    if (alreadySeen) {
+      console.log(`${LOG} Skipping duplicate notification for email ${emailId} (already notified)`);
+      return;
+    }
+    await redisClient.set(dedupeKey, "1", { EX: 86400 }).catch(() => {}); // 24h TTL
+  }
+
   // Fetch the email details via Graph API (retry once after 2s if token not ready)
   let tokenResult = await m365AuthModule.getValidToken(userId);
   if (!tokenResult) {
@@ -153,6 +164,15 @@ async function processNotification(notification) {
   if (!email || email._error) {
     console.warn(`${LOG} Failed to fetch email ${emailId} for user ${userId}`);
     return;
+  }
+
+  // Skip old emails being moved between folders (not genuinely new)
+  if (email.receivedAt) {
+    const emailAge = Date.now() - new Date(email.receivedAt).getTime();
+    if (emailAge > 5 * 60 * 1000) { // older than 5 minutes
+      console.log(`${LOG} Skipping old email (${Math.round(emailAge / 60000)}min old) — likely a folder move`);
+      return;
+    }
   }
 
   // Skip emails sent by the account owner (no need to notify about own emails)
