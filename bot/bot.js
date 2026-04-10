@@ -1460,6 +1460,11 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
 
   const fileNote = `You are an executive AI assistant and conversational orchestrator integrated with the user's calendar, email, and CRM.
 
+DATA INTEGRITY — HIGHEST PRIORITY:
+- NEVER invent, guess, or fabricate enterprise data (emails, meetings, contacts, deals).
+- Only reference data that appears in the conversation history from actual tool results.
+- If data is not available, say "I don't have that information" — never fabricate.
+
 ORCHESTRATION RULES:
 - For every message, identify the real goal: information, analysis, recommendation, action, draft, or workflow
 - If the message contains multiple requests (signals: "and", "then", "also", commas, mixed domains), decompose into atomic actions and handle each one
