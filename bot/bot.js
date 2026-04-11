@@ -73,6 +73,8 @@ let emailWebhook;
 try { emailWebhook = require("./email-webhook"); console.log("[JujuBot] Email webhook module loaded OK"); } catch (e) { emailWebhook = null; console.warn("[JujuBot] Email webhook module failed to load:", e.message); }
 let automation;
 try { automation = require("./automation"); console.log("[JujuBot] Automation engine loaded OK"); } catch (e) { automation = null; console.warn("[JujuBot] Automation engine failed to load:", e.message); }
+let cardsModule;
+try { cardsModule = require("./cards"); console.log("[JujuBot] Cards module loaded OK"); } catch (e) { cardsModule = null; console.warn("[JujuBot] Cards module failed to load:", e.message); }
 const LOG = "[JujuBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -287,6 +289,19 @@ async function initRedis() {
             await sdk.s2s.sendMessageInConversation(conv.dbId, { message: { body: text, lang: "en" } });
           } catch (e) {
             console.warn(`${LOG} Automation send failed:`, e.message);
+          }
+        },
+        sendCard: async (userJid, fallbackText, card) => {
+          try {
+            const contact = await sdk.contacts.getContactByJid(userJid);
+            const conv = await sdk.conversations.openConversationForContact(contact);
+            const sent = await sendAdaptiveCard(conv.dbId, fallbackText, card, conv);
+            if (!sent) {
+              // Fallback to plain text if card fails
+              await sdk.s2s.sendMessageInConversation(conv.dbId, { message: { body: fallbackText, lang: "en" } });
+            }
+          } catch (e) {
+            console.warn(`${LOG} Automation card send failed:`, e.message);
           }
         },
       });
@@ -4558,11 +4573,13 @@ async function start() {
           // Clear any pending patience messages
           for (const t of patienceTimers) clearTimeout(t);
 
-          // Handle Adaptive Card response
+          // Handle Adaptive Card response (agent's present_choices tool)
           if (agentResult && typeof agentResult === "object" && agentResult._adaptive_card) {
-            const card = buildChoiceCard(agentResult.question, agentResult.choices, `card_${Date.now()}`);
+            const choiceCard = cardsModule
+              ? cardsModule.choices(agentResult.question, agentResult.choices)
+              : { card: buildChoiceCard(agentResult.question, agentResult.choices, `card_${Date.now()}`), fallback: agentResult.question };
             const convId = rawConversationId || conversationId;
-            const cardSent = await sendAdaptiveCard(convId, agentResult.question, card, conversation);
+            const cardSent = await sendAdaptiveCard(convId, choiceCard.fallback, choiceCard.card, conversation);
             if (cardSent) {
               if (typingInterval) clearInterval(typingInterval);
               return;

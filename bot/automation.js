@@ -14,6 +14,7 @@
  */
 
 const LOG = "[Automation]";
+const cards = require("./cards");
 const POLL_INTERVAL_MS = 30 * 1000; // 30 seconds
 const REDIS_KEY_USERS = "automation:users";
 const REDIS_KEY_RULES = (userId) => `automation:rules:${userId}`;
@@ -21,6 +22,7 @@ const REDIS_KEY_LOCK = (userId, ruleId, dateKey) => `automation:lock:${userId}:$
 
 let redis = null;
 let sendMessageFn = null;
+let sendCardFn = null;
 let calendarApi = null;
 let calendarAuth = null;
 let emailSendFn = null;
@@ -32,6 +34,7 @@ let pollTimer = null;
 function init(deps) {
   redis = deps.redis;
   sendMessageFn = deps.sendMessage;
+  sendCardFn = deps.sendCard || null;
   calendarApi = deps.calendarApi || null;
   calendarAuth = deps.calendarAuth || null;
   emailSendFn = deps.emailSend || null;
@@ -260,52 +263,42 @@ async function checkMeetingAlert(userId, rule, now) {
         await redis.set(lockKey, "1", { EX: 24 * 3600 }); // 24h TTL
       } catch {}
 
-      // Build alert message
+      // Build alert — fetch body if needed
       const minutesLeft = Math.round(diff / 60000);
-      let msg = `⏰ **Meeting in ${minutesLeft} minute${minutesLeft !== 1 ? "s" : ""}**\n\n`;
-      msg += `📋 **${event.subject || "(no subject)"}**\n`;
-      msg += `🕐 ${formatTime(startTime)} - ${formatTime(new Date(event.end))}\n`;
-
-      if (event.location) {
-        msg += `📍 ${event.location}\n`;
-      }
-      if (event.isOnlineMeeting && event.onlineMeetingUrl) {
-        msg += `🔗 [Join online](${event.onlineMeetingUrl})\n`;
-      }
-
-      // Attendees
-      if (rule.include_attendees && event.attendees && event.attendees.length > 0) {
-        const names = event.attendees.map(a => a.name || a.email || a).filter(Boolean);
-        if (names.length > 0) {
-          msg += `\n👥 **Participants** (${names.length}):\n`;
-          names.slice(0, 20).forEach(n => { msg += `  • ${n}\n`; });
-          if (names.length > 20) msg += `  ... and ${names.length - 20} more\n`;
-        }
-      }
-
-      // Body/agenda — use body from event list, or fetch full details as fallback
-      if (rule.include_body || rule.include_summary) {
-        let bodyText = event.body || "";
-        if (!bodyText) {
-          try {
-            const fullEvent = await calendarApi.getEventById(token, event.id);
-            if (fullEvent && fullEvent.body) bodyText = fullEvent.body;
-          } catch {}
-        }
-        if (bodyText && bodyText.trim()) {
-          msg += `\n📝 **Agenda/Notes:**\n${bodyText.substring(0, 1000)}\n`;
-        }
-      }
-
-      // Organizer
-      if (event.organizer) {
-        msg += `\n👤 Organized by: ${event.organizer}`;
-      }
-
-      // Send the alert
-      if (sendMessageFn) {
+      let bodyText = event.body || "";
+      if (!bodyText && (rule.include_body || rule.include_summary)) {
         try {
-          await sendMessageFn(userId, msg);
+          const fullEvent = await calendarApi.getEventById(token, event.id);
+          if (fullEvent && fullEvent.body) bodyText = fullEvent.body;
+        } catch {}
+      }
+
+      // Build Adaptive Card for meeting alert
+      const alertCard = cards.meetingAlert({
+        subject: event.subject,
+        startTime: formatTime(startTime),
+        endTime: formatTime(new Date(event.end)),
+        location: event.location,
+        organizer: event.organizer,
+        attendees: rule.include_attendees ? (event.attendees || []) : [],
+        body: bodyText,
+        onlineMeetingUrl: event.isOnlineMeeting ? event.onlineMeetingUrl : null,
+        minutesLeft,
+      });
+
+      // Send as Adaptive Card (with fallback text)
+      if (sendCardFn) {
+        try {
+          await sendCardFn(userId, alertCard.fallback, alertCard.card);
+          console.log(`${LOG} Meeting alert card sent to ${userId}: "${event.subject}" in ${minutesLeft}min`);
+        } catch (e) {
+          console.warn(`${LOG} Card send failed, falling back to text:`, e.message);
+          // Fallback to plain text
+          if (sendMessageFn) await sendMessageFn(userId, alertCard.fallback).catch(() => {});
+        }
+      } else if (sendMessageFn) {
+        try {
+          await sendMessageFn(userId, alertCard.fallback);
           console.log(`${LOG} Meeting alert sent to ${userId}: "${event.subject}" in ${minutesLeft}min`);
         } catch (e) {
           console.warn(`${LOG} Failed to send meeting alert:`, e.message);
@@ -336,10 +329,17 @@ async function checkReminder(userId, rule, now) {
       await redis.set(lockKey, "1", { EX: 24 * 3600 });
     } catch {}
 
-    const msg = `🔔 **Reminder**\n\n${rule.message || rule.description}`;
-    if (sendMessageFn) {
+    const reminderCard = cards.reminder(rule.message || rule.description, rule.id);
+    if (sendCardFn) {
       try {
-        await sendMessageFn(userId, msg);
+        await sendCardFn(userId, reminderCard.fallback, reminderCard.card);
+        console.log(`${LOG} Reminder card sent to ${userId}: "${rule.message || rule.description}"`);
+      } catch (e) {
+        if (sendMessageFn) await sendMessageFn(userId, reminderCard.fallback).catch(() => {});
+      }
+    } else if (sendMessageFn) {
+      try {
+        await sendMessageFn(userId, reminderCard.fallback);
         console.log(`${LOG} Reminder sent to ${userId}: "${rule.message || rule.description}"`);
       } catch (e) {
         console.warn(`${LOG} Failed to send reminder:`, e.message);
@@ -386,10 +386,17 @@ async function checkRecurringReminder(userId, rule, now) {
     await redis.set(lockKey, "1", { EX: 24 * 3600 });
   } catch {}
 
-  const msg = `🔔 **Reminder** (${rec.interval || "weekly"})\n\n${rule.message || rule.description}`;
-  if (sendMessageFn) {
+  const reminderCard = cards.reminder(`${rule.message || rule.description} (${rec.interval || "weekly"})`, rule.id);
+  if (sendCardFn) {
     try {
-      await sendMessageFn(userId, msg);
+      await sendCardFn(userId, reminderCard.fallback, reminderCard.card);
+      console.log(`${LOG} Recurring reminder card sent to ${userId}: "${rule.message || rule.description}"`);
+    } catch (e) {
+      if (sendMessageFn) await sendMessageFn(userId, reminderCard.fallback).catch(() => {});
+    }
+  } else if (sendMessageFn) {
+    try {
+      await sendMessageFn(userId, reminderCard.fallback);
       console.log(`${LOG} Recurring reminder sent to ${userId}: "${rule.message || rule.description}"`);
     } catch (e) {
       console.warn(`${LOG} Failed to send recurring reminder:`, e.message);
