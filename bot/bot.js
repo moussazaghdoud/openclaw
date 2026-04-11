@@ -295,11 +295,34 @@ async function initRedis() {
           try {
             const contact = await sdk.contacts.getContactByJid(userJid);
             const conv = await sdk.conversations.openConversationForContact(contact);
-            const sent = await sendAdaptiveCard(conv.dbId, fallbackText, card, conv);
-            if (!sent) {
-              // Fallback to plain text if card fails
-              await sdk.s2s.sendMessageInConversation(conv.dbId, { message: { body: fallbackText, lang: "en" } });
+            const cnxId = sdk?._core?._rest?.connectionS2SInfo?.id;
+            const host = rainbowHost || "openrainbow.com";
+            const token = sdk?._core?._rest?.token;
+            if (cnxId && conv.dbId && token) {
+              // Send Adaptive Card via direct REST (most reliable)
+              const payload = {
+                message: {
+                  subject: fallbackText.substring(0, 20) + "...",
+                  body: fallbackText,
+                  contents: [
+                    { type: "form/json", data: JSON.stringify(card) },
+                  ],
+                  lang: "en",
+                },
+              };
+              const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${conv.dbId}/messages`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              });
+              if (resp.ok) {
+                console.log(`${LOG} Automation card sent OK via REST`);
+                return;
+              }
+              console.warn(`${LOG} Automation card REST failed: ${resp.status}`);
             }
+            // Fallback to plain text
+            await sdk.s2s.sendMessageInConversation(conv.dbId, { message: { body: fallbackText, lang: "en" } });
           } catch (e) {
             console.warn(`${LOG} Automation card send failed:`, e.message);
           }
