@@ -154,10 +154,16 @@ function buildRuleConfig(rule) {
 
 // ── Polling Loop ────────────────────────────────────────
 
+let pollCount = 0;
 async function checkAllRules() {
   if (!redis) return;
+  pollCount++;
   try {
     const users = await redis.sMembers(REDIS_KEY_USERS);
+    // Log every 10th poll (~5 min) or first 3 polls for debugging
+    if (pollCount <= 3 || pollCount % 10 === 0) {
+      console.log(`${LOG} Poll #${pollCount}: ${users.length} user(s) with automations, calendarApi=${!!calendarApi}, calendarAuth=${!!calendarAuth}, sendCard=${!!sendCardFn}`);
+    }
     for (const userId of users) {
       try {
         await checkUserRules(userId);
