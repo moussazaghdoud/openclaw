@@ -4514,13 +4514,13 @@ async function start() {
 
           // Only send patience message for complex queries (not simple direct lookups)
           if (!isSimpleQuery) {
-            await sendPatienceMsg("Let me check...");
+            await sendPatienceMsg(getWaitingPhrase());
           }
 
           // Schedule follow-up patience messages (only for complex queries)
           if (!isSimpleQuery && progressConvId && s2sConnectionId && authToken) {
-            patienceTimers.push(setTimeout(() => sendPatienceMsg("Working on it..."), 6000));
-            patienceTimers.push(setTimeout(() => sendPatienceMsg("Almost there, just a moment..."), 14000));
+            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 6000));
+            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 14000));
           }
 
           const agentResult = await agent.run(fromJid, content, history, isSimpleQuery ? null : sendProgress);
