@@ -231,14 +231,14 @@ async function fetchEvents(token, startISO, endISO, timeZone) {
     endDateTime: endISO,
     $orderby: "start/dateTime",
     $top: "50",
-    $select: "id,subject,start,end,location,organizer,attendees,isOnlineMeeting,onlineMeetingUrl,importance,showAs,isCancelled",
+    $select: "id,subject,body,bodyPreview,start,end,location,organizer,attendees,isOnlineMeeting,onlineMeetingUrl,importance,showAs,isCancelled",
   });
   const resp = await graphFetch(token, `/me/calendarView?${params}`, {
     headers: { Prefer: `outlook.timezone="${timeZone}"` },
   });
   if (!resp || resp._error) return resp;
   if (!resp.value) return [];
-  return resp.value.filter(e => !e.isCancelled).map(e => normalizeEvent(e, false));
+  return resp.value.filter(e => !e.isCancelled).map(e => normalizeEvent(e, true));
 }
 
 function normalizeEvent(e, includeBody) {

@@ -882,6 +882,7 @@ async function executeTool(toolName, input, userId, memory) {
         return { count: events.length, events: events.map(e => ({
           id: e.id, subject: e.subject, start: e.start, end: e.end,
           organizer: e.organizer, location: e.location,
+          body: (e.body || "").substring(0, 1000),
           attendees: (e.attendees || []).slice(0, 15).map(a => a.name || a.email),
         }))};
       }
@@ -1101,6 +1102,12 @@ IDENTITY:
 - You ALWAYS know your name is Juju. If asked "what's your name?" or "who are you?", answer confidently: "I'm Juju."
 - You remember everything discussed in this conversation. Use conversation history to answer follow-ups.
 - Resolve pronouns ("him", "her", "that", "it", "this") from conversation history — never ask "who?" if the answer is in recent messages.
+
+CALENDAR INTELLIGENCE:
+- Meeting results include a "body" field with the agenda, notes, or description. ALWAYS read and use this field.
+- When asked "what should I prepare?" or "what is this meeting about?" — check the body field FIRST. It often contains the agenda, topics, or objectives.
+- If the body is empty, say "No agenda or notes were found in the meeting invite" — do NOT speculate.
+- For preparation questions, use read_event with the event ID to get full details including the body.
 
 RULES:
 - Call the MINIMUM tools needed. One tool per action, one pass when possible.
