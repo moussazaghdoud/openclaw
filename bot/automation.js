@@ -264,15 +264,18 @@ async function checkMeetingAlert(userId, rule, now) {
 
   const alertWindowMs = (rule.minutes_before || 30) * 60 * 1000;
 
+  // Log summary of upcoming events every poll
+  const upcoming = events.map(e => {
+    const s = new Date(e.start);
+    const d = Math.round((s.getTime() - now.getTime()) / 60000);
+    return `"${e.subject}" in ${d}min`;
+  }).join(", ");
+  console.log(`${LOG} ${userId.substring(0, 8)}: ${events.length} events [${upcoming}]`);
+
   for (const event of events) {
     const startTime = new Date(event.start);
     const diff = startTime.getTime() - now.getTime();
     const diffMin = Math.round(diff / 60000);
-
-    // Only log events that are within the alert window or close to it
-    if (diff > 0 && diff <= alertWindowMs + 5 * 60000) {
-      console.log(`${LOG} Event "${event.subject}" in ${diffMin}min (window=${rule.minutes_before}min, inWindow=${diff > 0 && diff <= alertWindowMs})`);
-    }
 
     // Alert window: between 0 and alertWindowMs before the meeting
     // e.g., for 30min alert: fire when meeting is 0-30 min away
