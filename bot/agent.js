@@ -879,6 +879,14 @@ async function executeTool(toolName, input, userId, memory) {
           default: events = await cp.api.getWeekEvents(cp.token);
         }
         if (!events || events._error) return { error: "Failed to fetch calendar." };
+        // For "today", filter out past events — user cares about what's coming, not what's done
+        if (input.period === "today") {
+          const now = new Date();
+          events = events.filter(e => {
+            const endTime = new Date(e.end);
+            return endTime > now;
+          });
+        }
         return { count: events.length, events: events.map(e => ({
           id: e.id, subject: e.subject, start: e.start, end: e.end,
           organizer: e.organizer, location: e.location,
@@ -1070,7 +1078,8 @@ async function run(userId, userMessage, conversationHistory = [], onProgress = n
   }
 
   const hasSalesTools = salesAgentModule && salesAgentModule.isAvailable();
-  const systemPrompt = `Your name is Juju. You are an executive AI assistant and conversational orchestrator with access to email, calendar${hasSalesTools ? ", and sales pipeline" : ""} tools. Today is ${today}.
+  const currentTime = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Europe/Paris" });
+  const systemPrompt = `Your name is Juju. You are an executive AI assistant and conversational orchestrator with access to email, calendar${hasSalesTools ? ", and sales pipeline" : ""} tools. Today is ${today}. Current time: ${currentTime} (Europe/Paris).
 
 DATE REFERENCE (use these, NEVER calculate dates yourself):
 ${dateRef.join("\n")}
@@ -1108,6 +1117,8 @@ CALENDAR INTELLIGENCE:
 - When asked "what should I prepare?" or "what is this meeting about?" — check the body field FIRST. It often contains the agenda, topics, or objectives.
 - If the body is empty, say "No agenda or notes were found in the meeting invite" — do NOT speculate.
 - For preparation questions, use read_event with the event ID to get full details including the body.
+- TIME AWARENESS: "Do I have meetings today?" means REMAINING meetings from NOW onward. Past events are already filtered out. Never show meetings that have already ended.
+- When presenting meetings, mention how soon they start (e.g., "in 2 hours", "in 30 minutes") to help the user prioritize.
 
 RULES:
 - Call the MINIMUM tools needed. One tool per action, one pass when possible.
