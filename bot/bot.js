@@ -3117,6 +3117,70 @@ app.get("/api/card-test", async (req, res) => {
   res.json({ convId, results, payloadPreview: JSON.stringify(payload).substring(0, 500) });
 });
 
+// Adaptive Card test — send a 3-choice card to a user by JID
+app.get("/api/card-test-jid", async (req, res) => {
+  const jid = req.query.jid;
+  if (!jid) return res.json({ error: "Missing jid parameter. Use your Rainbow JID." });
+
+  try {
+    const contact = await sdk.contacts.getContactByJid(jid);
+    const conv = await sdk.conversations.openConversationForContact(contact);
+    const cnxId = sdk?._core?._rest?.connectionS2SInfo?.id;
+    const host = rainbowHost || "openrainbow.com";
+    const token = sdk?._core?._rest?.token;
+
+    if (!cnxId || !conv.dbId || !token) {
+      return res.json({ error: "SDK not ready", cnxId: !!cnxId, dbId: !!conv.dbId, token: !!token });
+    }
+
+    const card = cardsModule
+      ? cardsModule.choices("Which area would you like to explore?", [
+          { title: "📧 Email Summary", value: "show my email summary" },
+          { title: "📅 Today's Meetings", value: "show my meetings today" },
+          { title: "📊 Sales Pipeline", value: "show my pipeline" },
+        ]).card
+      : {
+          type: "AdaptiveCard",
+          "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+          version: "1.5",
+          body: [
+            { type: "TextBlock", text: "Which area would you like to explore?", wrap: true, weight: "Bolder" },
+            { type: "ActionSet", actions: [
+              { type: "Action.Submit", title: "📧 Email Summary", data: { rainbow: { type: "messageBack", value: { response: "show my email summary" }, text: "Email Summary" } } },
+              { type: "Action.Submit", title: "📅 Today's Meetings", data: { rainbow: { type: "messageBack", value: { response: "show my meetings today" }, text: "Today's Meetings" } } },
+              { type: "Action.Submit", title: "📊 Sales Pipeline", data: { rainbow: { type: "messageBack", value: { response: "show my pipeline" }, text: "Sales Pipeline" } } },
+            ]},
+          ],
+        };
+
+    const payload = {
+      message: {
+        subject: "Choose an option",
+        body: "Which area would you like to explore? 1) Email Summary 2) Today's Meetings 3) Sales Pipeline",
+        contents: [
+          { type: "form/json", data: JSON.stringify(card) },
+        ],
+        lang: "en",
+      },
+    };
+
+    const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${conv.dbId}/messages`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (resp.ok) {
+      res.json({ success: true, message: "Card sent! Check Rainbow." });
+    } else {
+      const body = await resp.text();
+      res.json({ error: `Rainbow API returned ${resp.status}`, body: body.substring(0, 500) });
+    }
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
 // Sales alert test endpoint
 app.get("/api/sales-alert-test", async (req, res) => {
   const uid = req.query.uid;
