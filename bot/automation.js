@@ -46,13 +46,23 @@ function init(deps) {
   }
 
   // Start polling loop — run first check immediately, then every 30s
-  console.log(`${LOG} Automation engine started (polling every ${POLL_INTERVAL_MS / 1000}s)`);
-  setTimeout(() => {
-    checkAllRules().catch(e => console.error(`${LOG} First poll crashed:`, e.message));
-  }, 5000); // 5s delay to let everything finish initializing
-  pollTimer = setInterval(() => {
-    checkAllRules().catch(e => console.error(`${LOG} Poll crashed:`, e.message));
-  }, POLL_INTERVAL_MS);
+  console.log(`${LOG} Automation engine started (polling every ${POLL_INTERVAL_MS / 1000}s), redis connected=${redis !== null}`);
+
+  function safePoll() {
+    try {
+      console.log(`${LOG} safePoll triggered`);
+      checkAllRules().then(() => {
+        // silent success
+      }).catch(e => {
+        console.error(`${LOG} Poll promise rejected:`, e.message, e.stack);
+      });
+    } catch (e) {
+      console.error(`${LOG} Poll sync crash:`, e.message, e.stack);
+    }
+  }
+
+  setTimeout(safePoll, 5000);
+  pollTimer = setInterval(safePoll, POLL_INTERVAL_MS);
 }
 
 function stop() {
