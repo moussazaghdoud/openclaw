@@ -71,6 +71,8 @@ let superAdmin;
 try { superAdmin = require("./super-admin"); console.log("[JujuBot] Super-admin module loaded OK"); } catch (e) { superAdmin = null; console.warn("[JujuBot] Super-admin module failed to load:", e.message); }
 let emailWebhook;
 try { emailWebhook = require("./email-webhook"); console.log("[JujuBot] Email webhook module loaded OK"); } catch (e) { emailWebhook = null; console.warn("[JujuBot] Email webhook module failed to load:", e.message); }
+let automation;
+try { automation = require("./automation"); console.log("[JujuBot] Automation engine loaded OK"); } catch (e) { automation = null; console.warn("[JujuBot] Automation engine failed to load:", e.message); }
 const LOG = "[JujuBot]";
 
 // ── Configuration ────────────────────────────────────────
@@ -269,8 +271,26 @@ async function initRedis() {
         salesAgent: salesAgent || null,
         contextManager: contextManager || null,
         emailIntelligence: emailIntelligence || null,
+        automation: automation || null,
       });
       console.log(`${LOG} Agent module initialized (available: ${agent.isAvailable()})`);
+    }
+    if (automation) {
+      automation.init({
+        redis,
+        calendarApi: calendarGraph || null,
+        calendarAuth: m365Auth || null,
+        sendMessage: async (userJid, text) => {
+          try {
+            const contact = await sdk.contacts.getContactByJid(userJid);
+            const conv = await sdk.conversations.openConversationForContact(contact);
+            await sdk.s2s.sendMessageInConversation(conv.dbId, { message: { body: text, lang: "en" } });
+          } catch (e) {
+            console.warn(`${LOG} Automation send failed:`, e.message);
+          }
+        },
+      });
+      console.log(`${LOG} Automation engine initialized`);
     }
     if (emailWebhook && m365Auth && m365Graph) {
       emailWebhook.init(app, {

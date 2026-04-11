@@ -148,6 +148,7 @@ let redisClient = null;
 let salesAgentModule = null;
 let contextManagerModule = null;
 let emailIntelligenceModule = null;
+let automationModule = null;
 
 // Active request cancellation
 const cancelledUsers = new Set();
@@ -163,7 +164,8 @@ function init(deps) {
   salesAgentModule = deps.salesAgent || null;
   contextManagerModule = deps.contextManager || null;
   emailIntelligenceModule = deps.emailIntelligence || null;
-  console.log(`${LOG} Initialized (email: ${!!graphModule}, calendar: ${!!calendarGraphModule}, sales: ${!!salesAgentModule}, context: ${!!contextManagerModule}, anthropic: ${!!ANTHROPIC_API_KEY})`);
+  automationModule = deps.automation || null;
+  console.log(`${LOG} Initialized (email: ${!!graphModule}, calendar: ${!!calendarGraphModule}, sales: ${!!salesAgentModule}, automation: ${!!automationModule}, context: ${!!contextManagerModule}, anthropic: ${!!ANTHROPIC_API_KEY})`);
 }
 
 function cancelRequest(userId) {
@@ -459,6 +461,11 @@ function getTools() {
       required: ["question", "choices"],
     },
   });
+
+  // ── Automation Engine Tool ────
+  if (automationModule) {
+    tools.push(automationModule.getToolDefinition());
+  }
 
   // ── Sales Pipeline Tools (from sales-agent module) ────
   if (salesAgentModule && salesAgentModule.isAvailable()) {
@@ -1016,6 +1023,12 @@ async function executeTool(toolName, input, userId, memory) {
         return salesAgentModule.executeTool(toolName, input, userId);
       }
 
+      // ── Automation Engine ──────────────────────────────
+      case "manage_automations": {
+        if (!automationModule) return { error: "Automation engine not available." };
+        return automationModule.executeTool(userId, input);
+      }
+
       default:
         return { error: `Unknown tool: ${toolName}` };
     }
@@ -1163,6 +1176,16 @@ WRITE SAFETY — CRITICAL:
 - IMPORTANT: When a user asks about any deal, account, contact, or CRM record — ALWAYS call the relevant tool. NEVER say "Salesforce is not connected".
 - Present risk levels: 🔴 High, 🟡 Medium, 🟢 Low. Amounts in compact notation ($50K, $1.2M).
 - Prioritize actionable insights over raw data.
+` : ""}
+${automationModule ? `
+Automation engine — manage_automations tool:
+- meeting_alert: "Alert me 30 min before meetings" → create rule with type=meeting_alert, minutes_before=30. Sends summary, attendees, agenda automatically.
+- reminder: "Remind me to call Yann on Thursday at 2pm" → create rule with type=reminder, trigger_at=ISO datetime, message="Call Yann".
+- reminder (recurring): "Every Monday at 9am remind me to check pipeline" → create rule with type=reminder, recurring={interval:"weekly", day:"monday", time:"09:00"}, message="Check pipeline".
+- scheduled_send: "Send this email tomorrow at 9am" → create rule with type=scheduled_send, send_at=ISO datetime, email_to, email_subject, email_body.
+- Users can say "show my automations", "delete automation X", "pause automation X", "resume automation X".
+- When user says "make it a rule", "set this up permanently", "always do this", "every time" → use manage_automations to create a persistent rule.
+- ALWAYS confirm what you created: show the rule type, schedule, and description.
 ` : ""}
 ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryContext}\n` : ""}`;
 
