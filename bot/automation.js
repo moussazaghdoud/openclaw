@@ -45,9 +45,14 @@ function init(deps) {
     return;
   }
 
-  // Start polling loop
-  pollTimer = setInterval(checkAllRules, POLL_INTERVAL_MS);
+  // Start polling loop — run first check immediately, then every 30s
   console.log(`${LOG} Automation engine started (polling every ${POLL_INTERVAL_MS / 1000}s)`);
+  setTimeout(() => {
+    checkAllRules().catch(e => console.error(`${LOG} First poll crashed:`, e.message));
+  }, 5000); // 5s delay to let everything finish initializing
+  pollTimer = setInterval(() => {
+    checkAllRules().catch(e => console.error(`${LOG} Poll crashed:`, e.message));
+  }, POLL_INTERVAL_MS);
 }
 
 function stop() {
