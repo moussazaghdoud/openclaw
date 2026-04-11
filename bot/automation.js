@@ -50,7 +50,6 @@ function init(deps) {
 
   function safePoll() {
     try {
-      console.log(`${LOG} safePoll triggered`);
       checkAllRules().then(() => {
         // silent success
       }).catch(e => {
@@ -175,9 +174,9 @@ async function checkAllRules() {
   pollCount++;
   try {
     const users = await redis.sMembers(REDIS_KEY_USERS);
-    // Log every 10th poll (~5 min) or first 3 polls for debugging
-    if (pollCount <= 3 || pollCount % 10 === 0) {
-      console.log(`${LOG} Poll #${pollCount}: ${users.length} user(s) with automations, calendarApi=${!!calendarApi}, calendarAuth=${!!calendarAuth}, sendCard=${!!sendCardFn}`);
+    // Log every 60th poll (~30 min) or first poll
+    if (pollCount === 1 || pollCount % 60 === 0) {
+      console.log(`${LOG} Poll #${pollCount}: ${users.length} user(s) with automations`);
     }
     for (const userId of users) {
       try {
@@ -239,17 +238,6 @@ async function checkMeetingAlert(userId, rule, now) {
   // Get token for this user — m365Auth.getValidToken returns { token, ... }
   let token;
   try {
-    // Debug: check what OAuth keys exist for this user
-    if (redis) {
-      const oauthKey = await redis.get(`oauth:${userId}`);
-      console.log(`${LOG} Token lookup: oauth:${userId} exists=${!!oauthKey}`);
-      if (!oauthKey) {
-        // Try scanning for any oauth key to find the right format
-        const keys = await redis.keys("oauth:*").catch(() => []);
-        const oauthKeys = keys.filter(k => k.startsWith("oauth:") && !k.includes(":state:") && !k.includes(":linked"));
-        console.log(`${LOG} All oauth keys: ${oauthKeys.join(", ") || "none"}`);
-      }
-    }
     const tokenData = await calendarAuth.getValidToken(userId);
     if (!tokenData || !tokenData.token) {
       console.warn(`${LOG} Meeting alert skip: no valid token for ${userId}`);
@@ -274,8 +262,6 @@ async function checkMeetingAlert(userId, rule, now) {
     return;
   }
 
-  console.log(`${LOG} Meeting alert check for ${userId}: ${events.length} events today, checking ${rule.minutes_before}min window, server time=${now.toISOString()}`);
-
   const alertWindowMs = (rule.minutes_before || 30) * 60 * 1000;
 
   for (const event of events) {
@@ -283,21 +269,23 @@ async function checkMeetingAlert(userId, rule, now) {
     const diff = startTime.getTime() - now.getTime();
     const diffMin = Math.round(diff / 60000);
 
-    console.log(`${LOG}   Event "${event.subject}" start=${event.start} parsed=${startTime.toISOString()} diff=${diffMin}min inWindow=${diff > 0 && diff <= alertWindowMs}`);
+    // Only log events that are within the alert window or close to it
+    if (diff > 0 && diff <= alertWindowMs + 5 * 60000) {
+      console.log(`${LOG} Event "${event.subject}" in ${diffMin}min (window=${rule.minutes_before}min, inWindow=${diff > 0 && diff <= alertWindowMs})`);
+    }
 
     // Alert window: between 0 and alertWindowMs before the meeting
     // e.g., for 30min alert: fire when meeting is 0-30 min away
     if (diff > 0 && diff <= alertWindowMs) {
-      const dateKey = `${event.id}:${startTime.toISOString().split("T")[0]}`;
+      // Lock key includes event start time (not just date) so timezone fixes
+      // don't collide with locks from earlier buggy alerts
+      const dateKey = `${event.id}:${startTime.toISOString()}`;
       const lockKey = REDIS_KEY_LOCK(userId, rule.id, dateKey);
 
       // Check dedup lock — don't alert twice for same meeting
       try {
         const locked = await redis.get(lockKey);
-        if (locked) {
-          console.log(`${LOG}   Skipped (already alerted): lockKey=${lockKey}`);
-          continue;
-        }
+        if (locked) continue; // Already alerted for this event
         await redis.set(lockKey, "1", { EX: 24 * 3600 }); // 24h TTL
       } catch {}
 
