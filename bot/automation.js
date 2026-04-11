@@ -207,21 +207,39 @@ async function checkUserRules(userId) {
 // ── Meeting Alerts ──────────────────────────────────────
 
 async function checkMeetingAlert(userId, rule, now) {
-  if (!calendarApi || !calendarAuth) return;
+  if (!calendarApi || !calendarAuth) {
+    console.warn(`${LOG} Meeting alert skip: calendarApi=${!!calendarApi}, calendarAuth=${!!calendarAuth}`);
+    return;
+  }
 
-  // Get token for this user
+  // Get token for this user — m365Auth.getValidToken returns { token, ... }
   let token;
   try {
-    token = await calendarAuth.getToken(userId);
-    if (!token) return;
-  } catch { return; }
+    const tokenData = await calendarAuth.getValidToken(userId);
+    if (!tokenData || !tokenData.token) {
+      console.warn(`${LOG} Meeting alert skip: no valid token for ${userId}`);
+      return;
+    }
+    token = tokenData.token;
+  } catch (e) {
+    console.warn(`${LOG} Meeting alert token error for ${userId}:`, e.message);
+    return;
+  }
 
   // Fetch today's events
   let events;
   try {
     events = await calendarApi.getTodayEvents(token);
-    if (!events || events._error) return;
-  } catch { return; }
+    if (!events || events._error) {
+      console.warn(`${LOG} Meeting alert: failed to fetch events for ${userId}`);
+      return;
+    }
+  } catch (e) {
+    console.warn(`${LOG} Meeting alert fetch error for ${userId}:`, e.message);
+    return;
+  }
+
+  console.log(`${LOG} Meeting alert check for ${userId}: ${events.length} events today, checking ${rule.minutes_before}min window`);
 
   const alertWindowMs = (rule.minutes_before || 30) * 60 * 1000;
 
@@ -265,14 +283,18 @@ async function checkMeetingAlert(userId, rule, now) {
         }
       }
 
-      // Body/agenda — fetch full event details if needed
+      // Body/agenda — use body from event list, or fetch full details as fallback
       if (rule.include_body || rule.include_summary) {
-        try {
-          const fullEvent = await calendarApi.getEventById(token, event.id);
-          if (fullEvent && fullEvent.body && fullEvent.body.trim()) {
-            msg += `\n📝 **Agenda/Notes:**\n${fullEvent.body.substring(0, 1000)}\n`;
-          }
-        } catch {}
+        let bodyText = event.body || "";
+        if (!bodyText) {
+          try {
+            const fullEvent = await calendarApi.getEventById(token, event.id);
+            if (fullEvent && fullEvent.body) bodyText = fullEvent.body;
+          } catch {}
+        }
+        if (bodyText && bodyText.trim()) {
+          msg += `\n📝 **Agenda/Notes:**\n${bodyText.substring(0, 1000)}\n`;
+        }
       }
 
       // Organizer
