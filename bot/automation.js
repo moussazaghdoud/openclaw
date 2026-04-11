@@ -239,6 +239,17 @@ async function checkMeetingAlert(userId, rule, now) {
   // Get token for this user — m365Auth.getValidToken returns { token, ... }
   let token;
   try {
+    // Debug: check what OAuth keys exist for this user
+    if (redis) {
+      const oauthKey = await redis.get(`oauth:${userId}`);
+      console.log(`${LOG} Token lookup: oauth:${userId} exists=${!!oauthKey}`);
+      if (!oauthKey) {
+        // Try scanning for any oauth key to find the right format
+        const keys = await redis.keys("oauth:*").catch(() => []);
+        const oauthKeys = keys.filter(k => k.startsWith("oauth:") && !k.includes(":state:") && !k.includes(":linked"));
+        console.log(`${LOG} All oauth keys: ${oauthKeys.join(", ") || "none"}`);
+      }
+    }
     const tokenData = await calendarAuth.getValidToken(userId);
     if (!tokenData || !tokenData.token) {
       console.warn(`${LOG} Meeting alert skip: no valid token for ${userId}`);
