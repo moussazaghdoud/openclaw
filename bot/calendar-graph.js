@@ -8,6 +8,43 @@
 const LOG = "[Calendar-Graph]";
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
+// Map Graph API timezone IDs to UTC offsets for correct date parsing.
+// Graph returns dateTime WITHOUT offset — we must append it so new Date() works.
+function getTimezoneOffset(tzId) {
+  const now = new Date();
+  const month = now.getUTCMonth();
+  // Approximate DST: last Sunday of March to last Sunday of October (EU rules)
+  const isDST = month > 2 && month < 9 ||
+    (month === 2 && now.getUTCDate() >= 31 - new Date(now.getUTCFullYear(), 2, 31).getUTCDay()) ||
+    (month === 9 && now.getUTCDate() < 31 - new Date(now.getUTCFullYear(), 9, 31).getUTCDay());
+
+  const offsets = {
+    "Romance Standard Time": isDST ? "+02:00" : "+01:00",  // Paris, Brussels, Madrid
+    "W. Europe Standard Time": isDST ? "+02:00" : "+01:00", // Berlin, Amsterdam, Rome
+    "Central European Standard Time": isDST ? "+02:00" : "+01:00",
+    "GMT Standard Time": isDST ? "+01:00" : "+00:00",       // London
+    "Eastern Standard Time": isDST ? "-04:00" : "-05:00",   // New York
+    "Central Standard Time": isDST ? "-05:00" : "-06:00",   // Chicago
+    "Mountain Standard Time": isDST ? "-06:00" : "-07:00",  // Denver
+    "Pacific Standard Time": isDST ? "-07:00" : "-08:00",   // LA
+    "Tokyo Standard Time": "+09:00",
+    "China Standard Time": "+08:00",
+    "Singapore Standard Time": "+08:00",
+    "Arabian Standard Time": "+04:00",                       // Dubai
+    "AUS Eastern Standard Time": isDST ? "+11:00" : "+10:00",
+    "UTC": "+00:00",
+    // Europe/Paris style (used in Prefer header)
+    "Europe/Paris": isDST ? "+02:00" : "+01:00",
+    "Europe/London": isDST ? "+01:00" : "+00:00",
+    "Europe/Berlin": isDST ? "+02:00" : "+01:00",
+    "America/New_York": isDST ? "-04:00" : "-05:00",
+    "America/Chicago": isDST ? "-05:00" : "-06:00",
+    "America/Los_Angeles": isDST ? "-07:00" : "-08:00",
+    "Asia/Tokyo": "+09:00",
+  };
+  return offsets[tzId] || (isDST ? "+02:00" : "+01:00"); // Default to Paris
+}
+
 // ── Read Operations ──────────────────────────────────────
 
 /**
@@ -242,11 +279,20 @@ async function fetchEvents(token, startISO, endISO, timeZone) {
 }
 
 function normalizeEvent(e, includeBody) {
+  // Graph API returns dateTime in the requested timezone (e.g., Europe/Paris)
+  // but WITHOUT a timezone suffix. We must append the timezone offset so
+  // new Date() parses it correctly instead of treating it as UTC.
+  const tzId = e.start?.timeZone || e.end?.timeZone || "";
+  const offset = getTimezoneOffset(tzId);
+  const startRaw = e.start?.dateTime || e.start;
+  const endRaw = e.end?.dateTime || e.end;
+  // Only append offset if the value looks like a bare datetime (no Z, no +/-)
+  const needsOffset = (v) => typeof v === "string" && !v.endsWith("Z") && !/[+-]\d{2}:\d{2}$/.test(v);
   const result = {
     id: e.id,
     subject: e.subject || "(no subject)",
-    start: e.start?.dateTime || e.start,
-    end: e.end?.dateTime || e.end,
+    start: needsOffset(startRaw) ? startRaw.replace(/\.\d+$/, "") + offset : startRaw,
+    end: needsOffset(endRaw) ? endRaw.replace(/\.\d+$/, "") + offset : endRaw,
     location: e.location?.displayName || "",
     organizer: e.organizer?.emailAddress?.name || e.organizer?.emailAddress?.address || "",
     organizerEmail: e.organizer?.emailAddress?.address || "",
