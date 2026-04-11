@@ -16,6 +16,119 @@
 const LOG = "[Agent]";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 
+// ── Random waiting phrases (shared with bot.js) ──
+const WAITING_PHRASES = [
+  "On it, give me a sec...",
+  "Let me dig into that for you...",
+  "Crunching the data, hold tight...",
+  "Working on it — coffee break not included...",
+  "Let me check... I promise I'm faster than your IT department.",
+  "Pulling that up now...",
+  "One moment — good things come to those who wait.",
+  "Running through your data like a pro...",
+  "Hang on, I'm putting my detective hat on...",
+  "Almost there — patience is a virtue, or so they say...",
+  "Let me work my magic...",
+  "Diving into the details...",
+  "Give me a moment, I don't have a coffee machine to blame for delays...",
+  "On the case — no donut break needed.",
+  "Fetching that for you, no leash required...",
+  "Processing... unlike your last meeting, this won't take an hour.",
+  "Hold on — I'm doing in seconds what used to take 3 emails and a phone call.",
+  "Let me look that up — faster than finding a parking spot at the office.",
+  "Working... I'd whistle if I could.",
+  "Consulting the archives...",
+  "Scanning your systems — no passwords were harmed in the process.",
+  "Just a moment — multitasking at the speed of light here.",
+  "Grabbing that info now...",
+  "Let me sort that out for you...",
+  "Checking... this is the fun part for me, honestly.",
+  "Running the numbers — abacus not included.",
+  "Rummaging through your data...",
+  "I'm on it — you can blink, I'll be done.",
+  "Loading... but way faster than that app you never update.",
+  "Bear with me — brilliance takes a moment.",
+  "Spinning up the hamster wheel...",
+  "Asking the cloud nicely...",
+  "Let me consult my crystal ball... just kidding, I use APIs.",
+  "Warming up the engines...",
+  "Doing the heavy lifting so you don't have to...",
+  "If I had hands, I'd be typing furiously right now.",
+  "Your wish is my command — processing...",
+  "Brewing your answer... no sugar needed.",
+  "One sec — I'm faster than your last Zoom call loading.",
+  "Connecting the dots...",
+  "Give me a beat...",
+  "Working harder than a Monday morning...",
+  "Let me pull some strings...",
+  "Rifling through the filing cabinet...",
+  "On my way — no traffic at least.",
+  "Assembling the pieces...",
+  "Crunching numbers like it's leg day...",
+  "Just a tick...",
+  "Sorting through the noise for you...",
+  "Hold that thought — I've got this.",
+  "Doing my thing...",
+  "Making it happen...",
+  "Rolling up my sleeves... figuratively.",
+  "Summoning the data spirits...",
+  "Poking around your systems — politely, of course.",
+  "Almost got it — no spoilers.",
+  "Working at the speed of Wi-Fi...",
+  "Shaking the data tree...",
+  "Let me take a quick peek...",
+  "Running faster than a deadline...",
+  "Dusting off the records...",
+  "I'm on the case like Sherlock on a Tuesday.",
+  "Processing — no elevator music, I promise.",
+  "Querying the universe... well, your inbox at least.",
+  "Hang tight — this is the fun part.",
+  "Flipping through the pages...",
+  "Wrangling the data for you...",
+  "One moment — genius at work.",
+  "Digging through the vault...",
+  "Doing what I do best...",
+  "Let me just... yep, working on it.",
+  "Tapping into the mainframe... okay, it's just an API.",
+  "Scanning the horizon...",
+  "Loading your answer — no buffering.",
+  "BRB — getting your info.",
+  "Working smarter, not harder... okay, both.",
+  "Give me a moment to shine...",
+  "Hunting that down for you...",
+  "Channeling my inner assistant...",
+  "Peeling back the layers...",
+  "Hold on, I'm in the zone...",
+  "Calibrating... just kidding, almost done.",
+  "Fetching — like a golden retriever, but digital.",
+  "Your answer is loading — skip ad in 0 seconds.",
+  "Doing some backstage magic...",
+  "Let me wave my digital wand...",
+  "Running through the maze of data...",
+  "Stand by — no standing required.",
+  "Cooking up your answer...",
+  "Sifting through the noise...",
+  "Chasing down the details...",
+  "Give me a heartbeat...",
+  "Plugging into the matrix...",
+  "Let me just double-check something...",
+  "Working on it — ETA: way less than your commute.",
+  "Paging through the records...",
+  "Going through the motions — the smart ones.",
+  "Hang on, inspiration just struck...",
+  "Locking in on your request...",
+  "Almost there — suspense is free of charge.",
+];
+let lastPhraseIndex = -1;
+function getWaitingPhrase() {
+  let idx;
+  do {
+    idx = Math.floor(Math.random() * WAITING_PHRASES.length);
+  } while (idx === lastPhraseIndex && WAITING_PHRASES.length > 1);
+  lastPhraseIndex = idx;
+  return WAITING_PHRASES[idx];
+}
+
 // Debug trace — per-user agent run details accessible via /api/agent-debug
 const lastRunTraces = new Map();
 let lastRunUserId = null; // track most recent user for backward compat
@@ -956,7 +1069,7 @@ async function run(userId, userMessage, conversationHistory = [], onProgress = n
   }
 
   const hasSalesTools = salesAgentModule && salesAgentModule.isAvailable();
-  const systemPrompt = `You are an executive AI assistant and conversational orchestrator with access to email, calendar${hasSalesTools ? ", and sales pipeline" : ""} tools. Today is ${today}.
+  const systemPrompt = `Your name is Juju. You are an executive AI assistant and conversational orchestrator with access to email, calendar${hasSalesTools ? ", and sales pipeline" : ""} tools. Today is ${today}.
 
 DATE REFERENCE (use these, NEVER calculate dates yourself):
 ${dateRef.join("\n")}
@@ -973,6 +1086,11 @@ ZERO INVENTION POLICY — HIGHEST PRIORITY:
 - If a tool fails, say: "I was unable to access [system] right now."
 - Partial data: return ONLY confirmed fields. Missing title? Say "No title available" — never guess one.
 - Before answering: verify every element is grounded in actual tool results. Remove anything that isn't.
+
+IDENTITY:
+- You ALWAYS know your name is Juju. If asked "what's your name?" or "who are you?", answer confidently: "I'm Juju."
+- You remember everything discussed in this conversation. Use conversation history to answer follow-ups.
+- Resolve pronouns ("him", "her", "that", "it", "this") from conversation history — never ask "who?" if the answer is in recent messages.
 
 RULES:
 - Call the MINIMUM tools needed. One tool per action, one pass when possible.
@@ -1034,8 +1152,8 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
   // Filter out PII-tainted entries (PERSON_N placeholders from secure mode).
   const messages = [];
   if (conversationHistory && conversationHistory.length > 0) {
-    // Include last 5 messages for context (follow-ups, references)
-    const recent = conversationHistory.slice(-5);
+    // Include last 15 messages for context (follow-ups, references)
+    const recent = conversationHistory.slice(-15);
     for (const msg of recent) {
       // Skip PII-tainted entries
       if (msg.content && (msg.content.includes("PERSON_") || msg.content.includes("[PRODUCT_"))) continue;
@@ -1135,51 +1253,12 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
       trace.loops.push({ loop: loop + 1, tools: toolNames });
       trace.tools.push(...toolNames);
 
-      // Send progress update to user
+      // Send progress update to user — random friendly phrase instead of technical tool names
       if (onProgress) {
-        const progressMap = {
-          search_emails: "Searching emails...",
-          get_recent_emails: "Checking inbox...",
-          read_email: "Reading email...",
-          read_thread: "Reading conversation thread...",
-          summarize_thread: "Summarizing email thread...",
-          check_followups: "Checking follow-ups...",
-          get_classified_emails: "Classifying emails...",
-          get_followup_timing: "Checking follow-up timing...",
-          manage_email_rules: "Managing email rules...",
-          manage_email_digest: "Managing email digest...",
-          get_sender_details: "Looking up sender...",
-          search_calendar: "Checking calendar...",
-          read_event: "Reading meeting details...",
-          send_email: "Sending email...",
-          update_memory: null, // silent
-          // Sales tools
-          analyze_pipeline: "Analyzing pipeline...",
-          get_deal_risks: "Checking deal risks...",
-          get_stale_deals: "Finding stale deals...",
-          get_missing_next_steps: "Checking next steps...",
-          get_pipeline_summary: "Building pipeline summary...",
-          get_deal_details: "Looking up deal details...",
-          get_ghost_deals: "Detecting ghost deals...",
-          get_deals_by_owner: "Analyzing rep performance...",
-          list_opportunities: "Fetching opportunities...",
-          search_crm: "Searching CRM...",
-          get_opportunity_details: "Loading opportunity details...",
-          get_account_details: "Loading account details...",
-          update_opportunity: "Preparing opportunity update...",
-          create_task: "Creating task...",
-          log_activity: "Logging activity...",
-          close_deal: "Preparing to close deal...",
-          get_forecast: "Building forecast...",
-          set_quota: "Setting quota...",
-          get_competitors: "Checking competitors...",
-          add_competitor: "Adding competitor...",
-          search_deals_by_competitor: "Searching by competitor...",
-          manage_sales_alerts: "Managing alerts...",
-        };
-        const updates = toolNames.map(n => progressMap[n]).filter(Boolean);
-        if (updates.length > 0) {
-          try { await onProgress(updates.join(" ")); } catch {}
+        const silentTools = new Set(["update_memory"]);
+        const hasVisibleTools = toolNames.some(n => !silentTools.has(n));
+        if (hasVisibleTools) {
+          try { await onProgress(getWaitingPhrase()); } catch {}
         }
       }
 

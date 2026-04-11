@@ -337,7 +337,7 @@ async function initRedis() {
 // ── Conversation History (Redis-backed with in-memory cache) ──
 
 const conversationHistories = new Map(); // in-memory cache
-const MAX_HISTORY = 20;
+const MAX_HISTORY = 40;
 
 async function getHistory(userId) {
   if (conversationHistories.has(userId)) {
@@ -364,7 +364,22 @@ async function addMessage(userId, role, content) {
   const history = await getHistory(userId);
   history.push({ role, content });
   if (history.length > MAX_HISTORY) {
-    history.splice(0, history.length - MAX_HISTORY);
+    // Summarize oldest messages before dropping them so context is not lost
+    const overflow = history.splice(0, history.length - MAX_HISTORY);
+    const summaryText = overflow
+      .filter(m => m.content && m.content.length > 0)
+      .map(m => `${m.role}: ${m.content.substring(0, 200)}`)
+      .join("\n");
+    if (summaryText) {
+      // Prepend a condensed summary as the first message so older context survives
+      const existing = history[0];
+      if (existing && existing.role === "system" && existing.content.startsWith("[Earlier conversation summary]")) {
+        // Append to existing summary instead of stacking
+        existing.content = `[Earlier conversation summary]\n${existing.content.replace("[Earlier conversation summary]\n", "")}${summaryText}\n`.substring(0, 2000);
+      } else {
+        history.unshift({ role: "user", content: `[Earlier conversation summary]\n${summaryText}`.substring(0, 2000) });
+      }
+    }
   }
   // Persist to Redis
   if (redis) {
@@ -665,119 +680,142 @@ async function sendWithSuggestions(convId, text, suggestions) {
 }
 
 /**
- * Generate a short reformulation of the user's intent for immediate feedback.
+ * Random waiting phrases — friendly, contextual, occasionally cheeky.
+ */
+const WAITING_PHRASES = [
+  "On it, give me a sec...",
+  "Let me dig into that for you...",
+  "Crunching the data, hold tight...",
+  "Working on it — coffee break not included...",
+  "Let me check... I promise I'm faster than your IT department.",
+  "Pulling that up now...",
+  "One moment — good things come to those who wait.",
+  "Running through your data like a pro...",
+  "Hang on, I'm putting my detective hat on...",
+  "Almost there — patience is a virtue, or so they say...",
+  "Let me work my magic...",
+  "Diving into the details...",
+  "Give me a moment, I don't have a coffee machine to blame for delays...",
+  "On the case — no donut break needed.",
+  "Fetching that for you, no leash required...",
+  "Processing... unlike your last meeting, this won't take an hour.",
+  "Hold on — I'm doing in seconds what used to take 3 emails and a phone call.",
+  "Let me look that up — faster than finding a parking spot at the office.",
+  "Working... I'd whistle if I could.",
+  "Consulting the archives...",
+  "Scanning your systems — no passwords were harmed in the process.",
+  "Just a moment — multitasking at the speed of light here.",
+  "Grabbing that info now...",
+  "Let me sort that out for you...",
+  "Checking... this is the fun part for me, honestly.",
+  "Running the numbers — abacus not included.",
+  "Rummaging through your data...",
+  "I'm on it — you can blink, I'll be done.",
+  "Loading... but way faster than that app you never update.",
+  "Bear with me — brilliance takes a moment.",
+  "Spinning up the hamster wheel...",
+  "Asking the cloud nicely...",
+  "Let me consult my crystal ball... just kidding, I use APIs.",
+  "Warming up the engines...",
+  "Doing the heavy lifting so you don't have to...",
+  "If I had hands, I'd be typing furiously right now.",
+  "Your wish is my command — processing...",
+  "Brewing your answer... no sugar needed.",
+  "One sec — I'm faster than your last Zoom call loading.",
+  "Connecting the dots...",
+  "Give me a beat...",
+  "Working harder than a Monday morning...",
+  "Let me pull some strings...",
+  "Rifling through the filing cabinet...",
+  "On my way — no traffic at least.",
+  "Assembling the pieces...",
+  "Crunching numbers like it's leg day...",
+  "Just a tick...",
+  "Sorting through the noise for you...",
+  "Hold that thought — I've got this.",
+  "Doing my thing...",
+  "Making it happen...",
+  "Rolling up my sleeves... figuratively.",
+  "Summoning the data spirits...",
+  "Poking around your systems — politely, of course.",
+  "Almost got it — no spoilers.",
+  "Working at the speed of Wi-Fi...",
+  "Shaking the data tree...",
+  "Let me take a quick peek...",
+  "Running faster than a deadline...",
+  "Dusting off the records...",
+  "I'm on the case like Sherlock on a Tuesday.",
+  "Processing — no elevator music, I promise.",
+  "Querying the universe... well, your inbox at least.",
+  "Hang tight — this is the fun part.",
+  "Flipping through the pages...",
+  "Wrangling the data for you...",
+  "One moment — genius at work.",
+  "Digging through the vault...",
+  "Doing what I do best...",
+  "Let me just... yep, working on it.",
+  "Tapping into the mainframe... okay, it's just an API.",
+  "Scanning the horizon...",
+  "Loading your answer — no buffering.",
+  "BRB — getting your info.",
+  "Working smarter, not harder... okay, both.",
+  "Give me a moment to shine...",
+  "Hunting that down for you...",
+  "Channeling my inner assistant...",
+  "Peeling back the layers...",
+  "Hold on, I'm in the zone...",
+  "Calibrating... just kidding, almost done.",
+  "Fetching — like a golden retriever, but digital.",
+  "Your answer is loading — skip ad in 0 seconds.",
+  "Doing some backstage magic...",
+  "Let me wave my digital wand...",
+  "Running through the maze of data...",
+  "Stand by — no standing required.",
+  "Cooking up your answer...",
+  "Sifting through the noise...",
+  "Chasing down the details...",
+  "Give me a heartbeat...",
+  "Plugging into the matrix...",
+  "Let me just double-check something...",
+  "Working on it — ETA: way less than your commute.",
+  "Paging through the records...",
+  "Going through the motions — the smart ones.",
+  "Hang on, inspiration just struck...",
+  "Locking in on your request...",
+  "Almost there — suspense is free of charge.",
+];
+
+let lastPhraseIndex = -1;
+function getWaitingPhrase() {
+  let idx;
+  do {
+    idx = Math.floor(Math.random() * WAITING_PHRASES.length);
+  } while (idx === lastPhraseIndex && WAITING_PHRASES.length > 1);
+  lastPhraseIndex = idx;
+  return WAITING_PHRASES[idx];
+}
+
+/**
+ * Generate a short waiting message for immediate user feedback.
  */
 function describeIntent(intent) {
   switch (intent.type) {
+    // Document operations keep specific messages (user needs to know what's happening)
     case "translate_docx":
-      return `Translating Word document to ${intent.language}...`;
     case "translate_pdf":
-      return `Translating PDF to ${intent.language}...`;
     case "translate_pptx":
-      return `Translating PowerPoint to ${intent.language}...`;
     case "translate_any":
-      return `Translating document to ${intent.language}...`;
+      return `Translating to ${intent.language}... ${getWaitingPhrase()}`;
     case "anonymize_pptx":
     case "anonymize_pdf":
     case "anonymize_docx":
     case "anonymize_any":
-      return `Anonymizing document...`;
+      return `Anonymizing document... ${getWaitingPhrase()}`;
     case "create_file":
-      return `Creating ${intent.format.toUpperCase()} file...`;
-    case "email_summarize_unread":
-      return `Checking your unread emails...`;
-    case "email_list_recent":
-      return `Fetching recent emails...`;
-    case "email_from_sender":
-      return `Searching emails from ${intent.sender}...`;
-    case "email_search":
-      return `Searching emails for "${intent.query}"...`;
-    case "email_action_needed":
-      return `Analyzing emails for action items...`;
-    case "email_briefing":
-      return `Preparing inbox briefing...`;
-    case "email_compose_new":
-      return `Drafting email...`;
-    case "email_draft_reply":
-      return `Drafting reply...`;
-    case "email_send_confirm":
-      return `Sending email...`;
-    case "email_archive":
-      return `Archiving email...`;
-    case "email_mark_read":
-      return `Marking emails as read...`;
-    case "email_flag":
-      return `Flagging email...`;
-    case "email_smart_query":
-      return `Checking your emails...`;
-    case "calendar_today":
-      return `Checking today's schedule...`;
-    case "calendar_tomorrow":
-      return `Checking tomorrow's schedule...`;
-    case "calendar_week":
-      return `Checking this week's schedule...`;
-    case "calendar_free_slots":
-      return `Finding free slots...`;
-    case "calendar_create":
-      return `Preparing meeting...`;
-    case "calendar_reschedule":
-      return `Rescheduling meeting...`;
-    case "calendar_cancel":
-      return `Processing cancellation...`;
-    case "calendar_accept":
-      return `Accepting meeting...`;
-    case "calendar_decline":
-      return `Declining meeting...`;
-    case "calendar_details":
-      return `Loading meeting details...`;
-    case "calendar_smart_query":
-      return `Checking your calendar...`;
-    case "calendar_confirm_create":
-      return `Creating meeting...`;
-    case "calendar_confirm_cancel":
-      return `Cancelling meeting...`;
-    case "sf_search_accounts":
-      return `Searching Salesforce accounts...`;
-    case "sf_account_details":
-      return `Loading account details...`;
-    case "sf_search_contacts":
-      return `Searching Salesforce contacts...`;
-    case "sf_opportunities":
-      return `Loading opportunities...`;
-    case "sf_activity":
-      return `Loading CRM activity...`;
-    case "sf_briefing":
-      return `Preparing customer briefing...`;
-    case "sf_global_search":
-      return `Searching CRM...`;
-    case "sf_smart_query":
-      return `Checking CRM data...`;
-    case "sp_search":
-      return `Searching documents...`;
-    case "sp_recent":
-      return `Loading recent documents...`;
-    case "sp_summarize":
-      return `Summarizing document...`;
-    case "sp_download":
-      return `Finding document...`;
-    case "sp_sites":
-      return `Searching SharePoint sites...`;
-    case "sp_smart_query":
-      return `Checking documents...`;
-    case "briefing_daily":
-      return `Preparing your morning briefing...`;
-    case "briefing_meeting":
-      return `Preparing meeting briefing...`;
-    case "briefing_customer":
-      return `Building customer context...`;
-    case "briefing_weekly":
-      return `Preparing weekly overview...`;
-    case "briefing_followups":
-      return `Checking follow-ups...`;
-    case "agent":
-      return `Thinking...`;
+      return `Creating your ${intent.format.toUpperCase()} file... ${getWaitingPhrase()}`;
+    // Everything else gets a random phrase
     default:
-      return null; // no confirmation needed for regular chat
+      return intent.type ? getWaitingPhrase() : null;
   }
 }
 
@@ -1533,7 +1571,7 @@ async function callOpenClaw(userId, userMessage, attempt = 1) {
   const OPUS = "claude-opus-4-20250514";
   const history = await getHistory(userId);
 
-  const fileNote = `You are an executive AI assistant and conversational orchestrator integrated with the user's calendar, email, and CRM.
+  const fileNote = `Your name is Juju. You are an executive AI assistant and conversational orchestrator integrated with the user's calendar, email, and CRM.
 
 DATA INTEGRITY — HIGHEST PRIORITY:
 - NEVER invent, guess, or fabricate enterprise data (emails, meetings, contacts, deals).
@@ -1549,6 +1587,11 @@ ORCHESTRATION RULES:
 - For cross-system requests (email + calendar + CRM + web), treat as first-class — combine data from all relevant sources
 - Order actions logically: find first, then analyze, then present
 - Report results per action clearly. Never ignore part of a multi-action request.
+
+IDENTITY:
+- You ALWAYS know your name is Juju. If asked "what's your name?" or "who are you?", answer confidently: "I'm Juju."
+- You remember everything discussed in this conversation. Use conversation history to answer follow-ups.
+- Resolve pronouns ("him", "her", "that", "it", "this") from conversation history — never ask "who?" if the answer is in recent messages.
 
 RESPONSE STYLE:
 - Be concise, operational, and easy to scan
