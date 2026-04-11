@@ -242,13 +242,16 @@ async function checkMeetingAlert(userId, rule, now) {
     return;
   }
 
-  console.log(`${LOG} Meeting alert check for ${userId}: ${events.length} events today, checking ${rule.minutes_before}min window`);
+  console.log(`${LOG} Meeting alert check for ${userId}: ${events.length} events today, checking ${rule.minutes_before}min window, server time=${now.toISOString()}`);
 
   const alertWindowMs = (rule.minutes_before || 30) * 60 * 1000;
 
   for (const event of events) {
     const startTime = new Date(event.start);
     const diff = startTime.getTime() - now.getTime();
+    const diffMin = Math.round(diff / 60000);
+
+    console.log(`${LOG}   Event "${event.subject}" start=${event.start} parsed=${startTime.toISOString()} diff=${diffMin}min inWindow=${diff > 0 && diff <= alertWindowMs}`);
 
     // Alert window: between 0 and alertWindowMs before the meeting
     // e.g., for 30min alert: fire when meeting is 0-30 min away
@@ -259,7 +262,10 @@ async function checkMeetingAlert(userId, rule, now) {
       // Check dedup lock — don't alert twice for same meeting
       try {
         const locked = await redis.get(lockKey);
-        if (locked) continue;
+        if (locked) {
+          console.log(`${LOG}   Skipped (already alerted): lockKey=${lockKey}`);
+          continue;
+        }
         await redis.set(lockKey, "1", { EX: 24 * 3600 }); // 24h TTL
       } catch {}
 
