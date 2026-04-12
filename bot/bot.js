@@ -294,40 +294,49 @@ async function initRedis() {
         sendCard: async (userJid, fallbackText, card, buttons) => {
           try {
             const contact = await sdk.contacts.getContactByJid(userJid);
-            const conv = await sdk.conversations.openConversationForContact(contact);
-            const cnxId = sdk?._core?._rest?.connectionS2SInfo?.id;
+            const peerId = contact?.id || contact?.userId;
+            const cnxId = s2sConnectionId || sdk?._core?._rest?.connectionS2SInfo?.id;
             const host = rainbowHost || "openrainbow.com";
-            const tkn = sdk?._core?._rest?.token;
-            if (cnxId && conv.dbId && tkn) {
-              // Send Adaptive Card + rainbow/suggest for web fallback
-              const payload = {
-                message: {
-                  subject: fallbackText.substring(0, 20) + "...",
-                  body: fallbackText,
-                  contents: [
-                    { type: "form/json", data: JSON.stringify(card) },
-                  ],
-                  lang: "en",
-                },
-              };
-              // Add suggest buttons for web client (renders as clickable chips)
-              if (buttons && buttons.length > 0) {
-                payload.message.alternativeContent = [
-                  { type: "rainbow/suggest", content: JSON.stringify(buttons.map(b => ({ title: b.title, value: b.value || b.title }))) },
-                ];
-              }
-              const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${conv.dbId}/messages`, {
+            const tkn = authToken || sdk?._core?._rest?.token;
+            if (cnxId && peerId && tkn) {
+              // Create S2S conversation (fresh, not cached)
+              const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations`, {
                 method: "POST",
                 headers: { "Authorization": `Bearer ${tkn}`, "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
+                body: JSON.stringify({ conversation: { peerId } }),
               });
-              if (resp.ok) {
-                console.log(`${LOG} Automation card sent OK via REST (with ${buttons?.length || 0} suggest buttons)`);
-                return;
+              const convData = await convResp.json();
+              const convId = convData?.data?.id || convData?.id;
+              if (convId) {
+                const payload = {
+                  message: {
+                    subject: fallbackText.substring(0, 20) + "...",
+                    body: fallbackText,
+                    contents: [
+                      { type: "form/json", data: JSON.stringify(card) },
+                    ],
+                    lang: "en",
+                  },
+                };
+                if (buttons && buttons.length > 0) {
+                  payload.message.alternativeContent = [
+                    { type: "rainbow/suggest", content: JSON.stringify(buttons.map(b => ({ title: b.title, value: b.value || b.title }))) },
+                  ];
+                }
+                const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${convId}/messages`, {
+                  method: "POST",
+                  headers: { "Authorization": `Bearer ${tkn}`, "Content-Type": "application/json" },
+                  body: JSON.stringify(payload),
+                });
+                if (resp.ok) {
+                  console.log(`${LOG} Automation card sent OK via REST (convId=${convId}, ${buttons?.length || 0} suggest buttons)`);
+                  return;
+                }
+                console.warn(`${LOG} Automation card REST failed: ${resp.status}`);
               }
-              console.warn(`${LOG} Automation card REST failed: ${resp.status}`);
             }
-            // Fallback to plain text with suggestions
+            // Fallback to SDK
+            const conv = await sdk.conversations.openConversationForContact(contact);
             const fallbackMsg = { message: { body: fallbackText, lang: "en" } };
             if (buttons && buttons.length > 0) {
               fallbackMsg.message.alternativeContent = [
@@ -3136,13 +3145,25 @@ app.get("/api/card-test-jid", async (req, res) => {
 
   try {
     const contact = await sdk.contacts.getContactByJid(jid);
-    const conv = await sdk.conversations.openConversationForContact(contact);
-    const cnxId = sdk?._core?._rest?.connectionS2SInfo?.id;
+    const peerId = contact?.id || contact?.userId;
+    const cnxId = s2sConnectionId || sdk?._core?._rest?.connectionS2SInfo?.id;
     const host = rainbowHost || "openrainbow.com";
-    const token = sdk?._core?._rest?.token;
+    const tkn = authToken || sdk?._core?._rest?.token;
 
-    if (!cnxId || !conv.dbId || !token) {
-      return res.json({ error: "SDK not ready", cnxId: !!cnxId, dbId: !!conv.dbId, token: !!token });
+    if (!cnxId || !peerId || !tkn) {
+      return res.json({ error: "SDK not ready", cnxId: !!cnxId, peerId, token: !!tkn });
+    }
+
+    // Create conversation via S2S REST API (not SDK cache)
+    const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${tkn}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ conversation: { peerId } }),
+    });
+    const convData = await convResp.json();
+    const convId = convData?.data?.id || convData?.id;
+    if (!convId) {
+      return res.json({ error: "Failed to create conversation", status: convResp.status, data: convData });
     }
 
     const card = cardsModule
@@ -3186,9 +3207,9 @@ app.get("/api/card-test-jid", async (req, res) => {
       },
     };
 
-    const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${conv.dbId}/messages`, {
+    const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${convId}/messages`, {
       method: "POST",
-      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: { "Authorization": `Bearer ${tkn}`, "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
