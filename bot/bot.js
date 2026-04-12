@@ -631,6 +631,74 @@ function buildMessage(text, suggestions) {
 }
 
 /**
+ * Build a rich message with Adaptive Card + suggest buttons fallback.
+ * Wraps the bot's text response in an Adaptive Card with TextBlock
+ * so it renders with proper formatting on all Rainbow clients.
+ */
+function buildRichMessage(text, suggestions) {
+  const cleanBody = stripMarkdown(text);
+
+  // Build Adaptive Card wrapping the response text
+  const card = {
+    type: "AdaptiveCard",
+    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+    version: "1.5",
+    body: [
+      {
+        type: "TextBlock",
+        text: text, // Adaptive Cards support markdown natively
+        wrap: true,
+        size: "Default",
+      },
+    ],
+  };
+
+  // Add suggest buttons as card actions if provided
+  if (suggestions && suggestions.length > 0) {
+    card.body.push({
+      type: "ActionSet",
+      actions: suggestions.map(s => ({
+        type: "Action.Submit",
+        title: s.title,
+        data: {
+          rainbow: {
+            type: "messageBack",
+            value: { response: s.value || s.title.toLowerCase() },
+            text: s.title,
+          },
+        },
+      })),
+    });
+  }
+
+  const msg = {
+    message: {
+      subject: cleanBody.substring(0, 20) + "...",
+      body: cleanBody,
+      contents: [
+        { type: "form/json", data: JSON.stringify(card) },
+      ],
+      lang: "en",
+    },
+  };
+
+  // Also add rainbow/suggest for web fallback
+  if (suggestions && suggestions.length > 0) {
+    msg.message.alternativeContent = [
+      {
+        type: "rainbow/suggest",
+        content: JSON.stringify(suggestions.map(s => ({
+          title: s.title,
+          value: s.value || s.title.toLowerCase(),
+        }))),
+      },
+    ];
+  }
+
+  return msg;
+}
+
+/**
  * Parse suggestion response from Rainbow.
  * When user clicks a suggestion, the message contains alternativeContent
  * with mimetype "rainbow/json" and the selected value.
@@ -4916,7 +4984,7 @@ async function start() {
               const resp = await fetch(msgUrl, {
                 method: "POST",
                 headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                body: JSON.stringify(buildMessage(responseText, suggestions)),
+                body: JSON.stringify(buildRichMessage(responseText, suggestions)),
               });
               if (resp.ok) {
                 sent = true;
@@ -4933,7 +5001,7 @@ async function start() {
           // Method 2: Use conversation.dbId via sdk.s2s.sendMessageInConversation
           if (!sent && conversation?.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
             try {
-              await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText, suggestions));
+              await sdk.s2s.sendMessageInConversation(conversation.dbId, buildRichMessage(responseText, suggestions));
               sent = true;
               console.log(`${LOG} Sent via sdk.s2s.sendMessageInConversation dbId=${conversation.dbId}`);
             } catch (err) {
@@ -4955,14 +5023,36 @@ async function start() {
             console.error(`${LOG} All bubble reply methods failed`);
           }
         } else {
-          // 1:1 reply via S2S or IM
-          if (conversation.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
-            await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText, suggestions));
-          } else {
+          // 1:1 reply — try Adaptive Card first, then plain text fallback
+          const richMsg = buildRichMessage(responseText, suggestions);
+          let sentReply = false;
+
+          // Method 1: sendAdaptiveCard (SDK internal REST — renders cards on all clients)
+          if (conversation && conversation.dbId) {
+            const cardPayload = JSON.parse(richMsg.message.contents[0].data);
+            sentReply = await sendAdaptiveCard(conversation.dbId, richMsg.message.body, cardPayload, conversation);
+          }
+
+          // Method 2: SDK s2s with full payload (card + suggest)
+          if (!sentReply && conversation.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
+            try {
+              await sdk.s2s.sendMessageInConversation(conversation.dbId, richMsg);
+              sentReply = true;
+            } catch {
+              // Method 3: plain text fallback
+              try {
+                await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText, suggestions));
+                sentReply = true;
+              } catch {}
+            }
+          }
+
+          // Method 4: IM fallback
+          if (!sentReply) {
             await sdk.im.sendMessageToConversation(conversation, responseText);
           }
           stats.replied++;
-          console.log(`${LOG} [${stats.replied}] Replied to ${fromName} (${responseText.length} chars)`);
+          console.log(`${LOG} [${stats.replied}] Replied to ${fromName} (${responseText.length} chars, rich=${sentReply})`);
         }
       // Mark bubble conversation as active so follow-ups get intent evaluation
       if (isBubble) {
