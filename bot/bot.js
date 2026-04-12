@@ -3177,24 +3177,51 @@ app.get("/api/card-test-jid", async (req, res) => {
       },
     };
 
-    // Method 1: Try sendAdaptiveCard (uses SDK internals)
-    let sent = await sendAdaptiveCard(conv.dbId, payload.message.body, card, conv);
+    const results = {};
 
-    // Method 2: Try SDK s2s.sendMessageInConversation with full payload
-    if (!sent) {
+    // Method 1: sendAdaptiveCard (SDK internal REST)
+    const m1 = await sendAdaptiveCard(conv.dbId, payload.message.body, card, conv);
+    results.method1_sendAdaptiveCard = m1 ? "OK" : "FAIL";
+
+    // Method 2: SDK s2s with full payload (contents + alternativeContent)
+    if (!m1) {
       try {
         await sdk.s2s.sendMessageInConversation(conv.dbId, payload);
-        sent = true;
+        results.method2_sdk_full = "OK";
       } catch (e) {
-        console.warn(`${LOG} [card-test] SDK send failed:`, e.message);
+        results.method2_sdk_full = `FAIL: ${e.message}`;
       }
     }
 
-    if (sent) {
-      res.json({ success: true, message: "Card sent! Check Rainbow." });
-    } else {
-      res.json({ error: "All send methods failed. Check Railway logs." });
+    // Method 3: Direct REST with s2sConnectionId (same path as normal messages)
+    if (!m1 && results.method2_sdk_full !== "OK") {
+      try {
+        const host = rainbowHost || "openrainbow.com";
+        const cnxId = s2sConnectionId;
+        const tkn = authToken;
+        // Get conversation ID from the S2S perspective
+        const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations`, {
+          headers: { "Authorization": `Bearer ${tkn}` },
+        });
+        const convList = await convResp.json();
+        const userConv = (convList?.data || []).find(c => c.peer === contact.id);
+        if (userConv) {
+          const msgResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${userConv.id}/messages`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${tkn}`, "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          results.method3_rest = msgResp.ok ? "OK" : `FAIL: ${msgResp.status} ${(await msgResp.text()).substring(0, 200)}`;
+        } else {
+          results.method3_rest = `FAIL: no conversation found for peer ${contact.id} in ${(convList?.data || []).length} conversations`;
+        }
+      } catch (e) {
+        results.method3_rest = `FAIL: ${e.message}`;
+      }
     }
+
+    console.log(`${LOG} [card-test] Results: ${JSON.stringify(results)}`);
+    res.json({ success: Object.values(results).some(v => v === "OK"), results, convDbId: conv.dbId });
   } catch (e) {
     res.json({ error: e.message });
   }
