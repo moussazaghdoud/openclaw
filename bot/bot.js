@@ -5190,9 +5190,7 @@ async function start() {
               const allButtons = [];
               if (companyNames && companyNames.length > 0) {
                 companyNames.slice(0, 5).forEach((name, i) => {
-                  // Short numbered label that fits in suggest chips
-                  const shortName = name.length > 12 ? name.substring(0, 10) + "…" : name;
-                  allButtons.push({ title: `${i + 1}. ${shortName}`, value: `search web for latest news about ${name}` });
+                  allButtons.push({ title: `🔍 ${name}`, value: `search web for latest news about ${name}` });
                 });
               }
               if (suggestions && suggestions.length > 0) {
@@ -5209,9 +5207,9 @@ async function start() {
                   body: [
                     {
                       type: "TextBlock",
-                      text: "👇 Quick actions:",
+                      text: "🔍 Lookup company — click to search latest news & intel:",
                       size: "Small",
-                      isSubtle: true,
+                      wrap: true,
                     },
                     // Each button as its own ActionSet = vertical stacking
                     ...allButtons.slice(0, 6).map(b => ({
