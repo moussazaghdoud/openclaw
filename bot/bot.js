@@ -303,7 +303,7 @@ async function initRedis() {
               const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations`, {
                 method: "POST",
                 headers: { "Authorization": `Bearer ${tkn}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ conversation: { peerId } }),
+                body: JSON.stringify({ conversation: { peer: peerId, type: "user" } }),
               });
               const convData = await convResp.json();
               const convId = convData?.data?.id || convData?.id;
@@ -3164,7 +3164,7 @@ app.get("/api/card-test-jid", async (req, res) => {
     const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations`, {
       method: "POST",
       headers: { "Authorization": `Bearer ${tkn}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation: { peerId } }),
+      body: JSON.stringify({ conversation: { peer: peerId, type: "user" } }),
     });
     const convData = await convResp.json();
     const convId = convData?.data?.id || convData?.id;
