@@ -698,7 +698,6 @@ async function sendAdaptiveCard(convId, text, card, conversation) {
       subject: fallback.substring(0, 20),
       body: fallback,
       contents: [
-        { type: "text/markdown", data: fallback },
         { type: "form/json", data: JSON.stringify(card) },
       ],
       lang: "en",
