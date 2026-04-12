@@ -4966,32 +4966,50 @@ async function start() {
           ];
         }
       }
-      // Smart suggestion detection — only on SHORT responses (under 600 chars)
-      if (!suggestions && responseText && responseText.length < 600) {
-        // Email-related response asking for next action
-        if (/would you like.*read|want me to.*reply|shall I.*forward|want.*details/i.test(responseText) &&
-            /email|message|thread/i.test(responseText)) {
-          suggestions = [
-            { title: "Read it", value: "read that email" },
-            { title: "Reply", value: "reply to that email" },
-            { title: "Archive", value: "archive it" },
-          ];
+      // Smart suggestion detection
+      if (!suggestions && responseText) {
+        // Priority 1: Detect numbered options (1. Option A, 2. Option B, etc.)
+        // These should become clickable buttons, NOT generic Yes/No
+        const numberedOptions = responseText.match(/^\s*(\d+)\.\s+(.+)$/gm);
+        if (numberedOptions && numberedOptions.length >= 2 && numberedOptions.length <= 6) {
+          suggestions = numberedOptions.map(line => {
+            const m = line.match(/^\s*\d+\.\s+(.+)$/);
+            if (m) {
+              const title = m[1].replace(/\*\*/g, "").trim().substring(0, 40);
+              return { title, value: title };
+            }
+            return null;
+          }).filter(Boolean);
         }
-        // Pipeline/deal response asking for next action
-        else if (/would you like.*details|want.*dive deeper|want.*more|shall I.*analyze/i.test(responseText) &&
-                 /deal|pipeline|opportunity|account/i.test(responseText)) {
-          suggestions = [
-            { title: "More details", value: "tell me more" },
-            { title: "Deals at risk", value: "deals at risk" },
-            { title: "Stale deals", value: "stale deals" },
-          ];
-        }
-        // Generic yes/no question
-        else if (/would you like|want me to|shall I|can I help/i.test(responseText)) {
-          suggestions = [
-            { title: "Yes", value: "yes" },
-            { title: "No thanks", value: "no thanks" },
-          ];
+
+        // Priority 2: Context-specific suggestions (only for short responses without numbered lists)
+        if (!suggestions && responseText.length < 600) {
+          // Email-related response asking for next action
+          if (/would you like.*read|want me to.*reply|shall I.*forward|want.*details/i.test(responseText) &&
+              /email|message|thread/i.test(responseText)) {
+            suggestions = [
+              { title: "Read it", value: "read that email" },
+              { title: "Reply", value: "reply to that email" },
+              { title: "Archive", value: "archive it" },
+            ];
+          }
+          // Pipeline/deal response asking for next action
+          else if (/would you like.*details|want.*dive deeper|want.*more|shall I.*analyze/i.test(responseText) &&
+                   /deal|pipeline|opportunity|account/i.test(responseText)) {
+            suggestions = [
+              { title: "More details", value: "tell me more" },
+              { title: "Deals at risk", value: "deals at risk" },
+              { title: "Stale deals", value: "stale deals" },
+            ];
+          }
+          // Generic yes/no — ONLY if no numbered options were found
+          else if (/would you like|want me to|shall I|can I help/i.test(responseText) &&
+                   !numberedOptions) {
+            suggestions = [
+              { title: "Yes", value: "yes" },
+              { title: "No thanks", value: "no thanks" },
+            ];
+          }
         }
       }
 
