@@ -5115,36 +5115,45 @@ async function start() {
             console.error(`${LOG} All bubble reply methods failed`);
           }
         } else {
-          // 1:1 reply — try Adaptive Card first, then plain text fallback
-          const richMsg = buildRichMessage(responseText, suggestions, companyNames);
+          // 1:1 reply — try Adaptive Card, then rich message, then plain text
           let sentReply = false;
 
           // Method 1: sendAdaptiveCard (SDK internal REST — renders cards on all clients)
-          if (conversation && conversation.dbId) {
-            const cardPayload = JSON.parse(richMsg.message.contents[0].data);
-            sentReply = await sendAdaptiveCard(conversation.dbId, richMsg.message.body, cardPayload, conversation);
+          try {
+            if (conversation && conversation.dbId) {
+              const richMsg = buildRichMessage(responseText, suggestions, companyNames);
+              const cardPayload = JSON.parse(richMsg.message.contents[0].data);
+              sentReply = await sendAdaptiveCard(conversation.dbId, richMsg.message.body, cardPayload, conversation);
+              if (sentReply) console.log(`${LOG} Sent via sendAdaptiveCard`);
+            }
+          } catch (e) {
+            console.warn(`${LOG} sendAdaptiveCard error:`, e.message);
           }
 
-          // Method 2: SDK s2s with full payload (card + suggest)
-          if (!sentReply && conversation.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
+          // Method 2: SDK s2s with plain text + suggestions (reliable fallback)
+          if (!sentReply && conversation?.dbId && sdk.s2s) {
             try {
-              await sdk.s2s.sendMessageInConversation(conversation.dbId, richMsg);
+              await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText, suggestions));
               sentReply = true;
-            } catch {
-              // Method 3: plain text fallback
-              try {
-                await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText, suggestions));
-                sentReply = true;
-              } catch {}
+              console.log(`${LOG} Sent via sdk.s2s plain text`);
+            } catch (e) {
+              console.warn(`${LOG} sdk.s2s send failed:`, e.message);
             }
           }
 
-          // Method 4: IM fallback
+          // Method 3: IM fallback
           if (!sentReply) {
-            await sdk.im.sendMessageToConversation(conversation, responseText);
+            try {
+              await sdk.im.sendMessageToConversation(conversation, responseText);
+              sentReply = true;
+              console.log(`${LOG} Sent via sdk.im fallback`);
+            } catch (e) {
+              console.error(`${LOG} ALL send methods failed:`, e.message);
+            }
           }
+
           stats.replied++;
-          console.log(`${LOG} [${stats.replied}] Replied to ${fromName} (${responseText.length} chars, rich=${sentReply})`);
+          console.log(`${LOG} [${stats.replied}] Replied to ${fromName} (${responseText.length} chars)`);
         }
       // Mark bubble conversation as active so follow-ups get intent evaluation
       if (isBubble) {
