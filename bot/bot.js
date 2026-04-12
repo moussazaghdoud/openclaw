@@ -5189,8 +5189,10 @@ async function start() {
             try {
               const allButtons = [];
               if (companyNames && companyNames.length > 0) {
-                companyNames.slice(0, 5).forEach(name => {
-                  allButtons.push({ title: `🔍 ${name.substring(0, 18)}`, value: `search web for latest news about ${name}` });
+                companyNames.slice(0, 5).forEach((name, i) => {
+                  // Short numbered label that fits in suggest chips
+                  const shortName = name.length > 12 ? name.substring(0, 10) + "…" : name;
+                  allButtons.push({ title: `${i + 1}. ${shortName}`, value: `search web for latest news about ${name}` });
                 });
               }
               if (suggestions && suggestions.length > 0) {
