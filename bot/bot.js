@@ -3145,13 +3145,19 @@ app.get("/api/card-test-jid", async (req, res) => {
 
   try {
     const contact = await sdk.contacts.getContactByJid(jid);
-    const peerId = contact?.id || contact?.userId;
+    const peerId = contact?.id || contact?.userId || contact?._id;
     const cnxId = s2sConnectionId || sdk?._core?._rest?.connectionS2SInfo?.id;
     const host = rainbowHost || "openrainbow.com";
     const tkn = authToken || sdk?._core?._rest?.token;
 
-    if (!cnxId || !peerId || !tkn) {
+    console.log(`${LOG} [card-test] contact keys: ${contact ? Object.keys(contact).join(",") : "null"}, id=${contact?.id}, userId=${contact?.userId}, _id=${contact?._id}`);
+
+    if (!cnxId || !tkn) {
       return res.json({ error: "SDK not ready", cnxId: !!cnxId, peerId, token: !!tkn });
+    }
+
+    if (!peerId) {
+      return res.json({ error: "Could not resolve peerId from contact", contactKeys: contact ? Object.keys(contact) : null });
     }
 
     // Create conversation via S2S REST API (not SDK cache)
