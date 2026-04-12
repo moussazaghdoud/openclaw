@@ -5076,7 +5076,7 @@ async function start() {
               const resp = await fetch(msgUrl, {
                 method: "POST",
                 headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                body: JSON.stringify(buildRichMessage(responseText, suggestions, companyNames)),
+                body: JSON.stringify(buildMessage(responseText, suggestions)),
               });
               if (resp.ok) {
                 sent = true;
@@ -5093,7 +5093,7 @@ async function start() {
           // Method 2: Use conversation.dbId via sdk.s2s.sendMessageInConversation
           if (!sent && conversation?.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
             try {
-              await sdk.s2s.sendMessageInConversation(conversation.dbId, buildRichMessage(responseText, suggestions, companyNames));
+              await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText, suggestions));
               sent = true;
               console.log(`${LOG} Sent via sdk.s2s.sendMessageInConversation dbId=${conversation.dbId}`);
             } catch (err) {
@@ -5115,38 +5115,37 @@ async function start() {
             console.error(`${LOG} All bubble reply methods failed`);
           }
         } else {
-          // 1:1 reply — try Adaptive Card, then rich message, then plain text
+          // 1:1 reply
+          // Use Adaptive Card ONLY when there are interactive elements (buttons/suggestions/company lookups)
+          // Plain text for everything else — reliable and fast
+          const hasInteractiveElements = (suggestions && suggestions.length > 0) || (companyNames && companyNames.length > 0);
           let sentReply = false;
 
-          // Method 1: sendAdaptiveCard (SDK internal REST — renders cards on all clients)
-          try {
-            if (conversation && conversation.dbId) {
+          if (hasInteractiveElements && conversation?.dbId) {
+            // Send as Adaptive Card with buttons
+            try {
               const richMsg = buildRichMessage(responseText, suggestions, companyNames);
               const cardPayload = JSON.parse(richMsg.message.contents[0].data);
               sentReply = await sendAdaptiveCard(conversation.dbId, richMsg.message.body, cardPayload, conversation);
-              if (sentReply) console.log(`${LOG} Sent via sendAdaptiveCard`);
+              if (sentReply) console.log(`${LOG} Sent as Adaptive Card (${suggestions?.length || 0} buttons, ${companyNames?.length || 0} lookups)`);
+            } catch (e) {
+              console.warn(`${LOG} Adaptive Card send error:`, e.message);
             }
-          } catch (e) {
-            console.warn(`${LOG} sendAdaptiveCard error:`, e.message);
           }
 
-          // Method 2: SDK s2s with plain text + suggestions (reliable fallback)
+          // Fallback: plain text (+ suggestions if any)
           if (!sentReply && conversation?.dbId && sdk.s2s) {
             try {
               await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText, suggestions));
               sentReply = true;
-              console.log(`${LOG} Sent via sdk.s2s plain text`);
             } catch (e) {
               console.warn(`${LOG} sdk.s2s send failed:`, e.message);
             }
           }
 
-          // Method 3: IM fallback
           if (!sentReply) {
             try {
               await sdk.im.sendMessageToConversation(conversation, responseText);
-              sentReply = true;
-              console.log(`${LOG} Sent via sdk.im fallback`);
             } catch (e) {
               console.error(`${LOG} ALL send methods failed:`, e.message);
             }
