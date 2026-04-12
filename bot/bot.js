@@ -5121,33 +5121,65 @@ async function start() {
           const hasInteractiveElements = (suggestions && suggestions.length > 0) || (companyNames && companyNames.length > 0);
           let sentReply = false;
 
-          if (hasInteractiveElements && conversation?.dbId) {
-            // Send as Adaptive Card with buttons
+          // Step 1: Send the text response (always plain text — reliable)
+          if (conversation?.dbId && sdk.s2s) {
             try {
-              const richMsg = buildRichMessage(responseText, suggestions, companyNames);
-              const cardPayload = JSON.parse(richMsg.message.contents[0].data);
-              sentReply = await sendAdaptiveCard(conversation.dbId, richMsg.message.body, cardPayload, conversation);
-              if (sentReply) console.log(`${LOG} Sent as Adaptive Card (${suggestions?.length || 0} buttons, ${companyNames?.length || 0} lookups)`);
-            } catch (e) {
-              console.warn(`${LOG} Adaptive Card send error:`, e.message);
-            }
-          }
-
-          // Fallback: plain text (+ suggestions if any)
-          if (!sentReply && conversation?.dbId && sdk.s2s) {
-            try {
-              await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText, suggestions));
+              await sdk.s2s.sendMessageInConversation(conversation.dbId, buildMessage(responseText));
               sentReply = true;
             } catch (e) {
               console.warn(`${LOG} sdk.s2s send failed:`, e.message);
             }
           }
-
           if (!sentReply) {
             try {
               await sdk.im.sendMessageToConversation(conversation, responseText);
+              sentReply = true;
             } catch (e) {
               console.error(`${LOG} ALL send methods failed:`, e.message);
+            }
+          }
+
+          // Step 2: Send buttons as a separate compact Adaptive Card
+          if (sentReply && hasInteractiveElements && conversation?.dbId) {
+            try {
+              const allButtons = [];
+              if (companyNames && companyNames.length > 0) {
+                companyNames.slice(0, 5).forEach(name => {
+                  allButtons.push({ title: `🔍 ${name.substring(0, 18)}`, value: `search web for latest news about ${name}` });
+                });
+              }
+              if (suggestions && suggestions.length > 0) {
+                suggestions.forEach(s => {
+                  allButtons.push({ title: s.title, value: s.value || s.title.toLowerCase() });
+                });
+              }
+              if (allButtons.length > 0) {
+                const buttonCard = {
+                  type: "AdaptiveCard",
+                  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                  version: "1.5",
+                  body: [{
+                    type: "ActionSet",
+                    actions: allButtons.map(b => ({
+                      type: "Action.Submit",
+                      title: b.title,
+                      data: { rainbow: { type: "messageBack", value: { response: b.value }, text: b.title } },
+                    })),
+                  }],
+                };
+                const cardSent = await sendAdaptiveCard(conversation.dbId, allButtons.map(b => b.title).join(" | "), buttonCard, conversation);
+                if (cardSent) {
+                  console.log(`${LOG} Buttons card sent (${allButtons.length} buttons)`);
+                } else {
+                  // Fallback: send buttons as suggest chips
+                  const suggestMsg = { message: { body: "⬆️", lang: "en", alternativeContent: [
+                    { type: "rainbow/suggest", content: JSON.stringify(allButtons.map(b => ({ title: b.title, value: b.value }))) },
+                  ]}};
+                  await sdk.s2s.sendMessageInConversation(conversation.dbId, suggestMsg).catch(() => {});
+                }
+              }
+            } catch (e) {
+              console.warn(`${LOG} Buttons card error:`, e.message);
             }
           }
 
