@@ -4722,6 +4722,49 @@ async function start() {
       }
 
       // ── Intent-driven processing: bot decides, AI generates content ──
+      // Handle "More..." button pagination
+      if (content === "juju:show_more_buttons" && redis && conversation?.dbId) {
+        try {
+          const stored = await redis.get(`buttons:${fromJid}`);
+          if (stored) {
+            await redis.del(`buttons:${fromJid}`);
+            const remaining = JSON.parse(stored);
+            const PAGE_SIZE = 3;
+            const page = remaining.slice(0, PAGE_SIZE);
+            const hasMore = remaining.length > PAGE_SIZE;
+            if (hasMore) {
+              const next = remaining.slice(PAGE_SIZE);
+              await redis.set(`buttons:${fromJid}`, JSON.stringify(next), { EX: 300 }).catch(() => {});
+              page.push({ title: `More... (${next.length})`, value: "juju:show_more_buttons" });
+            }
+            const buttonCard = {
+              type: "AdaptiveCard",
+              "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+              version: "1.5",
+              body: [
+                { type: "TextBlock", text: "👇 More actions:", size: "Small", isSubtle: true },
+                { type: "ActionSet", actions: page.map(b => ({
+                  type: "Action.Submit",
+                  title: (b.title || "").substring(0, 25),
+                  data: { rainbow: { type: "messageBack", value: { response: b.value }, text: b.title } },
+                }))},
+              ],
+            };
+            const sent = await sendAdaptiveCard(conversation.dbId, "More actions", buttonCard, conversation);
+            if (!sent) {
+              const suggestMsg = { message: { body: "👇 More actions:", lang: "en", alternativeContent: [
+                { type: "rainbow/suggest", content: JSON.stringify(page.map(b => ({ title: (b.title || "").substring(0, 20), value: b.value }))) },
+              ]}};
+              await sdk.s2s.sendMessageInConversation(conversation.dbId, suggestMsg).catch(() => {});
+            }
+            if (typingInterval) clearInterval(typingInterval);
+            return;
+          }
+        } catch (e) {
+          console.warn(`${LOG} More buttons error:`, e.message);
+        }
+      }
+
       let intent = detectIntent(content);
       if (!intent) intent = { type: "chat" };
       console.log(`${LOG} Intent: ${intent.type} for ${fromName}`);
@@ -5156,6 +5199,20 @@ async function start() {
                 });
               }
               if (allButtons.length > 0) {
+                // Paginate: show 3 buttons at a time + "More..." if needed
+                const PAGE_SIZE = 3;
+                const page = allButtons.slice(0, PAGE_SIZE);
+                const hasMore = allButtons.length > PAGE_SIZE;
+
+                if (hasMore) {
+                  // Store remaining buttons in Redis for "More..." pagination
+                  const moreButtons = allButtons.slice(PAGE_SIZE);
+                  if (redis) {
+                    await redis.set(`buttons:${fromJid}`, JSON.stringify(moreButtons), { EX: 300 }).catch(() => {}); // 5 min TTL
+                  }
+                  page.push({ title: `More... (${moreButtons.length})`, value: "juju:show_more_buttons" });
+                }
+
                 const buttonCard = {
                   type: "AdaptiveCard",
                   "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -5169,7 +5226,7 @@ async function start() {
                     },
                     {
                       type: "ActionSet",
-                      actions: allButtons.slice(0, 5).map(b => ({
+                      actions: page.map(b => ({
                         type: "Action.Submit",
                         title: b.title.substring(0, 25),
                         data: { rainbow: { type: "messageBack", value: { response: b.value }, text: b.title } },
@@ -5179,11 +5236,11 @@ async function start() {
                 };
                 const cardSent = await sendAdaptiveCard(conversation.dbId, "Quick actions", buttonCard, conversation);
                 if (cardSent) {
-                  console.log(`${LOG} Buttons card sent (${allButtons.length} buttons)`);
+                  console.log(`${LOG} Buttons card sent (${page.length} shown, ${allButtons.length} total)`);
                 } else {
-                  // Fallback: send buttons as suggest chips (shorter labels)
+                  // Fallback: suggest chips
                   const suggestMsg = { message: { body: "👇 Quick actions:", lang: "en", alternativeContent: [
-                    { type: "rainbow/suggest", content: JSON.stringify(allButtons.slice(0, 5).map(b => ({ title: b.title.substring(0, 20), value: b.value }))) },
+                    { type: "rainbow/suggest", content: JSON.stringify(page.map(b => ({ title: b.title.substring(0, 20), value: b.value }))) },
                   ]}};
                   await sdk.s2s.sendMessageInConversation(conversation.dbId, suggestMsg).catch(() => {});
                 }
