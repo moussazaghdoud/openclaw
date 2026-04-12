@@ -4730,7 +4730,9 @@ async function start() {
 
       // ── FAST PATH DETECTION — skip history for simple direct queries ──
       const lowerContent = (content || "").toLowerCase().trim();
-      const isSimpleQuery = /^(?:show|what(?:'s| is| are)|list|get|check|any)\s+(?:my\s+)?(?:meetings?|calendar|events?|schedule|agenda|unread|emails?|inbox|pipeline|deals?|opportunities)/i.test(lowerContent);
+      // Simple queries = single calendar/email lookup (fast, ~2s). CRM/pipeline queries are NOT simple (10-15s).
+      const isSimpleQuery = /^(?:show|what(?:'s| is| are)|list|get|check|any)\s+(?:my\s+)?(?:meetings?|calendar|events?|schedule|agenda|unread|emails?|inbox)/i.test(lowerContent)
+        && !/pipeline|deals?|opportunities|salesforce|crm|forecast|accounts?/i.test(lowerContent);
       const isFollowUp = /^(?:and\s+|also\s+|same\s+|do\s+both|what about|him|her|that|this|the\s+\w+\s+one)/i.test(lowerContent);
 
       // Force agent for email/calendar when available — bypass detectIntent result
