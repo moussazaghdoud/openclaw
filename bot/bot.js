@@ -294,56 +294,44 @@ async function initRedis() {
         sendCard: async (userJid, fallbackText, card, buttons) => {
           try {
             const contact = await sdk.contacts.getContactByJid(userJid);
-            const peerId = contact?.id || contact?.userId;
-            const cnxId = s2sConnectionId || sdk?._core?._rest?.connectionS2SInfo?.id;
-            const host = rainbowHost || "openrainbow.com";
-            const tkn = authToken || sdk?._core?._rest?.token;
-            if (cnxId && peerId && tkn) {
-              // Create S2S conversation (fresh, not cached)
-              const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations`, {
-                method: "POST",
-                headers: { "Authorization": `Bearer ${tkn}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ conversation: { peer: peerId, type: "user" } }),
-              });
-              const convData = await convResp.json();
-              const convId = convData?.data?.id || convData?.id;
-              if (convId) {
-                const payload = {
-                  message: {
-                    subject: fallbackText.substring(0, 20) + "...",
-                    body: fallbackText,
-                    contents: [
-                      { type: "form/json", data: JSON.stringify(card) },
-                    ],
-                    lang: "en",
-                  },
-                };
-                if (buttons && buttons.length > 0) {
-                  payload.message.alternativeContent = [
-                    { type: "rainbow/suggest", content: JSON.stringify(buttons.map(b => ({ title: b.title, value: b.value || b.title }))) },
-                  ];
-                }
-                const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${convId}/messages`, {
-                  method: "POST",
-                  headers: { "Authorization": `Bearer ${tkn}`, "Content-Type": "application/json" },
-                  body: JSON.stringify(payload),
-                });
-                if (resp.ok) {
-                  console.log(`${LOG} Automation card sent OK via REST (convId=${convId}, ${buttons?.length || 0} suggest buttons)`);
-                  return;
-                }
-                console.warn(`${LOG} Automation card REST failed: ${resp.status}`);
-              }
-            }
-            // Fallback to SDK
             const conv = await sdk.conversations.openConversationForContact(contact);
-            const fallbackMsg = { message: { body: fallbackText, lang: "en" } };
+            const payload = {
+              message: {
+                subject: fallbackText.substring(0, 20) + "...",
+                body: fallbackText,
+                contents: [
+                  { type: "form/json", data: JSON.stringify(card) },
+                ],
+                lang: "en",
+              },
+            };
             if (buttons && buttons.length > 0) {
-              fallbackMsg.message.alternativeContent = [
+              payload.message.alternativeContent = [
                 { type: "rainbow/suggest", content: JSON.stringify(buttons.map(b => ({ title: b.title, value: b.value || b.title }))) },
               ];
             }
-            await sdk.s2s.sendMessageInConversation(conv.dbId, fallbackMsg);
+            // Try Adaptive Card via SDK internals first
+            let sent = await sendAdaptiveCard(conv.dbId, fallbackText, card, conv);
+            if (!sent) {
+              // Fallback: send via SDK with full payload (card + suggest buttons)
+              try {
+                await sdk.s2s.sendMessageInConversation(conv.dbId, payload);
+                sent = true;
+              } catch {}
+            }
+            if (sent) {
+              console.log(`${LOG} Automation card sent (${buttons?.length || 0} suggest buttons)`);
+            } else {
+              // Last resort: plain text with suggest buttons
+              const fallbackMsg = { message: { body: fallbackText, lang: "en" } };
+              if (buttons && buttons.length > 0) {
+                fallbackMsg.message.alternativeContent = [
+                  { type: "rainbow/suggest", content: JSON.stringify(buttons.map(b => ({ title: b.title, value: b.value || b.title }))) },
+                ];
+              }
+              await sdk.s2s.sendMessageInConversation(conv.dbId, fallbackMsg);
+              console.log(`${LOG} Automation sent as text with suggest buttons`);
+            }
           } catch (e) {
             console.warn(`${LOG} Automation card send failed:`, e.message);
           }
@@ -3144,33 +3132,9 @@ app.get("/api/card-test-jid", async (req, res) => {
   if (!jid) return res.json({ error: "Missing jid parameter. Use your Rainbow JID." });
 
   try {
+    // Use SDK to open conversation (same method that works for normal messages)
     const contact = await sdk.contacts.getContactByJid(jid);
-    const peerId = contact?.id || contact?.userId || contact?._id;
-    const cnxId = s2sConnectionId || sdk?._core?._rest?.connectionS2SInfo?.id;
-    const host = rainbowHost || "openrainbow.com";
-    const tkn = authToken || sdk?._core?._rest?.token;
-
-    console.log(`${LOG} [card-test] contact keys: ${contact ? Object.keys(contact).join(",") : "null"}, id=${contact?.id}, userId=${contact?.userId}, _id=${contact?._id}`);
-
-    if (!cnxId || !tkn) {
-      return res.json({ error: "SDK not ready", cnxId: !!cnxId, peerId, token: !!tkn });
-    }
-
-    if (!peerId) {
-      return res.json({ error: "Could not resolve peerId from contact", contactKeys: contact ? Object.keys(contact) : null });
-    }
-
-    // Create conversation via S2S REST API (not SDK cache)
-    const convResp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${tkn}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation: { peer: peerId, type: "user" } }),
-    });
-    const convData = await convResp.json();
-    const convId = convData?.data?.id || convData?.id;
-    if (!convId) {
-      return res.json({ error: "Failed to create conversation", status: convResp.status, data: convData });
-    }
+    const conv = await sdk.conversations.openConversationForContact(contact);
 
     const card = cardsModule
       ? cardsModule.choices("Which area would you like to explore?", [
@@ -3213,17 +3177,23 @@ app.get("/api/card-test-jid", async (req, res) => {
       },
     };
 
-    const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${convId}/messages`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${tkn}`, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    // Method 1: Try sendAdaptiveCard (uses SDK internals)
+    let sent = await sendAdaptiveCard(conv.dbId, payload.message.body, card, conv);
 
-    if (resp.ok) {
+    // Method 2: Try SDK s2s.sendMessageInConversation with full payload
+    if (!sent) {
+      try {
+        await sdk.s2s.sendMessageInConversation(conv.dbId, payload);
+        sent = true;
+      } catch (e) {
+        console.warn(`${LOG} [card-test] SDK send failed:`, e.message);
+      }
+    }
+
+    if (sent) {
       res.json({ success: true, message: "Card sent! Check Rainbow." });
     } else {
-      const body = await resp.text();
-      res.json({ error: `Rainbow API returned ${resp.status}`, body: body.substring(0, 500) });
+      res.json({ error: "All send methods failed. Check Railway logs." });
     }
   } catch (e) {
     res.json({ error: e.message });
