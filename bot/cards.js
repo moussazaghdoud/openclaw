@@ -51,8 +51,16 @@ function openUrlButton(title, url) {
 
 // ── Message Payload Builder ─────────────────────────────
 
-function toPayload(fallbackText, card) {
-  return {
+/**
+ * Build a full Rainbow message payload with:
+ * - Adaptive Card (for iOS/Android/desktop Rainbow apps)
+ * - rainbow/suggest buttons (for web client fallback)
+ * - Plain text body (for clients that support neither)
+ *
+ * buttons: [{ title: "Option A", value: "option_a" }] — optional suggest buttons for web
+ */
+function toPayload(fallbackText, card, buttons) {
+  const msg = {
     message: {
       subject: fallbackText.substring(0, 20) + "...",
       body: fallbackText,
@@ -62,6 +70,19 @@ function toPayload(fallbackText, card) {
       lang: "en",
     },
   };
+
+  // Add rainbow/suggest for web client (renders as clickable chips)
+  if (buttons && buttons.length > 0) {
+    const suggestData = buttons.map(b => ({
+      title: b.title,
+      value: b.value || b.title,
+    }));
+    msg.message.alternativeContent = [
+      { type: "rainbow/suggest", content: JSON.stringify(suggestData) },
+    ];
+  }
+
+  return msg;
 }
 
 // ── Card Templates ──────────────────────────────────────
@@ -90,7 +111,11 @@ function confirmation(question, details, yesLabel = "Yes", noLabel = "No") {
     ],
   });
 
-  return { card: shell(body), fallback: question };
+  const buttons = [
+    { title: yesLabel, value: "yes" },
+    { title: noLabel, value: "no" },
+  ];
+  return { card: shell(body), fallback: question, buttons };
 }
 
 /**
@@ -105,7 +130,8 @@ function choices(question, options) {
       actions: options.map(c => submitButton(c.title, c.value || c.title)),
     },
   ];
-  return { card: shell(body), fallback: question };
+  const buttons = options.map(c => ({ title: c.title, value: c.value || c.title }));
+  return { card: shell(body), fallback: question, buttons };
 }
 
 /**
@@ -170,7 +196,11 @@ function meetingAlert({ subject, startTime, endTime, location, organizer, attend
   actions.push(submitButton("Snooze 10 min", "snooze:10"));
   actions.push(submitButton("Dismiss", "dismiss"));
 
-  return { card: shell(cardBody, actions), fallback: `⏰ Meeting in ${minutesLeft} min: ${subject}` };
+  const buttons = [];
+  if (onlineMeetingUrl) buttons.push({ title: "Join Meeting", value: onlineMeetingUrl });
+  buttons.push({ title: "Snooze 10 min", value: "snooze:10" });
+  buttons.push({ title: "Dismiss", value: "dismiss" });
+  return { card: shell(cardBody, actions), fallback: `⏰ Meeting in ${minutesLeft} min: ${subject}`, buttons };
 }
 
 /**
@@ -198,7 +228,11 @@ function reminder(message, ruleId) {
     submitButton("Snooze 30 min", "reminder:snooze:30:" + (ruleId || "")),
   ];
 
-  return { card: shell(body, actions), fallback: `🔔 Reminder: ${message}` };
+  const buttons = [
+    { title: "Done", value: "reminder:done:" + (ruleId || "") },
+    { title: "Snooze 30 min", value: "reminder:snooze:30:" + (ruleId || "") },
+  ];
+  return { card: shell(body, actions), fallback: `🔔 Reminder: ${message}`, buttons };
 }
 
 /**
@@ -229,7 +263,12 @@ function emailDraft({ to, subject, bodyPreview, action = "send" }) {
     ],
   });
 
-  return { card: shell(body), fallback: `📧 Draft to ${to}: ${subject}` };
+  const buttons = [
+    { title: "Send", value: "yes" },
+    { title: "Cancel", value: "no" },
+    { title: "Edit", value: "edit" },
+  ];
+  return { card: shell(body), fallback: `📧 Draft to ${to}: ${subject}`, buttons };
 }
 
 /**
@@ -256,7 +295,11 @@ function crmConfirmation({ action, dealName, changes }) {
     ],
   });
 
-  return { card: shell(body), fallback: `${action}: ${dealName}` };
+  const buttons = [
+    { title: "Confirm", value: "yes" },
+    { title: "Cancel", value: "no" },
+  ];
+  return { card: shell(body), fallback: `${action}: ${dealName}`, buttons };
 }
 
 /**
@@ -288,7 +331,11 @@ function calendarConfirmation({ action, subject, date, time, location, attendees
     ],
   });
 
-  return { card: shell(body), fallback: `${action}: ${subject}` };
+  const buttons = [
+    { title: "Confirm", value: "yes" },
+    { title: "Cancel", value: "no" },
+  ];
+  return { card: shell(body), fallback: `${action}: ${subject}`, buttons };
 }
 
 /**

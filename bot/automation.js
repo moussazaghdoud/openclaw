@@ -318,7 +318,7 @@ async function checkMeetingAlert(userId, rule, now) {
       // Send as Adaptive Card (with fallback text)
       if (sendCardFn) {
         try {
-          await sendCardFn(userId, alertCard.fallback, alertCard.card);
+          await sendCardFn(userId, alertCard.fallback, alertCard.card, alertCard.buttons);
           console.log(`${LOG} Meeting alert card sent to ${userId}: "${event.subject}" in ${minutesLeft}min`);
         } catch (e) {
           console.warn(`${LOG} Card send failed, falling back to text:`, e.message);
@@ -361,7 +361,7 @@ async function checkReminder(userId, rule, now) {
     const reminderCard = cards.reminder(rule.message || rule.description, rule.id);
     if (sendCardFn) {
       try {
-        await sendCardFn(userId, reminderCard.fallback, reminderCard.card);
+        await sendCardFn(userId, reminderCard.fallback, reminderCard.card, reminderCard.buttons);
         console.log(`${LOG} Reminder card sent to ${userId}: "${rule.message || rule.description}"`);
       } catch (e) {
         if (sendMessageFn) await sendMessageFn(userId, reminderCard.fallback).catch(() => {});

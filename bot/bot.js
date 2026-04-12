@@ -291,15 +291,15 @@ async function initRedis() {
             console.warn(`${LOG} Automation send failed:`, e.message);
           }
         },
-        sendCard: async (userJid, fallbackText, card) => {
+        sendCard: async (userJid, fallbackText, card, buttons) => {
           try {
             const contact = await sdk.contacts.getContactByJid(userJid);
             const conv = await sdk.conversations.openConversationForContact(contact);
             const cnxId = sdk?._core?._rest?.connectionS2SInfo?.id;
             const host = rainbowHost || "openrainbow.com";
-            const token = sdk?._core?._rest?.token;
-            if (cnxId && conv.dbId && token) {
-              // Send Adaptive Card via direct REST (most reliable)
+            const tkn = sdk?._core?._rest?.token;
+            if (cnxId && conv.dbId && tkn) {
+              // Send Adaptive Card + rainbow/suggest for web fallback
               const payload = {
                 message: {
                   subject: fallbackText.substring(0, 20) + "...",
@@ -310,19 +310,31 @@ async function initRedis() {
                   lang: "en",
                 },
               };
+              // Add suggest buttons for web client (renders as clickable chips)
+              if (buttons && buttons.length > 0) {
+                payload.message.alternativeContent = [
+                  { type: "rainbow/suggest", content: JSON.stringify(buttons.map(b => ({ title: b.title, value: b.value || b.title }))) },
+                ];
+              }
               const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${cnxId}/conversations/${conv.dbId}/messages`, {
                 method: "POST",
-                headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+                headers: { "Authorization": `Bearer ${tkn}`, "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
               });
               if (resp.ok) {
-                console.log(`${LOG} Automation card sent OK via REST`);
+                console.log(`${LOG} Automation card sent OK via REST (with ${buttons?.length || 0} suggest buttons)`);
                 return;
               }
               console.warn(`${LOG} Automation card REST failed: ${resp.status}`);
             }
-            // Fallback to plain text
-            await sdk.s2s.sendMessageInConversation(conv.dbId, { message: { body: fallbackText, lang: "en" } });
+            // Fallback to plain text with suggestions
+            const fallbackMsg = { message: { body: fallbackText, lang: "en" } };
+            if (buttons && buttons.length > 0) {
+              fallbackMsg.message.alternativeContent = [
+                { type: "rainbow/suggest", content: JSON.stringify(buttons.map(b => ({ title: b.title, value: b.value || b.title }))) },
+              ];
+            }
+            await sdk.s2s.sendMessageInConversation(conv.dbId, fallbackMsg);
           } catch (e) {
             console.warn(`${LOG} Automation card send failed:`, e.message);
           }
@@ -3153,12 +3165,22 @@ app.get("/api/card-test-jid", async (req, res) => {
           ],
         };
 
+    // Suggest buttons for web client fallback
+    const suggestButtons = [
+      { title: "📧 Email Summary", value: "show my email summary" },
+      { title: "📅 Today's Meetings", value: "show my meetings today" },
+      { title: "📊 Sales Pipeline", value: "show my pipeline" },
+    ];
+
     const payload = {
       message: {
         subject: "Choose an option",
         body: "Which area would you like to explore? 1) Email Summary 2) Today's Meetings 3) Sales Pipeline",
         contents: [
           { type: "form/json", data: JSON.stringify(card) },
+        ],
+        alternativeContent: [
+          { type: "rainbow/suggest", content: JSON.stringify(suggestButtons) },
         ],
         lang: "en",
       },
