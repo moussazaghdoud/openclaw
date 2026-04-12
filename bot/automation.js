@@ -264,15 +264,19 @@ async function checkMeetingAlert(userId, rule, now) {
 
   const alertWindowMs = (rule.minutes_before || 30) * 60 * 1000;
 
-  // Log summary of upcoming events every poll
-  const upcoming = events.map(e => {
-    const s = new Date(e.start);
-    const d = Math.round((s.getTime() - now.getTime()) / 60000);
-    return `"${e.subject}" in ${d}min`;
-  }).join(", ");
-  console.log(`${LOG} ${userId.substring(0, 8)}: ${events.length} events [${upcoming}]`);
+  // Filter to only future events — no point processing past ones
+  const futureEvents = events.filter(e => new Date(e.end).getTime() > now.getTime());
 
-  for (const event of events) {
+  // Only log when there are upcoming events worth mentioning
+  if (futureEvents.length > 0) {
+    const upcoming = futureEvents.map(e => {
+      const d = Math.round((new Date(e.start).getTime() - now.getTime()) / 60000);
+      return `"${e.subject}" in ${d}min`;
+    }).join(", ");
+    console.log(`${LOG} ${userId.substring(0, 8)}: ${futureEvents.length} upcoming [${upcoming}]`);
+  }
+
+  for (const event of futureEvents) {
     const startTime = new Date(event.start);
     const diff = startTime.getTime() - now.getTime();
     const diffMin = Math.round(diff / 60000);
