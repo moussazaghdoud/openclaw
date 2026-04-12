@@ -5211,20 +5211,14 @@ async function start() {
                       size: "Small",
                       wrap: true,
                     },
-                    // Clickable containers with small text — looks like compact buttons
+                    // Each button as its own ActionSet = vertical stacking with blue background
                     ...allButtons.slice(0, 6).map(b => ({
-                      type: "Container",
+                      type: "ActionSet",
                       spacing: "Small",
-                      style: "emphasis",
-                      selectAction: {
+                      actions: [{
                         type: "Action.Submit",
+                        title: b.title,
                         data: { rainbow: { type: "messageBack", value: { response: b.value }, text: b.title } },
-                      },
-                      items: [{
-                        type: "TextBlock",
-                        text: b.title,
-                        size: "Small",
-                        horizontalAlignment: "Left",
                       }],
                     })),
                   ],
