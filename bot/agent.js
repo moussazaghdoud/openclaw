@@ -1387,6 +1387,14 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
           tool_use_id: block.id,
           content: JSON.stringify(result).substring(0, 15000),
         });
+
+        // Store CRM tool results in trace for card building (account names, etc.)
+        const crmTools = ["list_opportunities", "search_crm", "get_account_details", "analyze_pipeline",
+          "get_deal_risks", "get_stale_deals", "get_pipeline_summary", "get_ghost_deals", "get_deals_by_owner"];
+        if (crmTools.includes(block.name) && result) {
+          if (!trace.toolResults) trace.toolResults = [];
+          trace.toolResults.push(result);
+        }
       }
 
       // Add tool results

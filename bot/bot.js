@@ -635,7 +635,7 @@ function buildMessage(text, suggestions) {
  * Wraps the bot's text response in an Adaptive Card with TextBlock
  * so it renders with proper formatting on all Rainbow clients.
  */
-function buildRichMessage(text, suggestions) {
+function buildRichMessage(text, suggestions, companyNames) {
   const cleanBody = stripMarkdown(text);
 
   // Build Adaptive Card wrapping the response text
@@ -648,10 +648,29 @@ function buildRichMessage(text, suggestions) {
         type: "TextBlock",
         text: text, // Adaptive Cards support markdown natively
         wrap: true,
-        size: "Default",
+        size: "Small",
       },
     ],
   };
+
+  // Add company lookup buttons if CRM data was returned
+  if (companyNames && companyNames.length > 0) {
+    const lookupActions = companyNames.slice(0, 5).map(name => ({
+      type: "Action.Submit",
+      title: `🔍 ${name}`,
+      data: {
+        rainbow: {
+          type: "messageBack",
+          value: { response: `search web for latest news about ${name}` },
+          text: `🔍 Lookup ${name}`,
+        },
+      },
+    }));
+    card.body.push({
+      type: "ActionSet",
+      actions: lookupActions,
+    });
+  }
 
   // Add suggest buttons as card actions if provided
   if (suggestions && suggestions.length > 0) {
@@ -682,15 +701,23 @@ function buildRichMessage(text, suggestions) {
     },
   };
 
-  // Also add rainbow/suggest for web fallback
+  // Also add rainbow/suggest for web fallback (company lookups + suggestions)
+  const allButtons = [];
+  if (companyNames && companyNames.length > 0) {
+    companyNames.slice(0, 5).forEach(name => {
+      allButtons.push({ title: `🔍 ${name}`, value: `search web for latest news about ${name}` });
+    });
+  }
   if (suggestions && suggestions.length > 0) {
+    suggestions.forEach(s => {
+      allButtons.push({ title: s.title, value: s.value || s.title.toLowerCase() });
+    });
+  }
+  if (allButtons.length > 0) {
     msg.message.alternativeContent = [
       {
         type: "rainbow/suggest",
-        content: JSON.stringify(suggestions.map(s => ({
-          title: s.title,
-          value: s.value || s.title.toLowerCase(),
-        }))),
+        content: JSON.stringify(allButtons),
       },
     ];
   }
@@ -4968,6 +4995,51 @@ async function start() {
         }
       }
 
+      // Extract company/account names from agent trace for lookup buttons
+      let companyNames = [];
+      if (agent) {
+        try {
+          const trace = agent.getLastRunTrace();
+          if (trace && trace.toolResults) {
+            for (const tr of trace.toolResults) {
+              // Extract account names from CRM tool results
+              if (tr.opportunities || tr.events) {
+                const opps = tr.opportunities || tr.events || [];
+                for (const opp of opps) {
+                  const name = opp.accountName || opp.account || opp.company;
+                  if (name && !companyNames.includes(name)) companyNames.push(name);
+                }
+              }
+              if (tr.account_name) {
+                if (!companyNames.includes(tr.account_name)) companyNames.push(tr.account_name);
+              }
+            }
+          }
+          // Fallback: extract company names from response text if CRM tools were used
+          if (companyNames.length === 0 && trace && trace.tools) {
+            const crmTools = ["list_opportunities", "search_crm", "get_account_details", "analyze_pipeline",
+              "get_deal_risks", "get_stale_deals", "get_pipeline_summary", "get_ghost_deals", "get_deals_by_owner"];
+            const usedCrm = trace.tools.some(t => crmTools.includes(t));
+            if (usedCrm && responseText) {
+              // Extract company-like names: capitalized multi-word names or names after common patterns
+              const patterns = [
+                /(?:account|company|customer|client|deal with|opportunity at)\s*:?\s*\*?\*?([A-Z][A-Za-z\s&.-]{2,30})/g,
+                /(?:^|\n)\d+\.\s+\*?\*?([A-Z][A-Za-z\s&.-]{2,30}?)\*?\*?\s*[—–-]/gm,
+              ];
+              for (const pat of patterns) {
+                let m;
+                while ((m = pat.exec(responseText)) !== null) {
+                  const name = m[1].trim().replace(/\*+$/, "").trim();
+                  if (name.length > 2 && !companyNames.includes(name) && !/^(Deal|Issue|Action|Risk|Stage|Close|High|Medium|Low|None|Total)$/i.test(name)) {
+                    companyNames.push(name);
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+
       // Send response back
       try {
         let sent = false;
@@ -4984,7 +5056,7 @@ async function start() {
               const resp = await fetch(msgUrl, {
                 method: "POST",
                 headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                body: JSON.stringify(buildRichMessage(responseText, suggestions)),
+                body: JSON.stringify(buildRichMessage(responseText, suggestions, companyNames)),
               });
               if (resp.ok) {
                 sent = true;
@@ -5001,7 +5073,7 @@ async function start() {
           // Method 2: Use conversation.dbId via sdk.s2s.sendMessageInConversation
           if (!sent && conversation?.dbId && sdk.s2s && typeof sdk.s2s.sendMessageInConversation === "function") {
             try {
-              await sdk.s2s.sendMessageInConversation(conversation.dbId, buildRichMessage(responseText, suggestions));
+              await sdk.s2s.sendMessageInConversation(conversation.dbId, buildRichMessage(responseText, suggestions, companyNames));
               sent = true;
               console.log(`${LOG} Sent via sdk.s2s.sendMessageInConversation dbId=${conversation.dbId}`);
             } catch (err) {
@@ -5024,7 +5096,7 @@ async function start() {
           }
         } else {
           // 1:1 reply — try Adaptive Card first, then plain text fallback
-          const richMsg = buildRichMessage(responseText, suggestions);
+          const richMsg = buildRichMessage(responseText, suggestions, companyNames);
           let sentReply = false;
 
           // Method 1: sendAdaptiveCard (SDK internal REST — renders cards on all clients)
