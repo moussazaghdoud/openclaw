@@ -106,8 +106,13 @@ async function getEmailById(token, messageId) {
   const params = new URLSearchParams({
     $select: "id,subject,from,toRecipients,ccRecipients,receivedDateTime,body,bodyPreview,isRead,importance,hasAttachments,conversationId,flag",
   });
-  const resp = await graphFetch(token, `/me/messages/${messageId}?${params}`);
-  if (!resp) return null;
+  let resp = await graphFetch(token, `/me/messages/${messageId}?${params}`);
+  // Retry once after 3s if email not found (may still be syncing)
+  if (!resp || resp._error) {
+    await new Promise(r => setTimeout(r, 3000));
+    resp = await graphFetch(token, `/me/messages/${messageId}?${params}`);
+  }
+  if (!resp || resp._error) return null;
   return normalizeEmail(resp, true);
 }
 
