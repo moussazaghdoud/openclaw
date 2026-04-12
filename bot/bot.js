@@ -5160,22 +5160,30 @@ async function start() {
                   type: "AdaptiveCard",
                   "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                   version: "1.5",
-                  body: [{
-                    type: "ActionSet",
-                    actions: allButtons.map(b => ({
-                      type: "Action.Submit",
-                      title: b.title,
-                      data: { rainbow: { type: "messageBack", value: { response: b.value }, text: b.title } },
-                    })),
-                  }],
+                  body: [
+                    {
+                      type: "TextBlock",
+                      text: "👇 Quick actions:",
+                      size: "Small",
+                      isSubtle: true,
+                    },
+                    {
+                      type: "ActionSet",
+                      actions: allButtons.slice(0, 5).map(b => ({
+                        type: "Action.Submit",
+                        title: b.title.substring(0, 25),
+                        data: { rainbow: { type: "messageBack", value: { response: b.value }, text: b.title } },
+                      })),
+                    },
+                  ],
                 };
-                const cardSent = await sendAdaptiveCard(conversation.dbId, allButtons.map(b => b.title).join(" | "), buttonCard, conversation);
+                const cardSent = await sendAdaptiveCard(conversation.dbId, "Quick actions", buttonCard, conversation);
                 if (cardSent) {
                   console.log(`${LOG} Buttons card sent (${allButtons.length} buttons)`);
                 } else {
-                  // Fallback: send buttons as suggest chips
-                  const suggestMsg = { message: { body: "⬆️", lang: "en", alternativeContent: [
-                    { type: "rainbow/suggest", content: JSON.stringify(allButtons.map(b => ({ title: b.title, value: b.value }))) },
+                  // Fallback: send buttons as suggest chips (shorter labels)
+                  const suggestMsg = { message: { body: "👇 Quick actions:", lang: "en", alternativeContent: [
+                    { type: "rainbow/suggest", content: JSON.stringify(allButtons.slice(0, 5).map(b => ({ title: b.title.substring(0, 20), value: b.value }))) },
                   ]}};
                   await sdk.s2s.sendMessageInConversation(conversation.dbId, suggestMsg).catch(() => {});
                 }
