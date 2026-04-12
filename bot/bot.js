@@ -4972,11 +4972,13 @@ async function start() {
         // These should become clickable buttons, NOT generic Yes/No
         const numberedOptions = responseText.match(/^\s*(\d+)\.\s+(.+)$/gm);
         if (numberedOptions && numberedOptions.length >= 2 && numberedOptions.length <= 6) {
-          suggestions = numberedOptions.map(line => {
-            const m = line.match(/^\s*\d+\.\s+(.+)$/);
+          suggestions = numberedOptions.map((line, i) => {
+            const m = line.match(/^\s*(\d+)\.\s+(.+)$/);
             if (m) {
-              const title = m[1].replace(/\*\*/g, "").trim().substring(0, 40);
-              return { title, value: title };
+              const fullText = m[2].replace(/\*\*/g, "").trim();
+              // Short label for suggest chips (max 20 chars), full text as value
+              const shortTitle = fullText.length > 20 ? fullText.substring(0, 18) + "…" : fullText;
+              return { title: `${m[1]}. ${shortTitle}`, value: fullText };
             }
             return null;
           }).filter(Boolean);
