@@ -1134,7 +1134,7 @@ async function run(userId, userMessage, conversationHistory = [], onProgress = n
 
   const hasSalesTools = salesAgentModule && salesAgentModule.isAvailable();
   const currentTime = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Europe/Paris" });
-  const systemPrompt = `Your name is Juju. You are an executive AI assistant and conversational orchestrator with access to email, calendar${hasSalesTools ? ", and sales pipeline" : ""} tools. Today is ${today}. Current time: ${currentTime} (Europe/Paris).
+  let systemPrompt = `Your name is Juju. You are an executive AI assistant and conversational orchestrator with access to email, calendar${hasSalesTools ? ", and sales pipeline" : ""} tools. Today is ${today}. Current time: ${currentTime} (Europe/Paris).
 
 DATE REFERENCE (use these, NEVER calculate dates yourself):
 ${dateRef.join("\n")}
