@@ -1239,8 +1239,17 @@ RESPONSE FORMAT:
    → Issue: no meeting scheduled
    → Action: secure closing call immediately
 
+QUERY STRATEGY:
+- "Opportunities in France/Germany/etc.": Use list_opportunities to get ALL deals, then filter by account name or country in your response. Do NOT use search_crm with a country name — it searches account names, not opportunities.
+- "Biggest deals": Use list_opportunities, sort by amount in your analysis.
+- "Deals from [person]": Use get_deals_by_owner.
+- "Info about [company]": Use get_account_details.
+- "Find [keyword]": Use search_crm for text search across accounts, contacts, opportunities.
+
 CRM TOOLS AVAILABLE:
-- list_opportunities, search_crm, get_account_details, get_opportunity_details
+- list_opportunities: Lists ALL opportunities. USE THIS for any "deals", "opportunities", "pipeline" query. Filter/analyze in your response.
+- search_crm: Text search across accounts, contacts, opportunities. USE for name/keyword lookups, NOT for country filtering.
+- get_account_details, get_opportunity_details
 - analyze_pipeline, get_deal_risks, get_stale_deals, get_missing_next_steps, get_pipeline_summary, get_ghost_deals, get_deals_by_owner
 - update_opportunity, create_task, log_activity, close_deal (write ops REQUIRE user confirmation)
 - get_forecast, set_quota, get_competitors, add_competitor, search_deals_by_competitor
