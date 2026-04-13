@@ -1351,6 +1351,12 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
       if (!response.ok) {
         const errBody = await response.text().catch(() => "");
         console.error(`${LOG} Anthropic API ${response.status}: ${errBody.substring(0, 300)}`);
+        // Retry once on 529 (overloaded) after 2s
+        if (response.status === 529 && loop === 0) {
+          console.log(`${LOG} Retrying after 529 overloaded (2s delay)...`);
+          await new Promise(r => setTimeout(r, 2000));
+          continue; // retry this loop
+        }
         trace.error = `API ${response.status}: ${errBody.substring(0, 200)}`;
         return null;
       }

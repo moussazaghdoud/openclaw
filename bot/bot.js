@@ -4870,16 +4870,15 @@ async function start() {
           };
 
           // Send patience message for ALL agent queries
-          // Send patience messages for complex queries (CRM, pipeline, etc.)
+          // Send ONE patience message for complex queries, second after 8s
           if (!isSimpleQuery) {
             await sendPatienceMsg(getWaitingPhrase());
-            // Schedule follow-up messages at 5s and 10s intervals
-            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 5000));
-            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 10000));
+            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 8000));
           }
 
+          // Don't send progress callback — patience messages already cover it
           const agentResult = await Promise.race([
-            agent.run(fromJid, content, history, isSimpleQuery ? null : sendProgress),
+            agent.run(fromJid, content, history),
             new Promise(r => setTimeout(() => r(null), 25000)), // 25s hard timeout
           ]);
 
