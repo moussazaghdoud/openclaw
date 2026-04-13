@@ -4821,17 +4821,26 @@ async function start() {
           const sendPatienceMsg = async (text) => {
             if (progressConvId && s2sConnectionId && authToken) {
               const host = rainbowHost || "openrainbow.com";
-              await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${progressConvId}/messages`, {
-                method: "POST",
-                headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ message: { body: text, lang: "en" } }),
-              }).catch(() => {});
+              try {
+                const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${progressConvId}/messages`, {
+                  method: "POST",
+                  headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({ message: { body: text, lang: "en" } }),
+                });
+                console.log(`${LOG} Patience msg sent: "${text.substring(0, 40)}" (${resp.status})`);
+              } catch (e) {
+                console.warn(`${LOG} Patience msg failed:`, e.message);
+              }
+            } else {
+              console.warn(`${LOG} Patience msg skipped: convId=${!!progressConvId}, cnxId=${!!s2sConnectionId}, token=${!!authToken}`);
             }
           };
 
-          // Only send patience message for complex queries (not simple direct lookups)
+          // Send patience message for ALL agent queries
+          const phrase = getWaitingPhrase();
+          console.log(`${LOG} isSimpleQuery=${isSimpleQuery}, sending patience: ${!isSimpleQuery}`);
           if (!isSimpleQuery) {
-            await sendPatienceMsg(getWaitingPhrase());
+            await sendPatienceMsg(phrase);
           }
 
           // Schedule follow-up patience messages (only for complex queries)
