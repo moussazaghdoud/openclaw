@@ -4912,21 +4912,46 @@ async function start() {
               const fallbackParts = [];
               for (const tr of trace.toolResults) {
                 if (tr.opportunities && tr.opportunities.length > 0) {
-                  fallbackParts.push(`📊 **Your Pipeline** (${tr.count || tr.opportunities.length} deals):\n`);
-                  tr.opportunities.slice(0, 10).forEach((opp, i) => {
-                    const amount = opp.amount ? `€${(opp.amount / 1000000).toFixed(1)}M` : "";
-                    fallbackParts.push(`${i + 1}. **${opp.name}** — ${amount} — ${opp.stage} (${opp.probability}%)\n   Close: ${opp.closeDate} | Owner: ${opp.owner}\n`);
-                  });
+                  // Group by tiers for better readability
+                  const opps = tr.opportunities;
+                  const mega = opps.filter(o => o.amount >= 10000000);
+                  const large = opps.filter(o => o.amount >= 5000000 && o.amount < 10000000);
+                  const mid = opps.filter(o => o.amount < 5000000);
+
+                  fallbackParts.push(`📊 **Your Pipeline** — ${opps.length} deals\n\n`);
+
+                  const formatDeal = (opp, i) => {
+                    const amt = opp.amount >= 1000000 ? `€${(opp.amount / 1000000).toFixed(1)}M` : `€${(opp.amount / 1000).toFixed(0)}K`;
+                    const risk = opp.probability <= 10 ? "🔴" : opp.probability <= 30 ? "🟡" : opp.probability >= 90 ? "🟢" : "🔵";
+                    const shortName = opp.name.length > 35 ? opp.name.substring(0, 33) + "…" : opp.name;
+                    return `${risk} **${shortName}**\n    ${amt} · ${opp.stage} · ${opp.probability}% · Close ${opp.closeDate}\n    Owner: ${opp.owner || "—"}\n`;
+                  };
+
+                  if (mega.length > 0) {
+                    fallbackParts.push(`🏆 **MEGA (€10M+)**\n`);
+                    mega.forEach((o, i) => fallbackParts.push(formatDeal(o, i)));
+                    fallbackParts.push("\n");
+                  }
+                  if (large.length > 0) {
+                    fallbackParts.push(`💰 **LARGE (€5-10M)**\n`);
+                    large.forEach((o, i) => fallbackParts.push(formatDeal(o, i)));
+                    fallbackParts.push("\n");
+                  }
+                  if (mid.length > 0) {
+                    fallbackParts.push(`📋 **MID (<€5M)**\n`);
+                    mid.slice(0, 5).forEach((o, i) => fallbackParts.push(formatDeal(o, i)));
+                    if (mid.length > 5) fallbackParts.push(`    ... +${mid.length - 5} more\n`);
+                  }
                 }
                 if (tr.accounts && tr.accounts.length > 0) {
-                  fallbackParts.push(`📋 **Accounts** (${tr.accounts.length}):\n`);
+                  fallbackParts.push(`\n📋 **Accounts** (${tr.accounts.length}):\n`);
                   tr.accounts.slice(0, 5).forEach((acc, i) => {
                     fallbackParts.push(`${i + 1}. ${acc.name || acc.Name}\n`);
                   });
                 }
               }
               if (fallbackParts.length > 0) {
-                responseText = fallbackParts.join("") + "\n_Note: AI analysis unavailable — showing raw data._";
+                responseText = fallbackParts.join("");
               }
             }
           }
