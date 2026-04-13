@@ -886,14 +886,12 @@ async function executeTool(toolName, input, userId, memory) {
           default: events = await cp.api.getWeekEvents(cp.token);
         }
         if (!events || events._error) return { error: "Failed to fetch calendar." };
-        // For "today", filter out past events — user cares about what's coming, not what's done
-        if (input.period === "today") {
-          const now = new Date();
-          events = events.filter(e => {
-            const endTime = new Date(e.end);
-            return endTime > now;
-          });
-        }
+        // Filter out past events — user always cares about what's coming, not what's done
+        const now = new Date();
+        events = events.filter(e => {
+          const endTime = new Date(e.end);
+          return endTime > now;
+        });
         return { count: events.length, events: events.map(e => ({
           id: e.id, subject: e.subject, start: e.start, end: e.end,
           organizer: e.organizer, location: e.location,
