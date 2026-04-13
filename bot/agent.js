@@ -1007,18 +1007,56 @@ async function executeTool(toolName, input, userId, memory) {
       case "search_crm":
       case "get_opportunity_details":
       case "get_account_details":
-      case "update_opportunity":
-      case "create_task":
-      case "log_activity":
-      case "close_deal":
       case "get_forecast":
-      case "set_quota":
       case "get_competitors":
-      case "add_competitor":
       case "search_deals_by_competitor":
       case "manage_sales_alerts": {
         if (!salesAgentModule || !salesAgentModule.isAvailable()) {
           return { error: "Sales module not available. Salesforce may not be configured." };
+        }
+        // Cache read-only CRM tools for 5 minutes
+        const cacheableCrmTools = new Set([
+          "list_opportunities", "search_crm", "get_opportunity_details",
+          "get_account_details", "get_forecast", "get_competitors",
+          "search_deals_by_competitor", "analyze_pipeline", "get_deal_risks",
+          "get_stale_deals", "get_missing_next_steps", "get_pipeline_summary",
+          "get_ghost_deals", "get_deals_by_owner",
+        ]);
+        if (cacheableCrmTools.has(toolName) && redisClient) {
+          const cacheKey = `crm_cache:${userId}:${toolName}:${JSON.stringify(input || {})}`;
+          try {
+            const cached = await redisClient.get(cacheKey);
+            if (cached) {
+              console.log(`${LOG} CRM cache hit: ${toolName}`);
+              return JSON.parse(cached);
+            }
+          } catch {}
+          const result = await salesAgentModule.executeTool(toolName, input, userId);
+          if (result && !result.error) {
+            try {
+              await redisClient.set(cacheKey, JSON.stringify(result), { EX: 300 }); // 5 min TTL
+            } catch {}
+          }
+          return result;
+        }
+        return salesAgentModule.executeTool(toolName, input, userId);
+      }
+      // Write operations — NEVER cache
+      case "update_opportunity":
+      case "create_task":
+      case "log_activity":
+      case "close_deal":
+      case "set_quota":
+      case "add_competitor": {
+        if (!salesAgentModule || !salesAgentModule.isAvailable()) {
+          return { error: "Sales module not available. Salesforce may not be configured." };
+        }
+        // Invalidate cache on writes
+        if (redisClient) {
+          try {
+            const keys = await redisClient.keys(`crm_cache:${userId}:*`);
+            if (keys.length > 0) await redisClient.del(keys);
+          } catch {}
         }
         return salesAgentModule.executeTool(toolName, input, userId);
       }
@@ -1136,6 +1174,12 @@ CALENDAR INTELLIGENCE:
 - For preparation questions, use read_event with the event ID to get full details including the body.
 - TIME AWARENESS: "Do I have meetings today?" means REMAINING meetings from NOW onward. Past events are already filtered out. Never show meetings that have already ended.
 - When presenting meetings, mention how soon they start (e.g., "in 2 hours", "in 30 minutes") to help the user prioritize.
+
+SINGLE-PASS RESPONSE — CRITICAL FOR SPEED:
+- After calling tools and receiving results, write your COMPLETE final answer IMMEDIATELY in the same response.
+- Do NOT call tools, then wait for another turn to write your answer. Include the answer text alongside your tool calls.
+- When you receive tool results, respond with the final user-facing answer right away — do not request another reasoning step.
+- Exception: only use a second step if you genuinely need to call DIFFERENT tools based on the first results (e.g., search found an ID, now need to fetch details).
 
 RULES:
 - Call the MINIMUM tools needed. One tool per action, one pass when possible.
@@ -1298,7 +1342,7 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
           system: systemPrompt,
           messages: currentMessages,
           tools,
-          max_tokens: model === OPUS ? 2000 : 1024,
+          max_tokens: model === OPUS ? 2000 : 2048,
         }),
         signal: controller.signal,
       });
@@ -1396,11 +1440,21 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
         }
       }
 
-      // Add tool results
+      // Add tool results to conversation
       currentMessages.push({ role: "user", content: toolResults });
 
-      // Also include any text the assistant said alongside tool calls
-      // (Claude sometimes includes thinking text with tool calls)
+      // Check if Claude already included a final text response alongside tools
+      // (single-loop optimization: answer + tools in one response)
+      const inlineText = textBlocks.map(b => b.text).join("\n").trim();
+      if (inlineText && inlineText.length > 100 && data.stop_reason === "end_turn") {
+        // Claude included a substantial answer alongside tool calls — use it
+        console.log(`${LOG} Single-loop response: ${inlineText.length} chars alongside ${toolNames.length} tools`);
+        trace.finalResponse = inlineText.substring(0, 500);
+        trace.loops.push({ loop: loop + 1, action: "inline_response" });
+        trace.duration = Date.now() - startTime;
+        await saveWorkingMemory(userId, memory);
+        return inlineText;
+      }
 
     } catch (e) {
       clearTimeout(timeout);

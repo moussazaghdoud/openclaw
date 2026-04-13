@@ -4765,14 +4765,57 @@ async function start() {
         }
       }
 
+      // ── FAST PATH — bypass Claude entirely for trivial messages ──
+      const lowerContent = (content || "").toLowerCase().trim();
+      const FAST_RESPONSES = {
+        "hello": "Hey! I'm Juju, your AI assistant. How can I help you today?",
+        "hi": "Hi there! What can I do for you?",
+        "hey": "Hey! What do you need?",
+        "bonjour": "Bonjour ! Comment puis-je vous aider ?",
+        "salut": "Salut ! Que puis-je faire pour vous ?",
+        "thanks": "You're welcome! Let me know if you need anything else.",
+        "thank you": "You're welcome! Anything else I can help with?",
+        "merci": "De rien ! N'hésitez pas si vous avez besoin d'autre chose.",
+        "ok": "Got it. Let me know if you need anything.",
+        "bye": "See you later! I'm here whenever you need me.",
+        "good morning": "Good morning! Ready to help. What's on your agenda today?",
+        "good evening": "Good evening! How can I assist you?",
+      };
+
+      // Check exact match first
+      if (FAST_RESPONSES[lowerContent]) {
+        console.log(`${LOG} FAST PATH: "${lowerContent}"`);
+        if (conversation?.dbId && sdk.s2s) {
+          await sdk.s2s.sendMessageInConversation(conversation.dbId, { message: { body: FAST_RESPONSES[lowerContent], lang: "en" } });
+        }
+        await addMessage(historyKey, "user", content);
+        await addMessage(historyKey, "assistant", FAST_RESPONSES[lowerContent]);
+        stats.replied++;
+        if (typingInterval) clearInterval(typingInterval);
+        return;
+      }
+
+      // Check pattern match for name/identity questions
+      if (/^(what(?:'s| is) your name|who are you|what can you do|help)\??$/i.test(lowerContent)) {
+        const fastReply = lowerContent.includes("name") || lowerContent.includes("who")
+          ? "I'm Juju, your AI executive assistant. I can help with your emails, calendar, Salesforce deals, web search, and more. Just ask!"
+          : "I'm Juju. I can help you with:\n• 📧 Emails (read, search, classify)\n• 📅 Calendar (meetings, schedule)\n• 📊 Salesforce (deals, pipeline, accounts)\n• 🔍 Web search\n• ⏰ Reminders & automations\n\nJust ask me anything!";
+        console.log(`${LOG} FAST PATH: "${lowerContent}"`);
+        if (conversation?.dbId && sdk.s2s) {
+          await sdk.s2s.sendMessageInConversation(conversation.dbId, { message: { body: fastReply, lang: "en" } });
+        }
+        await addMessage(historyKey, "user", content);
+        await addMessage(historyKey, "assistant", fastReply);
+        stats.replied++;
+        if (typingInterval) clearInterval(typingInterval);
+        return;
+      }
+
       let intent = detectIntent(content);
       if (!intent) intent = { type: "chat" };
       console.log(`${LOG} Intent: ${intent.type} for ${fromName}`);
 
       let responseText = null;
-
-      // ── FAST PATH DETECTION — skip history for simple direct queries ──
-      const lowerContent = (content || "").toLowerCase().trim();
       // Simple queries = single calendar/email lookup (fast, ~2s). CRM/pipeline queries are NOT simple (10-15s).
       const isSimpleQuery = /^(?:show|what(?:'s| is| are)|list|get|check|any)\s+(?:my\s+)?(?:meetings?|calendar|events?|schedule|agenda|unread|emails?|inbox)/i.test(lowerContent)
         && !/pipeline|deals?|opportunities|salesforce|crm|forecast|accounts?/i.test(lowerContent);
