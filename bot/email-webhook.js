@@ -182,6 +182,11 @@ async function processNotification(notification) {
     console.log(`${LOG} Skipping own email from ${senderEmail} for user ${userId}`);
     return;
   }
+  // Also skip if sender is unknown/empty AND email is in Sent Items folder (own outgoing email)
+  if (!senderEmail && email.from === "unknown") {
+    console.log(`${LOG} Skipping email with no sender (likely own sent email) for user ${userId}`);
+    return;
+  }
 
   // Auto-move: check classification rules and move email to folder if matched
   try {
