@@ -1069,8 +1069,12 @@ async function run(userId, userMessage, conversationHistory = [], onProgress = n
 
   const startTime = Date.now();
 
-  // Load working memory (clear stale data older than this session)
-  let memory = await getWorkingMemory(userId);
+  // Load working memory and context in parallel (clear stale data older than this session)
+  const [memoryRaw, recentCtxPrefetched] = await Promise.all([
+    getWorkingMemory(userId),
+    contextManagerModule ? contextManagerModule.getContextForAgent(userId).catch(() => null) : Promise.resolve(null),
+  ]);
+  let memory = memoryRaw;
   // Clear lastEmails/lastEvents — force agent to always fetch fresh
   delete memory.lastEmails;
   delete memory.lastEvents;
@@ -1221,14 +1225,9 @@ Automation engine — manage_automations tool:
 ` : ""}
 ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryContext}\n` : ""}`;
 
-  // Inject recent conversation context from unified store
-  if (contextManagerModule) {
-    try {
-      const recentCtx = await contextManagerModule.getContextForAgent(userId);
-      if (recentCtx) {
-        systemPrompt += `\n${recentCtx}\n`;
-      }
-    } catch {}
+  // Inject recent conversation context from unified store (prefetched in parallel above)
+  if (recentCtxPrefetched) {
+    systemPrompt += `\n${recentCtxPrefetched}\n`;
   }
 
   // Build messages — include conversation history for follow-up support.

@@ -56,6 +56,9 @@ async function getEmailsFromSender(token, senderName, top = 10) {
   const cleanName = senderName.replace(/"/g, '\\"').replace(/'/g, "''");
   const select = "id,subject,from,receivedDateTime,bodyPreview,isRead,importance,hasAttachments,conversationId";
 
+  // Build all search strategies in parallel
+  const strategies = [];
+
   // Strategy 1: If it looks like an email address, filter by exact address
   if (senderName.includes("@")) {
     const params = new URLSearchParams({
@@ -64,14 +67,23 @@ async function getEmailsFromSender(token, senderName, top = 10) {
       $top: String(top),
       $select: select,
     });
-    const results = await fetchEmails(token, `/me/messages?${params}`);
-    if (results && !results._error && results.length > 0) return results;
+    strategies.push(fetchEmails(token, `/me/messages?${params}`));
   }
 
-  // Strategy 2: Search by name, then get the email address, then filter by address
+  // Strategy 2: Search by name
   const searchParams = new URLSearchParams({ $search: `"${cleanName}"`, $top: "50", $select: select });
-  const searchResults = await fetchEmails(token, `/me/messages?${searchParams}`);
+  strategies.push(fetchEmails(token, `/me/messages?${searchParams}`));
 
+  const results = await Promise.all(strategies);
+
+  // Check Strategy 1 result first (exact email match)
+  if (senderName.includes("@")) {
+    const exactResult = results[0];
+    if (exactResult && !exactResult._error && exactResult.length > 0) return exactResult;
+  }
+
+  // Process Strategy 2 result (search by name)
+  const searchResults = senderName.includes("@") ? results[1] : results[0];
   if (!searchResults || searchResults._error || searchResults.length === 0) return searchResults || [];
 
   // Find emails where sender matches

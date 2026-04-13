@@ -169,15 +169,17 @@ async function getRecentActivity(token, instanceUrl, { accountId, contactId, lim
     ${whereClause}
     ORDER BY ActivityDate DESC NULLS LAST
     LIMIT ${maxItems}`;
-  const tasks = await sfQuery(token, instanceUrl, taskSoql);
-
   // Get recent events/activities
   const eventSoql = `SELECT Id, Subject, StartDateTime, EndDateTime, Description, Who.Name, What.Name
     FROM Event
     ${whereClause.replace("OwnerId = 'me'", "OwnerId != null")}
     ORDER BY StartDateTime DESC
     LIMIT ${maxItems}`;
-  const events = await sfQuery(token, instanceUrl, eventSoql);
+
+  const [tasks, events] = await Promise.all([
+    sfQuery(token, instanceUrl, taskSoql),
+    sfQuery(token, instanceUrl, eventSoql),
+  ]);
 
   return {
     tasks: (tasks || []).map(t => ({
