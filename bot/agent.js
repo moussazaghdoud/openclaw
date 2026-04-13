@@ -1455,17 +1455,14 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
         }
       }
 
-      // Add tool results + instruction to answer immediately
-      // This prevents a second reasoning loop — Claude gets the data AND
-      // the instruction to write the final answer in one message
-      const toolResultsWithHint = [...toolResults];
-      if (loop === 0) {
-        toolResultsWithHint.push({
-          type: "text",
-          text: "You now have ALL the data you need. Write your COMPLETE final answer to the user NOW. Do NOT call any more tools unless the data is genuinely insufficient.",
-        });
+      // Append "answer now" hint to the last tool result content
+      // This tells Claude to write the final answer immediately without another loop
+      if (loop === 0 && toolResults.length > 0) {
+        const lastResult = toolResults[toolResults.length - 1];
+        const hint = "\n\n[SYSTEM: You now have ALL the data. Write your COMPLETE final answer to the user NOW. Do NOT call any more tools.]";
+        lastResult.content = (lastResult.content || "") + hint;
       }
-      currentMessages.push({ role: "user", content: toolResultsWithHint });
+      currentMessages.push({ role: "user", content: toolResults });
 
     } catch (e) {
       clearTimeout(timeout);
