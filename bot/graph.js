@@ -104,7 +104,7 @@ async function getEmailsFromSender(token, senderName, top = 10) {
  */
 async function getEmailById(token, messageId) {
   const params = new URLSearchParams({
-    $select: "id,subject,from,toRecipients,ccRecipients,receivedDateTime,body,bodyPreview,isRead,importance,hasAttachments,conversationId,flag",
+    $select: "id,subject,from,sender,toRecipients,ccRecipients,receivedDateTime,body,bodyPreview,isRead,importance,hasAttachments,conversationId,flag",
   });
   let resp = await graphFetch(token, `/me/messages/${messageId}?${params}`);
   // Retry once after 3s if email not found (may still be syncing)
@@ -388,8 +388,8 @@ function normalizeEmail(e, includeBody) {
   const result = {
     id: e.id,
     subject: e.subject || "(no subject)",
-    from: e.from?.emailAddress?.name || e.from?.emailAddress?.address || "unknown",
-    fromEmail: e.from?.emailAddress?.address || "",
+    from: e.from?.emailAddress?.name || e.from?.emailAddress?.address || e.sender?.emailAddress?.name || e.sender?.emailAddress?.address || "unknown",
+    fromEmail: e.from?.emailAddress?.address || e.sender?.emailAddress?.address || "",
     receivedAt: e.receivedDateTime,
     preview: (e.bodyPreview || "").substring(0, 200),
     isRead: e.isRead,
