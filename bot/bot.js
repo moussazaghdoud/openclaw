@@ -4872,7 +4872,7 @@ async function start() {
           // Patience messages — delayed start so fast responses (cache hits) show none
           if (!isSimpleQuery) {
             patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 2000));  // after 2s
-            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 10000)); // after 10s
+            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 8000));  // after 8s (6s gap)
           }
 
           // Don't send progress callback — patience messages already cover it
