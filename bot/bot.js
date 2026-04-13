@@ -4805,34 +4805,24 @@ async function start() {
           const history = isSimpleQuery && !isFollowUp ? [] : await getHistory(historyKey);
           // Progress callback: send status updates to user while agent works
           const sendProgress = async (msg) => {
-            const convId = rawConversationId || conversationId;
-            if (convId && s2sConnectionId && authToken) {
-              const host = rainbowHost || "openrainbow.com";
-              await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${convId}/messages`, {
-                method: "POST",
-                headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ message: { body: msg, lang: "en" } }),
-              }).catch(() => {});
+            if (conversation?.dbId && sdk.s2s) {
+              try {
+                await sdk.s2s.sendMessageInConversation(conversation.dbId, { message: { body: msg, lang: "en" } });
+              } catch {}
             }
           };
           // Send patience messages while agent works
           const progressConvId = rawConversationId || conversationId;
           const patienceTimers = [];
           const sendPatienceMsg = async (text) => {
-            if (progressConvId && s2sConnectionId && authToken) {
-              const host = rainbowHost || "openrainbow.com";
+            // Use SDK (reliable) instead of direct REST (s2sConnectionId is often stale/404)
+            if (conversation?.dbId && sdk.s2s) {
               try {
-                const resp = await fetch(`https://${host}/api/rainbow/ucs/v1.0/connections/${s2sConnectionId}/conversations/${progressConvId}/messages`, {
-                  method: "POST",
-                  headers: { "Authorization": `Bearer ${authToken}`, "Content-Type": "application/json" },
-                  body: JSON.stringify({ message: { body: text, lang: "en" } }),
-                });
-                console.log(`${LOG} Patience msg sent: "${text.substring(0, 40)}" (${resp.status})`);
+                await sdk.s2s.sendMessageInConversation(conversation.dbId, { message: { body: text, lang: "en" } });
+                console.log(`${LOG} Patience: "${text.substring(0, 40)}"`);
               } catch (e) {
                 console.warn(`${LOG} Patience msg failed:`, e.message);
               }
-            } else {
-              console.warn(`${LOG} Patience msg skipped: convId=${!!progressConvId}, cnxId=${!!s2sConnectionId}, token=${!!authToken}`);
             }
           };
 
