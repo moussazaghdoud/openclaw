@@ -1455,21 +1455,17 @@ ${memoryContext ? `\nWORKING MEMORY (from previous interactions):\n${memoryConte
         }
       }
 
-      // Add tool results to conversation
-      currentMessages.push({ role: "user", content: toolResults });
-
-      // Check if Claude already included a final text response alongside tools
-      // (single-loop optimization: answer + tools in one response)
-      const inlineText = textBlocks.map(b => b.text).join("\n").trim();
-      if (inlineText && inlineText.length > 100 && data.stop_reason === "end_turn") {
-        // Claude included a substantial answer alongside tool calls — use it
-        console.log(`${LOG} Single-loop response: ${inlineText.length} chars alongside ${toolNames.length} tools`);
-        trace.finalResponse = inlineText.substring(0, 500);
-        trace.loops.push({ loop: loop + 1, action: "inline_response" });
-        trace.duration = Date.now() - startTime;
-        await saveWorkingMemory(userId, memory);
-        return inlineText;
+      // Add tool results + instruction to answer immediately
+      // This prevents a second reasoning loop — Claude gets the data AND
+      // the instruction to write the final answer in one message
+      const toolResultsWithHint = [...toolResults];
+      if (loop === 0) {
+        toolResultsWithHint.push({
+          type: "text",
+          text: "You now have ALL the data you need. Write your COMPLETE final answer to the user NOW. Do NOT call any more tools unless the data is genuinely insufficient.",
+        });
       }
+      currentMessages.push({ role: "user", content: toolResultsWithHint });
 
     } catch (e) {
       clearTimeout(timeout);
