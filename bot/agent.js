@@ -134,9 +134,9 @@ const lastRunTraces = new Map();
 let lastRunUserId = null; // track most recent user for backward compat
 const SONNET = "claude-sonnet-4-20250514";
 const OPUS = "claude-opus-4-20250514";
-const MAX_LOOPS = 3;
-const LOOP_TIMEOUT_MS = 20000;
-const TOTAL_TIMEOUT_MS = 60000;
+const MAX_LOOPS = 2;
+const LOOP_TIMEOUT_MS = 15000;
+const TOTAL_TIMEOUT_MS = 30000;
 
 let graphModule = null;
 let calendarGraphModule = null;

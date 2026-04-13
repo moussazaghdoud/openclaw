@@ -4878,7 +4878,10 @@ async function start() {
             patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 10000));
           }
 
-          const agentResult = await agent.run(fromJid, content, history, isSimpleQuery ? null : sendProgress);
+          const agentResult = await Promise.race([
+            agent.run(fromJid, content, history, isSimpleQuery ? null : sendProgress),
+            new Promise(r => setTimeout(() => r(null), 25000)), // 25s hard timeout
+          ]);
 
           // Clear any pending patience messages
           for (const t of patienceTimers) clearTimeout(t);
@@ -4992,7 +4995,16 @@ async function start() {
       }
 
       if (!responseText) {
-        // Regular chat or fallback if intent handler returned null
+        // Skip Opus fallback for CRM/email/calendar queries — Opus has no tools
+        const needsTools = /email|mail|inbox|calendar|meeting|deal|pipeline|opportunity|salesforce|crm|forecast|account/i.test(lowerContent);
+        if (needsTools && useAgent) {
+          responseText = "I couldn't process that request right now — the system is busy. Please try again in a moment.";
+          console.warn(`${LOG} Skipping Opus fallback for tool-dependent query: "${content.substring(0, 50)}"`);
+        }
+      }
+
+      if (!responseText) {
+        // Regular chat or fallback — only for non-tool queries (general conversation)
         // PII secure mode: anonymize user message before sending to LLM
         const secureOn = pii ? await pii.isSecureMode(historyKey) : false;
         if (secureOn) {
