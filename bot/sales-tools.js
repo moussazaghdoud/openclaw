@@ -125,7 +125,7 @@ function getToolDefinitions() {
         type: "object",
         properties: {
           account_name: { type: "string", description: "Filter by account name (optional)" },
-          limit: { type: "number", description: "Max results (default 10, max 50)" },
+          limit: { type: "number", description: "Max results (default 15, max 20). Keep low for faster responses." },
           sort_by: { type: "string", enum: ["Amount", "CloseDate", "Probability", "Name", "CreatedDate"], description: "Sort field (default CloseDate)" },
           sort_dir: { type: "string", enum: ["ASC", "DESC"], description: "Sort direction (default ASC). Use DESC for biggest/highest/latest." },
           year: { type: "number", description: "Filter by close date year (e.g. 2026)" },
@@ -457,7 +457,7 @@ async function executeToolInner(toolName, input, token, instanceUrl, userId) {
       }
 
       case "list_opportunities": {
-        const limit = Math.min(input.limit || 10, 50);
+        const limit = Math.min(input.limit || 15, 20);
         let opps;
         if (input.account_name) {
           const accounts = await sfApiModule.searchAccounts(token, instanceUrl, input.account_name, 1);
