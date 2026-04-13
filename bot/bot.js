@@ -4873,7 +4873,7 @@ async function start() {
           // Send ONE patience message for complex queries, second after 8s
           if (!isSimpleQuery) {
             await sendPatienceMsg(getWaitingPhrase());
-            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 10000));
+            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 8000));
           }
 
           // Don't send progress callback — patience messages already cover it
