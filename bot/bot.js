@@ -4869,11 +4869,10 @@ async function start() {
             }
           };
 
-          // Send patience message for ALL agent queries
-          // Send ONE patience message for complex queries, second after 8s
+          // Patience messages — delayed start so fast responses (cache hits) show none
           if (!isSimpleQuery) {
-            await sendPatienceMsg(getWaitingPhrase());
-            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 8000));
+            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 2000));  // after 2s
+            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 10000)); // after 10s
           }
 
           // Don't send progress callback — patience messages already cover it
