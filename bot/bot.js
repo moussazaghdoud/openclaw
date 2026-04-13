@@ -4903,6 +4903,34 @@ async function start() {
           } else {
             responseText = agentResult;
           }
+
+          // If agent failed but tool results exist, build a fallback from raw data
+          if (!responseText && agent) {
+            const trace = agent.getLastRunTrace();
+            if (trace && trace.toolResults && trace.toolResults.length > 0) {
+              console.log(`${LOG} Agent failed but tool data available — building fallback`);
+              const fallbackParts = [];
+              for (const tr of trace.toolResults) {
+                if (tr.opportunities && tr.opportunities.length > 0) {
+                  fallbackParts.push(`📊 **Your Pipeline** (${tr.count || tr.opportunities.length} deals):\n`);
+                  tr.opportunities.slice(0, 10).forEach((opp, i) => {
+                    const amount = opp.amount ? `€${(opp.amount / 1000000).toFixed(1)}M` : "";
+                    fallbackParts.push(`${i + 1}. **${opp.name}** — ${amount} — ${opp.stage} (${opp.probability}%)\n   Close: ${opp.closeDate} | Owner: ${opp.owner}\n`);
+                  });
+                }
+                if (tr.accounts && tr.accounts.length > 0) {
+                  fallbackParts.push(`📋 **Accounts** (${tr.accounts.length}):\n`);
+                  tr.accounts.slice(0, 5).forEach((acc, i) => {
+                    fallbackParts.push(`${i + 1}. ${acc.name || acc.Name}\n`);
+                  });
+                }
+              }
+              if (fallbackParts.length > 0) {
+                responseText = fallbackParts.join("") + "\n_Note: AI analysis unavailable — showing raw data._";
+              }
+            }
+          }
+
           console.log(`${LOG} Agent returned: ${responseText ? (typeof responseText === "string" ? responseText.substring(0, 100) : "card") : "NULL"}`);
 
           // Write to unified context + sync agent memory
