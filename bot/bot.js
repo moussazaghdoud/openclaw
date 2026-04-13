@@ -4827,16 +4827,12 @@ async function start() {
           };
 
           // Send patience message for ALL agent queries
-          const phrase = getWaitingPhrase();
-          console.log(`${LOG} isSimpleQuery=${isSimpleQuery}, sending patience: ${!isSimpleQuery}`);
+          // Send patience messages for complex queries (CRM, pipeline, etc.)
           if (!isSimpleQuery) {
-            await sendPatienceMsg(phrase);
-          }
-
-          // Schedule follow-up patience messages (only for complex queries)
-          if (!isSimpleQuery && progressConvId && s2sConnectionId && authToken) {
-            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 6000));
-            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 14000));
+            await sendPatienceMsg(getWaitingPhrase());
+            // Schedule follow-up messages at 5s and 10s intervals
+            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 5000));
+            patienceTimers.push(setTimeout(() => sendPatienceMsg(getWaitingPhrase()), 10000));
           }
 
           const agentResult = await agent.run(fromJid, content, history, isSimpleQuery ? null : sendProgress);
